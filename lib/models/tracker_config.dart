@@ -19,6 +19,105 @@ import '../services/character_card_extensions_reader.dart';
 /// ```
 /// 卡只负责声明；解析/校验/reducer/渲染全部由 App 运行时执行。
 
+/// v52：数值字段的分段描述（presentation.ranges）——按当前值所在区间
+/// 确定性渲染阶段标题/颜色/长描述，不依赖模型临时生成。
+class TrackerRangeDescription {
+  const TrackerRangeDescription({
+    this.gte,
+    this.lt,
+    this.title = '',
+    this.color = '',
+    this.text = '',
+  });
+
+  /// 区间下限（含）；null = 不设下限
+  final num? gte;
+  /// 区间上限（不含）；null = 兜底到最后一段
+  final num? lt;
+  final String title;
+  final String color;
+  final String text;
+
+  factory TrackerRangeDescription.fromJson(Map<String, dynamic> json) {
+    return TrackerRangeDescription(
+      gte: json['gte'] is num ? json['gte'] as num : null,
+      lt: json['lt'] is num ? json['lt'] as num : null,
+      title: json['title'] is String ? json['title'] as String : '',
+      color: json['color'] is String ? json['color'] as String : '',
+      text: json['text'] is String ? json['text'] as String : '',
+    );
+  }
+}
+
+/// v52：字符串字段的状态描述（presentation.states）——按枚举值精确匹配。
+class TrackerEnumDescription {
+  const TrackerEnumDescription({
+    this.title = '',
+    this.color = '',
+    this.text = '',
+  });
+
+  final String title;
+  final String color;
+  final String text;
+
+  factory TrackerEnumDescription.fromJson(Map<String, dynamic> json) {
+    return TrackerEnumDescription(
+      title: json['title'] is String ? json['title'] as String : '',
+      color: json['color'] is String ? json['color'] as String : '',
+      text: json['text'] is String ? json['text'] as String : '',
+    );
+  }
+}
+
+/// v52：字段的展示描述声明（stateSchema 字段内的 `presentation`）——
+/// number 字段用 [ranges]（分段），string 字段用 [states]（枚举）。
+/// 渲染时 App 按当前值确定性给出：阶段标题 / 颜色 / 长描述 / 百分比。
+class TrackerFieldPresentation {
+  const TrackerFieldPresentation({
+    this.ranges = const [],
+    this.states = const {},
+  });
+
+  final List<TrackerRangeDescription> ranges;
+  final Map<String, TrackerEnumDescription> states;
+
+  bool get hasRanges => ranges.isNotEmpty;
+  bool get hasStates => states.isNotEmpty;
+
+  factory TrackerFieldPresentation.fromJson(Map<String, dynamic> json) {
+    final ranges = <TrackerRangeDescription>[];
+    final rawRanges = json['ranges'];
+    if (rawRanges is List) {
+      for (final item in rawRanges) {
+        final map = CharacterCardExtensionsReader.asMap(item);
+        if (map != null) {
+          final range = TrackerRangeDescription.fromJson(map);
+          if (range.title.isNotEmpty || range.text.isNotEmpty) {
+            ranges.add(range);
+          }
+        }
+      }
+    }
+    final states = <String, TrackerEnumDescription>{};
+    final rawStates = CharacterCardExtensionsReader.asMap(json['states']);
+    if (rawStates != null) {
+      rawStates.forEach((key, value) {
+        if (key is String) {
+          final map = CharacterCardExtensionsReader.asMap(value);
+          if (map != null) {
+            final state = TrackerEnumDescription.fromJson(map);
+            if (state.title.isNotEmpty || state.text.isNotEmpty) {
+              states[key] = state;
+            }
+          }
+        }
+      });
+    }
+    return TrackerFieldPresentation(ranges: ranges, states: states);
+  }
+}
+
 class TrackerFieldSchema {
   const TrackerFieldSchema({
     required this.type,
@@ -26,6 +125,7 @@ class TrackerFieldSchema {
     this.min,
     this.max,
     this.hidden = false,
+    this.presentation,
   });
 
   /// 'string' | 'number'
@@ -35,15 +135,25 @@ class TrackerFieldSchema {
   final num? max;
   final bool hidden;
 
+  /// v52：阶段描述声明（ranges/states）——解析器不认识时保持 null，
+  /// 渲染回退到纯数值/纯文本（旧卡完全不受影响）。
+  final TrackerFieldPresentation? presentation;
+
   bool get isNumber => type == 'number';
 
   factory TrackerFieldSchema.fromJson(Map<String, dynamic> json) {
+    final rawPresentation = CharacterCardExtensionsReader.asMap(
+      json['presentation'],
+    );
     return TrackerFieldSchema(
       type: json['type'] is String ? json['type'] as String : 'string',
       label: json['label'] is String ? json['label'] as String : '',
       min: json['min'] is num ? json['min'] as num : null,
       max: json['max'] is num ? json['max'] as num : null,
       hidden: json['hidden'] is bool ? json['hidden'] as bool : false,
+      presentation: rawPresentation == null
+          ? null
+          : TrackerFieldPresentation.fromJson(rawPresentation),
     );
   }
 }

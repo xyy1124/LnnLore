@@ -20,6 +20,23 @@ import 'character_card_extensions_reader.dart';
 /// - `add`：数值叠加（仅 number 字段生效；字符串忽略）
 /// - schema 校验：类型不匹配忽略、min/max clamp、未知字段仍保留（宽松）
 
+/// v52：字段当前阶段信息（由 [TrackerRuntime.stageInfo] 按卡声明的
+/// presentation.ranges/states 确定性解析，不依赖模型生成）。
+class TrackerStageInfo {
+  const TrackerStageInfo({
+    this.title = '',
+    this.color = '',
+    this.text = '',
+  });
+
+  /// 阶段标题（如"明显改造"）
+  final String title;
+  /// 阶段颜色（如 #FFA726）
+  final String color;
+  /// 阶段长描述
+  final String text;
+}
+
 /// 解析出的结构化 patch。
 class StatePatch {
   StatePatch({
@@ -299,6 +316,94 @@ class TrackerRuntime {
     );
   }
 
+  /// v52：当前值对应的阶段信息（presentation 声明）——number 字段按
+  /// ranges 分段匹配（gte <= v 且 v < lt；最后一段 lt 为 null 时兜底），
+  /// string 字段按 states 枚举精确匹配。无声明/无匹配返回 null。
+  static TrackerStageInfo? stageInfo(
+    String key,
+    dynamic value,
+    TrackerConfig config,
+  ) {
+    final schema = config.stateSchema[key];
+    if (schema == null || value == null) {
+      return null;
+    }
+    final presentation = schema.presentation;
+    if (presentation == null) {
+      return null;
+    }
+    if (schema.isNumber) {
+      final numValue = value is num ? value : num.tryParse('$value');
+      if (numValue == null) {
+        return null;
+      }
+      for (final range in presentation.ranges) {
+        // 局部变量让 Dart 完成 null 类型提升（类字段不会提升）
+        final gte = range.gte;
+        final lt = range.lt;
+        final inRange = (gte == null || numValue >= gte) &&
+            (lt == null || numValue < lt);
+        if (inRange) {
+          return TrackerStageInfo(
+            title: range.title,
+            color: range.color,
+            text: range.text,
+          );
+        }
+      }
+      // ranges 无匹配（如全部区间都有 lt 且值越界）→ 最后一段兜底
+      if (presentation.ranges.isNotEmpty) {
+        final last = presentation.ranges.last;
+        return TrackerStageInfo(
+          title: last.title,
+          color: last.color,
+          text: last.text,
+        );
+      }
+      return null;
+    }
+    // string 字段：states 精确匹配
+    final state = presentation.states['$value'];
+    if (state == null) {
+      return null;
+    }
+    return TrackerStageInfo(
+      title: state.title,
+      color: state.color,
+      text: state.text,
+    );
+  }
+
+  /// v52：number 字段的百分比文本（min/max 归一化；无 max 时返回原值）。
+  static String _percentText(String key, dynamic value, TrackerConfig config) {
+    final schema = config.stateSchema[key];
+    if (schema == null || value == null) {
+      return '';
+    }
+    final numValue = value is num ? value : num.tryParse('$value');
+    if (numValue == null) {
+      return '';
+    }
+    final min = schema.min ?? 0;
+    final max = schema.max;
+    if (max == null || max <= min) {
+      return '$numValue';
+    }
+    final percent = ((numValue - min) / (max - min) * 100).round();
+    return '$percent';
+  }
+
+  /// v52：HTML 转义——所有插入模板的文本值统一转义（长描述/阶段标题
+  /// 可能含 `<`、`>`、`&`、引号，不转义会破坏模板结构或注入样式）。
+  static String _htmlEscape(String value) {
+    return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+  }
+
   /// 用卡 StatusFallback 模板 + 变量表生成规范状态面板 HTML（service 层
   /// 保存消息快照与 UI 层运行时渲染共用同一套逻辑）。
   ///
@@ -336,14 +441,44 @@ class TrackerRuntime {
     final template = config.template ??
         postHistoryPanelTemplate(cardJson) ??
         statusFallbackTemplate(cardJson);
+    // v52：模板检测扩展到所有展示变量（getvar/gettitle/gettext/getcolor/
+    // getpercent 任一出现即视为模板）。
     if (template != null &&
-        RegExp(r'getvar', caseSensitive: false).hasMatch(template)) {
+        RegExp(
+          r'get(var|title|text|color|percent)',
+          caseSensitive: false,
+        ).hasMatch(template)) {
       var rendered = template
           .replaceAll('{{match}}', '')
           .replaceAll(r'\n', '\n');
+      // v52：统一替换展示变量——getvar 为原始值，gettitle/gettext/
+      // getcolor 为当前阶段标题/长描述/颜色（presentation 声明），
+      // getpercent 为 number 字段的百分比（min/max 归一，无 max 时原值）。
+      // 所有插入 HTML 的文本统一 HTML 转义（长描述可能含 < > & 引号，
+      // 不转义会破坏模板结构）。
       rendered = rendered.replaceAllMapped(
-        RegExp(r'\{\{\s*getvar::([^}]+)\}\}', caseSensitive: false),
-        (m) => valueOf(m.group(1)!.trim()) ?? '',
+        RegExp(
+          r'\{\{\s*(getvar|gettitle|gettext|getcolor|getpercent)::([^}]+)\}\}',
+          caseSensitive: false,
+        ),
+        (m) {
+          final kind = m.group(1)!.toLowerCase();
+          final key = m.group(2)!.trim();
+          switch (kind) {
+            case 'gettitle':
+              return _htmlEscape(stageInfo(key, valueOf(key), config)?.title ?? '');
+            case 'gettext':
+              return _htmlEscape(stageInfo(key, valueOf(key), config)?.text ?? '');
+            case 'getcolor':
+              return _htmlEscape(
+                stageInfo(key, valueOf(key), config)?.color ?? '',
+              );
+            case 'getpercent':
+              return _htmlEscape(_percentText(key, valueOf(key), config));
+            default:
+              return _htmlEscape(valueOf(key) ?? '');
+          }
+        },
       );
       rendered = _cleanStatusPanelText(rendered);
       if (rendered.trim().isNotEmpty) {
@@ -365,7 +500,10 @@ class TrackerRuntime {
     }
 
     // ② 内置深色卡片（卡无模板/无 getvar 时兜底）
-    final chips = <String>[];
+    // v52：带 presentation 声明的字段渲染为块（阶段标题 + 长描述），
+    // 其余字段保持紧凑 chips——"数值字段：进度+阶段描述；字符串字段：
+    // 短值+描述"，不做成所有字段长段落。
+    final parts = <String>[];
     for (final key in config.displayOrder) {
       final schema = config.stateSchema[key];
       if (schema == null || schema.hidden) {
@@ -380,14 +518,32 @@ class TrackerRuntime {
       final display = (schema.type == 'number' && schema.max != null)
           ? '$value/${schema.max}'
           : value;
-      chips.add(
-        '<span style="background:rgba(255,255,255,0.07);'
-        'border:1px solid rgba(255,255,255,0.10);'
-        'border-radius:999px;padding:2px 10px;font-size:12px;'
-        'white-space:nowrap;">$label：$display</span>',
-      );
+      final stage = stageInfo(key, value, config);
+      if (stage != null &&
+          (stage.title.isNotEmpty || stage.text.isNotEmpty)) {
+        parts.add(
+          '<div style="background:rgba(255,255,255,0.05);'
+          'border-radius:8px;padding:6px 10px;margin:2px 0;width:100%;'
+          'box-sizing:border-box;">'
+          '<span style="font-size:12px;color:${_htmlEscape(stage.color)};'
+          'font-weight:600;">$label：$display'
+          '${stage.title.isNotEmpty ? ' · ${_htmlEscape(stage.title)}' : ''}</span>'
+          '${stage.text.isNotEmpty
+              ? '<div style="font-size:11px;color:rgba(255,255,255,0.55);'
+                  'margin-top:2px;">${_htmlEscape(stage.text)}</div>'
+              : ''}'
+          '</div>',
+        );
+      } else {
+        parts.add(
+          '<span style="background:rgba(255,255,255,0.07);'
+          'border:1px solid rgba(255,255,255,0.10);'
+          'border-radius:999px;padding:2px 10px;font-size:12px;'
+          'white-space:nowrap;">$label：$display</span>',
+        );
+      }
     }
-    if (chips.isEmpty) {
+    if (parts.isEmpty) {
       return null;
     }
     return '<div class="status-panel" style="display:flex;flex-wrap:wrap;'
@@ -396,7 +552,7 @@ class TrackerRuntime {
         'background:rgba(120,80,220,0.08);'
         'border:1px solid rgba(120,80,220,0.25);">'
         '<span style="font-size:12px;font-weight:600;color:#b388ff;">'
-        '📊 状态</span>${chips.join('')}</div>';
+        '📊 状态</span>${parts.join('')}</div>';
   }
 
   /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`。

@@ -700,6 +700,225 @@ void main() {
     });
   });
 
+  group('v52: presentation 阶段描述系统', () {
+    TrackerConfig configWithPresentation() {
+      return TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'mz_nano': {
+                  'type': 'number',
+                  'label': '纳米改造',
+                  'min': 0,
+                  'max': 100,
+                  'presentation': {
+                    'ranges': [
+                      {
+                        'gte': 0,
+                        'lt': 20,
+                        'title': '尚未启动',
+                        'color': '#78909C',
+                        'text': '纳米机械尚未建立有效连接。',
+                      },
+                      {
+                        'gte': 40,
+                        'lt': 60,
+                        'title': '明显改造',
+                        'color': '#FFA726',
+                        'text': '部分反应不再完全受本人控制。',
+                      },
+                      {
+                        'gte': 80,
+                        'title': '完全接管',
+                        'color': '#AB47BC',
+                        'text': '意志与身体反应出现分离。',
+                      },
+                    ],
+                  },
+                },
+                'mz_rank': {
+                  'type': 'string',
+                  'label': '母猪等级',
+                  'presentation': {
+                    'states': {
+                      '新收': {
+                        'title': '新收',
+                        'color': '#90A4AE',
+                        'text': '尚未完成第一次正式侍奉。',
+                      },
+                      '核心': {
+                        'title': '核心母猪',
+                        'color': '#AB47BC',
+                        'text': '主动性和服从性都被重新定义。',
+                      },
+                    },
+                  },
+                },
+              },
+              'initialState': {'mz_nano': 0, 'mz_rank': '新收'},
+            },
+          },
+        },
+      });
+    }
+
+    test('number 字段按 ranges 分段匹配（40 ≤ v < 60）', () {
+      final config = configWithPresentation();
+      final stage = TrackerRuntime.stageInfo('mz_nano', 45, config);
+      expect(stage, isNotNull);
+      expect(stage!.title, '明显改造');
+      expect(stage.color, '#FFA726');
+      expect(stage.text, contains('部分反应'));
+    });
+
+    test('ranges 无匹配时最后一段兜底（值 70 无区间 → 完全接管）', () {
+      final config = configWithPresentation();
+      final stage = TrackerRuntime.stageInfo('mz_nano', 70, config);
+      expect(stage, isNotNull);
+      expect(stage!.title, '完全接管');
+    });
+
+    test('string 字段按 states 精确匹配', () {
+      final config = configWithPresentation();
+      final stage = TrackerRuntime.stageInfo('mz_rank', '核心', config);
+      expect(stage, isNotNull);
+      expect(stage!.title, '核心母猪');
+      expect(stage.color, '#AB47BC');
+    });
+
+    test('无声明/无匹配返回 null（旧卡不受影响）', () {
+      final config = configWithPresentation();
+      expect(TrackerRuntime.stageInfo('mz_rank', '未知状态', config), isNull);
+      // 旧 schema（无 presentation）也返回 null
+      expect(TrackerRuntime.stageInfo('energy', 50, _config()), isNull);
+    });
+
+    test('presentation 解析：畸形结构不崩溃（宽松兜底）', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'bad': {
+                  'type': 'number',
+                  'label': '坏字段',
+                  'presentation': {'ranges': 'not-a-list', 'states': 42},
+                },
+              },
+              'initialState': {'bad': 10},
+            },
+          },
+        },
+      });
+      expect(config.stateSchema['bad']!.presentation, isNotNull);
+      expect(config.stateSchema['bad']!.presentation!.ranges, isEmpty);
+      expect(config.stateSchema['bad']!.presentation!.states, isEmpty);
+    });
+
+    test('模板变量 gettitle/gettext/getcolor/getpercent 替换', () {
+      final config = configWithPresentation();
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: {
+          'data': {
+            'extensions': {
+              'tracker': {
+                'stateSchema': {
+                  'mz_nano': {
+                    'type': 'number',
+                    'label': '纳米改造',
+                    'min': 0,
+                    'max': 100,
+                    'presentation': {
+                      'ranges': [
+                        {
+                          'gte': 40,
+                          'lt': 60,
+                          'title': '明显改造',
+                          'color': '#FFA726',
+                          'text': '部分反应不再受控',
+                        },
+                      ],
+                    },
+                  },
+                },
+                'initialState': {'mz_nano': 0},
+                'template':
+                    '<div>{{getvar::mz_nano}}|{{gettitle::mz_nano}}|'
+                    '{{gettext::mz_nano}}|{{getcolor::mz_nano}}|'
+                    '{{getpercent::mz_nano}}</div>',
+              },
+            },
+          },
+        },
+        variables: {'mz_nano': '45'},
+      );
+      expect(html, contains('45|明显改造|部分反应不再受控|#FFA726|45'));
+    });
+
+    test('getpercent 按 min/max 归一化', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: {
+          'data': {
+            'extensions': {
+              'tracker': {
+                'stateSchema': {
+                  'progress': {
+                    'type': 'number',
+                    'label': '进度',
+                    'min': 0,
+                    'max': 200,
+                  },
+                },
+                'initialState': {'progress': 0},
+                'template': '<div>{{getpercent::progress}}%</div>',
+              },
+            },
+          },
+        },
+        variables: {'progress': '150'},
+      );
+      expect(html, contains('75%')); // 150/200*100
+    });
+
+    test('v52: 变量值 HTML 转义（描述含 < > & 不破坏模板）', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: {
+          'data': {
+            'extensions': {
+              'tracker': {
+                'stateSchema': {
+                  'flag': {
+                    'type': 'string',
+                    'label': '标记',
+                    'presentation': {
+                      'states': {
+                        '危险': {
+                          'title': '危险<警告>',
+                          'color': '#FF0000',
+                          'text': '状态&异常，值"X"',
+                        },
+                      },
+                    },
+                  },
+                },
+                'initialState': {'flag': '正常'},
+                'template':
+                    '<div>{{getvar::flag}}|{{gettitle::flag}}|{{gettext::flag}}</div>',
+              },
+            },
+          },
+        },
+        variables: {'flag': '危险'},
+      );
+      // < > & 被转义，不破坏 HTML 结构
+      expect(html, contains('危险&lt;警告&gt;'));
+      expect(html, contains('状态&amp;异常，值&quot;X&quot;'));
+      // 原始 < 不再出现（除模板自身的标签）
+      expect(html, isNot(contains('危险<警告>')));
+    });
+  });
+
   group('filterProtectedPatch（旁白字段本轮去重）', () {
     test('模型对旁白已落地字段的 add 被过滤（20→30 而非 40）', () {
       // 发送链路：旁白（烙印值+10）确定性落地 → 模型又输出 add +10

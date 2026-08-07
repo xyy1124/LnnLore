@@ -81,6 +81,16 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.52',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】状态阶段描述系统（presentation）：角色卡可在字段上声明 `presentation.ranges`（数值分段：gte/lt + 标题/颜色/长描述）与 `presentation.states`（字符串枚举描述）——App 按当前值**确定性渲染**阶段标题/颜色/长描述，不再依赖模型每轮编造，数值变化文字自动变化',
+                    '【特别版】新增模板变量：`{{gettitle::key}}`（阶段标题）、`{{gettext::key}}`（长描述）、`{{getcolor::key}}`（阶段颜色）、`{{getpercent::key}}`（min/max 归一百分比）——旧角色卡只用 `{{getvar::key}}` 完全不受影响；内置兜底面板也升级（带阶段描述的字段显示"值 · 阶段标题 + 描述"块）',
+                    '【特别版】变量值 HTML 转义：所有插入模板的文本（getvar/gettitle/gettext/getcolor）统一转义 `< > & 引号`——长描述/阶段标题含这些字符不再破坏模板结构或注入样式',
+                    '【特别版】角色卡试点：母猪教叙事者 mz_nano 增加 5 段数值描述（尚未启动/初步适应/明显改造/深度重构/完全接管）、mz_rank 增加 4 段枚举描述（新收/见习/正式/核心），模板已接入新变量——验证后其他六张卡按同格式批量升级',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.51',
                   date: '2026-08-07',
                   changes: [
