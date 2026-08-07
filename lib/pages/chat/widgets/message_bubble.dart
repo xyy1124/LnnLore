@@ -576,9 +576,19 @@ class _MessageBubbleState extends State<MessageBubble> {
     if (html.isEmpty) {
       return null;
     }
+    // v50：面板默认收起——标题栏兜底"状态面板"（无 summary 的面板
+    // 也必须有可点击标题栏，否则无法展开），点击展开/收起。
+    final effectiveTitle =
+        panelTitle != null && panelTitle.trim().isNotEmpty
+            ? panelTitle.trim()
+            : '状态面板';
     return Padding(
       padding: const EdgeInsets.only(top: 4),
-      child: SpecialStatusPanel(html: html, title: panelTitle),
+      child: SpecialStatusPanel(
+        html: html,
+        title: effectiveTitle,
+        expanded: false,
+      ),
     );
   }
 

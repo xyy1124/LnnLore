@@ -105,6 +105,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // v50：面板默认收起——先点击兜底标题栏"状态面板"展开
+    await tester.tap(find.text('状态面板'));
+    await tester.pumpAndSettle();
+
     // 状态面板经 HtmlWidget 渲染为 RichText（非 Text widget），
     // 需 findRichText: true 才能匹配
     expect(
@@ -145,6 +149,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // v50：默认收起——展开后断言 B 的模板与变量（resolvedSpeaker）
+    await tester.tap(find.text('状态面板'));
+    await tester.pumpAndSettle();
+
     // 无快照时运行时生成：必须用 B 的模板与变量（resolvedSpeaker）
     expect(
       find.textContaining('B状态：42/100', findRichText: true),
@@ -167,6 +175,10 @@ void main() {
         sessionVariables: {'yw_brand': '55'},
       ),
     );
+    await tester.pumpAndSettle();
+
+    // v50：默认收起——先点击兜底标题栏"状态面板"展开
+    await tester.tap(find.text('状态面板'));
     await tester.pumpAndSettle();
 
     // 状态面板经 HtmlWidget 渲染为 RichText（非 Text widget），
@@ -201,24 +213,24 @@ void main() {
       find.text('🩸 烙印状态面板', findRichText: true),
       findsOneWidget,
     );
-    // 初始展开：正文可见
+    // v50：默认收起——正文初始不可见
+    expect(
+      find.textContaining('烙印值：30/100', findRichText: true),
+      findsNothing,
+    );
+    // 点击标题 → 展开：正文可见
+    await tester.tap(find.text('🩸 烙印状态面板', findRichText: true));
+    await tester.pumpAndSettle();
     expect(
       find.textContaining('烙印值：30/100', findRichText: true),
       findsOneWidget,
     );
-    // 点击标题 → 收起：正文隐藏
+    // 再点击 → 收起
     await tester.tap(find.text('🩸 烙印状态面板', findRichText: true));
     await tester.pumpAndSettle();
     expect(
       find.textContaining('烙印值：30/100', findRichText: true),
       findsNothing,
-    );
-    // 再点击 → 展开
-    await tester.tap(find.text('🩸 烙印状态面板', findRichText: true));
-    await tester.pumpAndSettle();
-    expect(
-      find.textContaining('烙印值：30/100', findRichText: true),
-      findsOneWidget,
     );
   });
 

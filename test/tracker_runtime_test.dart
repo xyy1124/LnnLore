@@ -308,6 +308,139 @@ void main() {
       // 顺序：location 在 energy 前（uiOrder）
       expect(text.indexOf('地点'), lessThan(text.indexOf('体力')));
     });
+
+    test('v50: formatTrackerInstruction 注入真实 key 映射（key/label/type/range/current）', () {
+      final text = TrackerRuntime.formatTrackerInstruction(
+        state: {'energy': 87, 'location': '旅馆'},
+        config: _config(),
+      );
+      expect(text, contains('key=energy'));
+      expect(text, contains('label=体力'));
+      expect(text, contains('type=number'));
+      expect(text, contains('range=0..100'));
+      expect(text, contains('current=87'));
+      expect(text, contains('key=location | label=地点 | type=string'));
+      // 禁止使用中文 label 的说明
+      expect(text, contains('禁止使用中文 label'));
+    });
+
+    test('v50: formatTrackerInstruction 字符串字段无 range', () {
+      final text = TrackerRuntime.formatTrackerInstruction(
+        state: {'location': '旅馆', 'mood': '平静'},
+        config: _config(),
+      );
+      expect(text, contains('type=string | current=旅馆'));
+      expect(text, isNot(contains('range=')));
+    });
+  });
+
+  group('v50: canonicalizePatch（label→key 映射 + 未知丢弃）', () {
+    test('中文 label 映射回真实 key', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {
+                  'type': 'number',
+                  'label': '烙印值',
+                  'min': 0,
+                  'max': 100,
+                },
+                'yw_cloth': {'type': 'string', 'label': '黑丝状态'},
+              },
+              'initialState': {'yw_brand': 20, 'yw_cloth': '完好'},
+            },
+          },
+        },
+      });
+      // 模型输出中文 label（v49 之前会被当成新变量保存）
+      final (patch, dropped) = TrackerRuntime.canonicalizePatch(
+        StatePatch(
+          setValues: {'黑丝状态': '轻微破损'},
+          addValues: {'烙印值': 10},
+        ),
+        config,
+      );
+      expect(patch.setValues, {'yw_cloth': '轻微破损'});
+      expect(patch.addValues, {'yw_brand': 10});
+      expect(dropped, isEmpty);
+    });
+
+    test('真实 key 原样保留', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {'type': 'number', 'label': '烙印值'},
+              },
+              'initialState': {'yw_brand': 20},
+            },
+          },
+        },
+      });
+      final (patch, dropped) = TrackerRuntime.canonicalizePatch(
+        StatePatch(addValues: {'yw_brand': 5}),
+        config,
+      );
+      expect(patch.addValues, {'yw_brand': 5});
+      expect(dropped, isEmpty);
+    });
+
+    test('完全未知字段丢弃并记录', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {'type': 'number', 'label': '烙印值'},
+              },
+              'initialState': {'yw_brand': 20},
+            },
+          },
+        },
+      });
+      final (patch, dropped) = TrackerRuntime.canonicalizePatch(
+        StatePatch(
+          setValues: {'unknownField': 'x'},
+          addValues: {'yw_brand': 3},
+        ),
+        config,
+      );
+      expect(patch.setValues, isEmpty);
+      expect(patch.addValues, {'yw_brand': 3});
+      expect(dropped, ['unknownField']);
+    });
+
+    test('卡未启用时未知字段宽松保留（自定义 patch 变量）', () {
+      final config = TrackerConfig.fromCardJson({'data': {'extensions': {}}});
+      final (patch, dropped) = TrackerRuntime.canonicalizePatch(
+        StatePatch(setValues: {'customFlag': 'x'}),
+        config,
+      );
+      expect(patch.setValues, {'customFlag': 'x'});
+      expect(dropped, isEmpty);
+    });
+
+    test('空 patch 原样返回', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {'type': 'number', 'label': '烙印值'},
+              },
+              'initialState': {'yw_brand': 20},
+            },
+          },
+        },
+      });
+      final (patch, dropped) =
+          TrackerRuntime.canonicalizePatch(StatePatch(), config);
+      expect(patch.isEmpty, isTrue);
+      expect(dropped, isEmpty);
+    });
   });
 
   group('TrackerRuntime.extractValuesFromPanelText', () {

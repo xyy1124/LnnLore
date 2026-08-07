@@ -81,6 +81,18 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.50',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】状态注入显式列出真实 key 映射：`key=yw_brand | label=烙印值 | type=number | range=0..100 | current=0`——之前只注入中文 label，模型即使按剧情输出 `{"add":{"烙印值":10}}` 也会被当成新变量保存、面板仍读 yw_brand（"剧情推进不更新"根因）',
+                    '【特别版】patch 字段名规范化（canonicalizePatch）：模型输出中文 label 自动映射回真实 key；完全未知字段丢弃并记录日志（不再宽松存成新变量污染变量表）；卡未启用 tracker 时保持宽松（自定义变量场景）',
+                    '【特别版】状态指令从"独立末尾 system"改为合并进**最后一条** system：末尾突兀追加 system 对部分 OpenAI 兼容接口/本地模板不稳定（可能被忽略），合并既不靠近开头被冲淡、也保持消息结构稳定',
+                    '【特别版】TRACKER_RESPONSE 诊断日志始终打印：`protocol=有/无`（模型是否输出 patch 块）`set=... add=...`——可靠区分"模型没遵守协议"与"模型判断无变化"（空 patch 之前被解析器当"没有协议"）',
+                    '【特别版】状态面板默认收起：标题栏兜底"状态面板"（无 summary 的面板也有可点击标题栏），点击展开/收起；面板外层加统一深色底 + 细边框（收起时标题栏也有底色，不再透明悬浮）',
+                    '【特别版】7 张角色卡面板根节点增加每卡专属 background-color（夜无央 #171020 / 母猪教 #17120d / 洗脑女仙 #101b26 / 芭蕾三姐妹 #21101c / 苏蕴泠 #151725 / 蜜欧拉 #1b130d / 假小子青梅 #10201d），渐变保留——渲染器支持渐变显示渐变，不支持则纯色兜底',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.49',
                   date: '2026-08-07',
                   changes: [

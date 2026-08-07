@@ -772,10 +772,21 @@ class ChatService {
 
     // 特别版：继续推进同样注入 tracker 状态指令（与普通发送一致），
     // 否则"继续"生成时模型收不到当前状态、也不会输出状态 patch。
-    // v48：独立最后一条 system 消息追加（避免被角色卡/预设内容冲淡）。
+    // v50：合并进最后一条 system（与 _createCompletion 一致，见 v50 说明）。
     final trackerState = _trackerStateText(character.cardJson, localVariables);
     if (trackerState != null && trackerState.trim().isNotEmpty) {
-      requestMessages.add({'role': 'system', 'content': trackerState});
+      final systemIdx = requestMessages.lastIndexWhere(
+        (m) => m['role'] == 'system',
+      );
+      if (systemIdx >= 0) {
+        requestMessages[systemIdx] = {
+          ...requestMessages[systemIdx],
+          'content':
+              '${requestMessages[systemIdx]['content']}\n\n$trackerState',
+        };
+      } else {
+        requestMessages.insert(0, {'role': 'system', 'content': trackerState});
+      }
     }
 
     try {
@@ -943,6 +954,21 @@ class ChatService {
     final calls = ChatVariableService.parseSetVarCalls(text);
     final config = TrackerConfig.fromCardJson(cardJson);
     var patch = TrackerRuntime.extractPatch(text);
+    // v50：字段名规范化——模型可能输出中文 label（"烙印值"）而非真实
+    // key（yw_brand），映射回 key；完全未知字段丢弃（避免被 reducer
+    // 当成新变量保存，面板仍读不到）。
+    final canonical = TrackerRuntime.canonicalizePatch(patch, config);
+    patch = canonical.$1;
+    final droppedKeys = canonical.$2;
+    if (droppedKeys.isNotEmpty) {
+      debugPrint('[TRACKER_RESPONSE] 丢弃未知字段: $droppedKeys');
+    }
+    // v50：始终打印模型状态诊断——区分"模型没输出协议"（protocol=无）
+    // 与"模型判断无变化"（protocol=有但 set/add 为空）。
+    debugPrint(
+      '[TRACKER_RESPONSE] protocol=${RegExp(r'"patch"\s*:').hasMatch(text) ? '有' : '无'} '
+      'set=${patch.setValues} add=${patch.addValues}',
+    );
     // 旁白字段本轮去重：模型对已落地旁白字段的 set/add 一律忽略
     // （其余字段照常应用）。
     if (protectedStateKeys.isNotEmpty) {
@@ -1163,7 +1189,7 @@ class ChatService {
     final state = existingState.isEmpty
         ? config.initialState.map((k, v) => MapEntry(k, '$v'))
         : existingState;
-    final text = TrackerRuntime.formatStateText(
+    final text = TrackerRuntime.formatTrackerInstruction(
       state: Map<String, dynamic>.from(state),
       config: config,
     );
@@ -1175,11 +1201,14 @@ class ChatService {
     // v48：要求**每轮都输出** patch——即使无状态变化也输出空 patch
     // （{"patch":{"set":{},"add":{}}}），便于日志区分"模型判断没有
     // 变化"和"模型完全没遵守协议"。
+    // v50：格式改为固定 {reply, patch}（正文与协议分离，避免长剧情
+    // 末尾遗漏 patch）；key 映射已在上方列出，只能使用 key。
     return '$text\n\n'
         '（本条回复末尾必须用 JSON 代码块输出结构化状态更新，格式：\n'
-        '```json\n{"patch":{"set":{},"add":{"字段key":数值变化}}}\n```\n'
-        'set 为直接赋值，add 为增减量。状态有变化就如实输出；'
-        '没有变化也必须输出空 patch（{"patch":{"set":{},"add":{}}}）。'
+        '```json\n{"reply":"剧情正文","patch":{"set":{},"add":{"字段key":数值变化}}}\n```\n'
+        'reply 为本轮剧情正文，patch 只使用上方列出的 key（set 为直接赋值，'
+        'add 为增减量）。状态有变化就如实输出；没有变化也必须输出空 patch'
+        '（{"reply":"剧情正文","patch":{"set":{},"add":{}}}）。'
         '不要输出状态面板模板本身，面板由系统自动渲染。）';
   }
 
@@ -1247,15 +1276,27 @@ class ChatService {
         {'role': message.role, 'content': message.content},
     ];
 
-    // 特别版：状态注入——作为**独立的最后一条 system 消息**追加到
-    // 请求末尾（v48 修复：之前追加到第一条 system，后面大量角色卡/
-    // 预设内容会冲淡状态指令，模型容易漏输出 patch）。
-    // 状态指令紧跟用户消息/对话之后，模型生成时最先看到。
+    // 特别版：状态注入——合并进**最后一条** system 消息（v50 修正：
+    // 独立追加末尾 system 对部分 OpenAI 兼容接口/本地模板不稳定，模型
+    // 可能忽略末尾突兀的 system；合并到最后一条 system 既不靠近开头
+    // 被角色卡/预设内容冲淡，也保持消息结构稳定）。没有 system 时
+    // 插入到最前。
     if (trackerStateText != null && trackerStateText.trim().isNotEmpty) {
-      requestMessages.add({
-        'role': 'system',
-        'content': trackerStateText,
-      });
+      final systemIdx = requestMessages.lastIndexWhere(
+        (m) => m['role'] == 'system',
+      );
+      if (systemIdx >= 0) {
+        requestMessages[systemIdx] = {
+          ...requestMessages[systemIdx],
+          'content':
+              '${requestMessages[systemIdx]['content']}\n\n$trackerStateText',
+        };
+      } else {
+        requestMessages.insert(
+          0,
+          {'role': 'system', 'content': trackerStateText},
+        );
+      }
     }
 
     return _createCompletionFromMessages(

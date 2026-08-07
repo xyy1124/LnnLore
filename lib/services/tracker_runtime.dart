@@ -702,6 +702,108 @@ class TrackerRuntime {
     return '【当前状态】\n${lines.join('\n')}';
   }
 
+  /// v50：模型注入专用状态指令——**显式列出真实 key 与 label 的映射**。
+  ///
+  /// v49 之前只注入中文 label（`烙印值：0`），模型即使按剧情输出了
+  /// `{"add":{"烙印值":10}}` 也会被当成新变量保存、面板仍读 `yw_brand`
+  /// （"剧情推进不更新"根因）。这里每行给出
+  /// `key=yw_brand | label=烙印值 | type=number | range=0..100 | current=0`，
+  /// 并强制模型在 patch 里只能使用 key。
+  static String formatTrackerInstruction({
+    required Map<String, dynamic> state,
+    required TrackerConfig config,
+  }) {
+    if (state.isEmpty) {
+      return '';
+    }
+    final order = config.displayOrder.isNotEmpty
+        ? config.displayOrder
+        : state.keys.toList(growable: false);
+    final fields = <String>[];
+    void addField(String key) {
+      final value = state[key];
+      if (value == null) {
+        return;
+      }
+      final schema = config.stateSchema[key];
+      final label = (schema != null && schema.label.isNotEmpty)
+          ? schema.label
+          : key;
+      final range = (schema != null && schema.isNumber)
+          ? ' | range=${schema.min ?? '-inf'}..${schema.max ?? '+inf'}'
+          : '';
+      final type = schema?.type ?? 'string';
+      fields.add(
+        '- key=$key | label=$label | type=$type$range | current=$value',
+      );
+    }
+
+    for (final key in order) {
+      addField(key);
+    }
+    for (final key in state.keys) {
+      if (!order.contains(key)) {
+        addField(key);
+      }
+    }
+    if (fields.isEmpty) {
+      return '';
+    }
+    return '【当前状态】（以下 key 是状态字段的唯一标识，'
+        'JSON patch 中只能使用 key，禁止使用中文 label）\n'
+        '${fields.join('\n')}';
+  }
+
+  /// v50：patch 字段名规范化——模型可能输出中文 label（`烙印值`）而不是
+  /// 真实 key（`yw_brand`）。label 精确匹配映射回 key；完全未知的字段
+  /// 直接丢弃（避免被 reducer 当成新变量保存、污染变量表）。
+  /// 返回 (规范化 patch, 被丢弃的字段列表)。
+  /// 卡未启用 tracker（无 schema）时原样返回——自定义 patch 变量宽松保留。
+  static (StatePatch, List<String>) canonicalizePatch(
+    StatePatch patch,
+    TrackerConfig config,
+  ) {
+    if (patch.isEmpty || !config.isEnabled) {
+      return (patch, const []);
+    }
+    final dropped = <String>[];
+    String? canonical(String raw) {
+      final value = raw.trim();
+      if (config.stateSchema.containsKey(value)) {
+        return value;
+      }
+      for (final entry in config.stateSchema.entries) {
+        if (entry.value.label.trim() == value) {
+          return entry.key;
+        }
+      }
+      return null;
+    }
+
+    final setValues = <String, dynamic>{};
+    final addValues = <String, num>{};
+    patch.setValues.forEach((k, v) {
+      final key = canonical(k);
+      if (key != null) {
+        setValues[key] = v;
+      } else {
+        dropped.add(k);
+      }
+    });
+    patch.addValues.forEach((k, v) {
+      final key = canonical(k);
+      if (key != null) {
+        addValues[key] = v;
+      } else {
+        dropped.add(k);
+      }
+    });
+    return (
+      StatePatch(setValues: setValues, addValues: addValues, reply: patch.reply),
+      dropped,
+    );
+  }
+
   // ---- 内部 ----
 
   static dynamic _validate(String key, dynamic value, TrackerConfig config) {

@@ -77,8 +77,19 @@ class _SpecialStatusPanelState extends State<SpecialStatusPanel> {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-      child: Material(
-        color: Colors.transparent,
+      // v50：外层容器兜底色/边框——卡 HTML 根节点的 background 若被
+      // 渲染器忽略（linear-gradient 等），面板仍保留统一的深色底；
+      // 卡内部根节点若自带 background-color 会覆盖内层区域（优先显示
+      // 每张卡自己的配色）。收起时标题栏也有底色与边框。
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF17131F),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.08),
+          ),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        clipBehavior: Clip.antiAlias,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
