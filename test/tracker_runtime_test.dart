@@ -378,4 +378,78 @@ void main() {
           isEmpty);
     });
   });
+
+  group('旁白应用链路（与 chat_service 发送时同款逻辑）', () {
+    // 与 chat_service.dart 里旁白块逐行对应：isAdd 走 addValues，
+    // number 字段 = 赋值走 setValues（_validate 会 clamp min/max），
+    // string 字段直接写入。
+    Map<String, String> applyNarration(
+      String input,
+      TrackerConfig config,
+      Map<String, String> vars,
+    ) {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges(input, config);
+      final result = Map<String, String>.from(vars);
+      for (final entry in changes.entries) {
+        final key = entry.key;
+        final (value, isAdd) = entry.value;
+        if (isAdd) {
+          final next = TrackerRuntime.reduce(
+            current: TrackerRuntime.initState(
+              config: config,
+              existing: result,
+            ),
+            patch: StatePatch(addValues: {key: num.tryParse(value) ?? 0}),
+            config: config,
+          );
+          result[key] = '${next[key]}';
+        } else {
+          final schema = config.stateSchema[key];
+          if (schema != null && schema.isNumber) {
+            final next = TrackerRuntime.reduce(
+              current: TrackerRuntime.initState(
+                config: config,
+                existing: result,
+              ),
+              patch: StatePatch(
+                setValues: {key: num.tryParse(value) ?? 0},
+              ),
+              config: config,
+            );
+            result[key] = '${next[key]}';
+          } else {
+            result[key] = value;
+          }
+        }
+      }
+      return result;
+    }
+
+    test('（体力=999）越界赋值被 clamp 到 max=100', () {
+      final result = applyNarration('（体力=999）', _config(), {'energy': '80'});
+      expect(result['energy'], '100');
+    });
+    test('（体力=-999）越界赋值被 clamp 到 min=0', () {
+      final result = applyNarration('（体力=-999）', _config(), {'energy': '80'});
+      expect(result['energy'], '0');
+    });
+    test('（体力=35）正常赋值保留', () {
+      final result = applyNarration('（体力=35）', _config(), {'energy': '80'});
+      expect(result['energy'], '35');
+    });
+    test('（地点=雪山）字符串字段直接写入', () {
+      final result =
+          applyNarration('（地点=雪山）', _config(), {'location': '旅馆'});
+      expect(result['location'], '雪山');
+    });
+    test('（体力+10）仍走 add 叠加', () {
+      final result = applyNarration('（体力+10）', _config(), {'energy': '80'});
+      expect(result['energy'], '90');
+    });
+    test('（体力+1000）add 越界也 clamp 到 100', () {
+      final result = applyNarration('（体力+1000）', _config(), {'energy': '80'});
+      expect(result['energy'], '100');
+    });
+  });
 }

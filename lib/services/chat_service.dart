@@ -140,7 +140,24 @@ class ChatService {
             );
             narrationVariables[key] = '${next[key]}';
           } else {
-            narrationVariables[key] = value;
+            // = 赋值：number 字段走 reducer（_validate 按 min/max clamp，
+            // 避免 （烙印值=999） 直接写入越界值）；string 字段直接写入。
+            final schema = narrationConfig.stateSchema[key];
+            if (schema != null && schema.isNumber) {
+              final next = TrackerRuntime.reduce(
+                current: TrackerRuntime.initState(
+                  config: narrationConfig,
+                  existing: narrationVariables,
+                ),
+                patch: StatePatch(
+                  setValues: {key: num.tryParse(value) ?? 0},
+                ),
+                config: narrationConfig,
+              );
+              narrationVariables[key] = '${next[key]}';
+            } else {
+              narrationVariables[key] = value;
+            }
           }
         }
         await ChatDatabaseService.instance.upsertSessionVariables(

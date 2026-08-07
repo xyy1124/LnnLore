@@ -496,11 +496,16 @@ class _MessageBubbleState extends State<MessageBubble> {
     );
   }
 
-  /// 本条消息的状态面板：三路兜底——
+  /// 本条消息的状态面板：两路兜底——
   /// ①消息级 HTML 面板（`__msg_status_html__:<id>`，该消息时的快照）
-  /// ②全局最新 HTML 面板（`__special_status_html__`）
-  /// ③运行时生成面板（卡的 tracker 声明 + 变量表 + **initialState 兜底**，
+  /// ②运行时生成面板（卡的 tracker 声明 + 变量表 + **initialState 兜底**，
   /// 新会话/开场/变量表为空也能显示）
+  ///
+  /// 注意：不再用全局旧 HTML（`__special_status_html__`）兜底——模型已
+  /// 改为输出 JSON patch（不再产新 HTML），旧全局面板里写死的数值会被
+  /// 一直显示在每轮消息上（变量表已变但面板数字不变），导致"状态更新
+  /// 了却不显示"。无消息级快照时直接走运行时生成，保证显示与当前状态
+  /// 一致。
   Widget? _buildMessageStatusPanel(BuildContext context) {
     if (widget.message.isMe) {
       return null;
@@ -514,7 +519,6 @@ class _MessageBubbleState extends State<MessageBubble> {
             widget.message.id!,
           )];
     }
-    rawHtml ??= widget.sessionVariables[kSpecialStatusHtmlKey];
     var html = rawHtml == null
         ? null
         : ChatVariableService.resolveGetVars(
