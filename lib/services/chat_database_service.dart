@@ -762,6 +762,38 @@ class ChatDatabaseService {
     _notifyChanged();
   }
 
+  /// v51：替换会话变量——先删除 [replaceKeys] 指定的旧值再写入 [variables]
+  /// （纯 upsert 无法清除旧分支存在、当前分支不存在的字段；分支状态回滚
+  /// 必须用 replace 才能让 tracker 状态与当前消息分支严格一致）。
+  Future<void> replaceSessionVariables(
+    String sessionId,
+    Map<String, String> variables, {
+    Set<String> replaceKeys = const {},
+  }) async {
+    await _db.transaction((txn) async {
+      if (replaceKeys.isNotEmpty) {
+        await txn.delete(
+          'chat_variables',
+          where:
+              'session_id = ? AND key IN (${List.filled(replaceKeys.length, '?').join(',')})',
+          whereArgs: [sessionId, ...replaceKeys],
+        );
+      }
+      for (final entry in variables.entries) {
+        await txn.insert(
+          'chat_variables',
+          {
+            'session_id': sessionId,
+            'key': entry.key,
+            'value': entry.value,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+    _notifyChanged();
+  }
+
   // ---- 消息动作按钮（模型 choices，v8）----
 
   /// 保存一条消息的 choices（先删后插，保证幂等）。

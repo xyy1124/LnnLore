@@ -149,11 +149,12 @@ class ChatMessageList extends StatelessWidget {
             final hasPersistedMessage = msg.id != null;
             final hasDraftOpeningActions =
                 isDraftSession && !hasPersistedMessage && !msg.isMe;
-            final showActions =
-                (hasPersistedMessage || hasDraftOpeningActions) &&
-                (!isSending || isRegeneratingUserMessage) &&
-                // 冻结期间禁用列表项操作（快照索引与真实数据错位）
-                !messagesFrozen;
+            // v51：显示与可用分离——操作区始终保留布局（生成/冻结时
+            // 只是禁用+淡出），避免操作按钮消失导致消息高度变化、
+            // 流式输出期间视口跳动（"输出时界面不动"回归根因）。
+            final showActions = hasPersistedMessage || hasDraftOpeningActions;
+            final actionsEnabled =
+                (!isSending || isRegeneratingUserMessage) && !messagesFrozen;
             final canEditMessage =
                 (hasPersistedMessage || hasDraftOpeningActions) &&
                 !isSending &&
@@ -199,6 +200,7 @@ class ChatMessageList extends StatelessWidget {
                     isLastUserMessageWithoutReply: isLastUserMessageWithoutReply,
                     isLastCharacterMessage: isLastCharacterMessage,
                     showActions: showActions,
+                    actionsEnabled: actionsEnabled,
                     canEdit: canEditMessage,
                     canDelete: canDeleteMessage,
                     isBusyRegenerating: isRegeneratingUserMessage,
@@ -211,13 +213,18 @@ class ChatMessageList extends StatelessWidget {
                 onGenerate:
                     isLastUserMessageWithoutReply &&
                         showActions &&
+                        actionsEnabled &&
                         !isRegeneratingUserMessage
                     ? () => onRegenerateFromUserMessage(messageIndex)
                     : null,
-                onRegenerate: isLastCharacterMessage && showActions
+                onRegenerate: isLastCharacterMessage &&
+                        showActions &&
+                        actionsEnabled
                     ? () => onRegenerateMessage(messageIndex)
                     : null,
-                onContinue: isLastCharacterMessage && showActions
+                onContinue: isLastCharacterMessage &&
+                        showActions &&
+                        actionsEnabled
                     ? () => onContinueMessage(messageIndex)
                     : null,
                 onImpersonate: isLastCharacterMessage && showActions

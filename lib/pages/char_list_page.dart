@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../widgets/app_top_notice.dart';
 
 import '../data/mock_user_settings.dart';
 import '../data/preset_selection.dart';
@@ -120,11 +121,7 @@ class _CharListPageState extends State<CharListPage> {
         message += '，失败 ${batch.failures.length} 个';
         debugPrint('文件夹导入失败项：${batch.failures.join('；')}');
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
-        AppSnackBar.build(context, message),
-      );
+      AppTopNotice.show(context, message);
     } catch (e) {
       if (!mounted) {
         return;
@@ -132,11 +129,7 @@ class _CharListPageState extends State<CharListPage> {
       final message = e.toString().contains('MissingPluginException')
           ? '当前平台不支持文件夹导入，请使用"选择文件/压缩包"（zip）'
           : '文件夹导入失败：$e';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
-        AppSnackBar.build(context, message),
-      );
+      AppTopNotice.show(context, message);
     }
   }
 
@@ -168,35 +161,16 @@ class _CharListPageState extends State<CharListPage> {
         await _refresh();
         if (!mounted) return;
         if (single.characterCount == 1) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(
-            AppSnackBar.build(context, '已导入角色：${picked.name}'),
-          );
+          AppTopNotice.show(context, '已导入角色：${picked.name}');
         } else if (single.skippedCharacterCount > 0) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(
-            AppSnackBar.build(context, '已存在同名角色，已跳过'),
-          );
+          AppTopNotice.show(context, '已存在同名角色，已跳过');
         } else if (single.worldBookCount == 1) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(
-            AppSnackBar.build(context, '已导入世界书：${picked.name}'),
-          );
+          AppTopNotice.show(context, '已导入世界书：${picked.name}');
         } else if (single.failures.isNotEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            AppSnackBar.build(
-              context,
-              '导入失败：${single.failures.first}',
-              type: AppSnackBarType.error,
-            ),
-          );
+          AppTopNotice.show(context, '导入失败：${single.failures.first}',
+              type: AppNoticeType.error,);
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            AppSnackBar.build(context, '未识别到角色卡，已跳过'),
-          );
+          AppTopNotice.show(context, '未识别到角色卡，已跳过');
         }
         return;
       }
@@ -236,18 +210,10 @@ class _CharListPageState extends State<CharListPage> {
         message += '，失败 ${batch.failures.length} 个';
         debugPrint('批量导入失败项：${batch.failures.join('；')}');
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
-        AppSnackBar.build(context, message),
-      );
+      AppTopNotice.show(context, message);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
-        AppSnackBar.build(context, '导入失败：$e', type: AppSnackBarType.error),
-      );
+      AppTopNotice.show(context, '导入失败：$e', type: AppNoticeType.error);
     }
   }
 
@@ -314,9 +280,7 @@ class _CharListPageState extends State<CharListPage> {
     };
 
     if (outputPath == null || !mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(AppSnackBar.build(context, '导出成功：$outputPath'));
+    AppTopNotice.show(context, '导出成功：$outputPath');
   }
 
   Future<void> _onDelete(CharacterSummary summary) async {
@@ -345,9 +309,7 @@ class _CharListPageState extends State<CharListPage> {
     await CharacterService.instance.delete(summary.id);
     await _refresh();
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(AppSnackBar.build(context, '已删除角色：${summary.name}'));
+    AppTopNotice.show(context, '已删除角色：${summary.name}');
   }
 
   /// 打开角色 AI 通读介绍页（加载完整角色卡与配套世界书）。
@@ -369,13 +331,8 @@ class _CharListPageState extends State<CharListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        AppSnackBar.build(
-          context,
-          '加载角色失败：$error',
-          type: AppSnackBarType.error,
-        ),
-      );
+      AppTopNotice.show(context, '加载角色失败：$error',
+          type: AppNoticeType.error,);
     }
   }
 
@@ -397,22 +354,15 @@ class _CharListPageState extends State<CharListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        AppSnackBar.build(
-          context,
-          '加载角色列表失败：$error',
-          type: AppSnackBarType.error,
-        ),
-      );
+      AppTopNotice.show(context, '加载角色列表失败：$error',
+          type: AppNoticeType.error,);
       return;
     }
     if (!mounted) {
       return;
     }
     if (characters.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        AppSnackBar.build(context, '还没有角色，先导入一张角色卡吧'),
-      );
+      AppTopNotice.show(context, '还没有角色，先导入一张角色卡吧');
       return;
     }
     final selected = await showModalBottomSheet<CharacterSummary>(
@@ -612,7 +562,9 @@ class _CharListPageState extends State<CharListPage> {
 
           final characters = snapshot.data ?? const <CharacterSummary>[];
           if (characters.isEmpty) {
-            return const Center(child: Text('还没有角色，先导入一张角色卡吧'));
+            return const Center(
+              child: Text('还没有角色，先导入一张角色卡吧'),
+            );
           }
 
           return RefreshIndicator(

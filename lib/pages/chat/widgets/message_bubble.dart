@@ -32,6 +32,10 @@ class MessageBubble extends StatefulWidget {
     required this.isLastUserMessageWithoutReply,
     required this.isLastCharacterMessage,
     required this.showActions,
+    /// v51：操作区"可用"标记——生成/冻结期间 false：操作区保留布局
+    /// （AnimatedOpacity 淡出）但禁用点击，避免按钮消失导致消息高度
+    /// 变化、流式输出期间视口跳动。
+    this.actionsEnabled = true,
     required this.canEdit,
     required this.canDelete,
     required this.isBusyRegenerating,
@@ -59,6 +63,7 @@ class MessageBubble extends StatefulWidget {
   final bool isLastUserMessageWithoutReply;
   final bool isLastCharacterMessage;
   final bool showActions;
+  final bool actionsEnabled;
   final bool canEdit;
   final bool canDelete;
   final bool isBusyRegenerating;
@@ -300,7 +305,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                 controller: _overlayPortalController,
                 overlayChildBuilder: _buildPopupOverlay,
                 child: GestureDetector(
-                  onTapDown: widget.showActions
+                  onTapDown: widget.showActions && widget.actionsEnabled
                       ? (_) => _showActionPopup()
                       : null,
                   child: Container(
@@ -331,7 +336,16 @@ class _MessageBubbleState extends State<MessageBubble> {
                   ),
                 ),
               ),
-              if (widget.showActions) _buildActionButtons(context, colorScheme),
+              // v51：操作区保留布局——生成/冻结时禁用交互并淡出
+              // （不移除布局，避免消息高度变化导致视口跳动）
+              IgnorePointer(
+                ignoring: !widget.actionsEnabled,
+                child: AnimatedOpacity(
+                  opacity: widget.actionsEnabled ? 1 : 0,
+                  duration: const Duration(milliseconds: 120),
+                  child: _buildActionButtons(context, colorScheme),
+                ),
+              ),
             ],
           ),
         ),
@@ -459,7 +473,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                         initiallyExpanded: !pseudoChainComplete,
                       ),
                     GestureDetector(
-                      onTapDown: widget.showActions
+                      onTapDown: widget.showActions && widget.actionsEnabled
                           ? (_) => _showActionPopup()
                           : null,
                       child: Semantics(
@@ -489,7 +503,16 @@ class _MessageBubbleState extends State<MessageBubble> {
                         }),
                       ),
                     ),
-                    _buildActionButtons(context, colorScheme),
+                    // v51：操作区保留布局——生成/冻结时禁用交互并淡出
+                    // （不移除布局，避免消息高度变化导致视口跳动）
+                    IgnorePointer(
+                      ignoring: !widget.actionsEnabled,
+                      child: AnimatedOpacity(
+                        opacity: widget.actionsEnabled ? 1 : 0,
+                        duration: const Duration(milliseconds: 120),
+                        child: _buildActionButtons(context, colorScheme),
+                      ),
+                    ),
                     // 特别版：消息动作按钮（模型 choices）
                     _buildChoicesRow(context, colorScheme),
                     // 特别版：本条消息的状态面板（跟随消息渲染，

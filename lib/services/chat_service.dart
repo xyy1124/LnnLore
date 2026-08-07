@@ -545,7 +545,8 @@ class ChatService {
     );
 
     // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
-    final localVariables = await ChatDatabaseService.instance
+    // var：v51 分支回滚后会重新读取恢复后的变量表
+    var localVariables = await ChatDatabaseService.instance
         .getSessionVariables(session.id);
 
     final truncatedHistory = _truncateChatMessages(historyBeforeUserMessage);
@@ -566,6 +567,53 @@ class ChatService {
             .keys
             .toSet()
         : <String>{};
+
+    // v51：分支状态回滚（核心修复）——消息树是分支化的，但 tracker
+    // 状态是会话级单份全局变量；重生成/编辑重发直接读全局变量会拿到
+    // 旧分支推进后的状态（"编辑像新消息"根因）。这里：
+    // ① 从历史消息恢复基线（最近角色消息的 v3 快照，无快照用 initialState）
+    // ② 重新应用本条用户消息的旁白修改
+    // ③ replace 写入（清除旧分支存在、当前分支不存在的 tracker 字段）
+    if (regenerateNarrationConfig.isEnabled) {
+      final baseline = _trackerBaselineFromHistory(
+        historyBeforeUserMessage,
+        localVariables,
+        regenerateNarrationConfig,
+      );
+      final narrationChanges = TrackerRuntime.parseNarrationStateChanges(
+        userTextForModel,
+        regenerateNarrationConfig,
+      );
+      final startingState = TrackerRuntime.applyNarrationChanges(
+        baseline,
+        narrationChanges,
+        regenerateNarrationConfig,
+      );
+      final trackerKeys = <String>{
+        ...regenerateNarrationConfig.stateSchema.keys,
+        ...regenerateNarrationConfig.initialState.keys,
+      };
+      final replaced = Map<String, String>.from(localVariables);
+      for (final key in trackerKeys) {
+        final v = startingState[key];
+        if (v != null) {
+          replaced[key] = '$v';
+        } else {
+          replaced.remove(key);
+        }
+      }
+      await ChatDatabaseService.instance.replaceSessionVariables(
+        session.id,
+        replaced,
+        replaceKeys: trackerKeys,
+      );
+      localVariables = await ChatDatabaseService.instance
+          .getSessionVariables(session.id);
+      debugPrint(
+        '[TRACKER_FLOW] 重生成状态回滚: baseline=$baseline '
+        'narration=$narrationChanges -> ${startingState}',
+      );
+    }
 
     final promptAssembly = PromptAssembler.build(
       PromptAssemblyContext(
@@ -1210,6 +1258,42 @@ class ChatService {
         'add 为增减量）。状态有变化就如实输出；没有变化也必须输出空 patch'
         '（{"reply":"剧情正文","patch":{"set":{},"add":{}}}）。'
         '不要输出状态面板模板本身，面板由系统自动渲染。）';
+  }
+
+  /// v51：从消息历史恢复 tracker 基线状态——倒序找最近一条角色消息的
+  /// v3 结构化状态快照（`__msg_tracker_state_v3__:<id>`，该消息处理完成
+  /// 时的状态）；无快照（如纯开场消息）回退 initialState。
+  /// 用于重生成/编辑重发前把状态恢复到"被编辑消息之前"的分支时刻，
+  /// 避免新分支从旧分支推进后的状态继续（v51 确认的"编辑像新消息"根因）。
+  Map<String, dynamic> _trackerBaselineFromHistory(
+    List<ChatMessage> history,
+    Map<String, String> variables,
+    TrackerConfig config,
+  ) {
+    for (final msg in history.reversed) {
+      if (msg.isMe || msg.id == null) {
+        continue;
+      }
+      final raw = variables[messageStatusHtmlKey(msg.id!)];
+      if (raw == null || raw.trim().isEmpty) {
+        continue;
+      }
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          final state = <String, dynamic>{
+            for (final e in decoded.entries)
+              if (e.key is String) e.key as String: e.value,
+          };
+          if (state.isNotEmpty) {
+            return state;
+          }
+        }
+      } catch (_) {
+        // 坏快照跳过，继续找更早的角色消息
+      }
+    }
+    return config.initialState.map((k, v) => MapEntry(k, '$v'));
   }
 
   Future<Preset> _resolvePreset(String? presetId) async {

@@ -656,6 +656,50 @@ void main() {
     });
   });
 
+  group('v51: applyNarrationChanges（分支回滚共用旁白应用）', () {
+    test('add 与字符串赋值组合应用', () {
+      final result = TrackerRuntime.applyNarrationChanges(
+        {'energy': '80', 'location': '旅馆'},
+        {
+          'energy': ('-5', true),
+          'location': ('雪山', false),
+        },
+        _config(),
+      );
+      expect(result['energy'], 75);
+      expect(result['location'], '雪山');
+    });
+
+    test('number = 赋值越界 clamp', () {
+      final result = TrackerRuntime.applyNarrationChanges(
+        {'energy': '80'},
+        {'energy': ('999', false)},
+        _config(),
+      );
+      expect(result['energy'], 100);
+    });
+
+    test('空旁白返回原状态副本（不修改原 map）', () {
+      final original = {'energy': '80', 'location': '旅馆'};
+      final result = TrackerRuntime.applyNarrationChanges(
+        original,
+        {},
+        _config(),
+      );
+      expect(result, original);
+      expect(identical(result, original), isFalse);
+    });
+
+    test('缺失字段经 initState 补全后再叠加', () {
+      final result = TrackerRuntime.applyNarrationChanges(
+        {'energy': '30'},
+        {'energy': ('+10', true)},
+        _config(),
+      );
+      expect(result['energy'], 40);
+    });
+  });
+
   group('filterProtectedPatch（旁白字段本轮去重）', () {
     test('模型对旁白已落地字段的 add 被过滤（20→30 而非 40）', () {
       // 发送链路：旁白（烙印值+10）确定性落地 → 模型又输出 add +10

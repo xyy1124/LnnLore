@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -12,6 +13,7 @@ import '../../models/group_chat_session.dart';
 import '../../models/preset.dart';
 import '../../models/prompt_assembly.dart';
 import '../../models/quick_command.dart';
+import '../../models/tracker_config.dart';
 import '../../models/world_book.dart';
 import '../../services/api_config_service.dart';
 import '../../services/chat_character_resolver.dart';
@@ -26,6 +28,7 @@ import '../../services/chat_display_sanitizer.dart';
 import '../../services/chat_variable_service.dart';
 import '../../services/group_chat_service.dart';
 import '../../services/openai_compatible_api_service.dart';
+import '../../services/tracker_runtime.dart';
 import '../../services/world_book_service.dart';
 import 'widgets/message_edit_dialog.dart';
 
@@ -856,6 +859,13 @@ class ChatViewModel extends ChangeNotifier {
     // 这里，若 unawaited 则 UI 可能在变量刷新完成前渲染（状态栏显示
     // 旧值直到下一次 notify）。await 保证气泡拿到的是数据库最终值。
     await _refreshSessionVariables(bundle.session.id);
+    // v51：分支状态恢复——切换分支/删除分支/重新打开会话后，把 tracker
+    // 状态恢复到当前分支最后一条角色消息的时刻（v3 快照），否则全局
+    // 变量停留在旧分支推进后的状态。仅当最后一条不是用户消息时恢复
+    // （用户消息后无回复时旁白已实时落地、无快照可回，强回滚会丢旁白）。
+    if (_messages.isNotEmpty && !_messages.last.isMe) {
+      await _restoreTrackerBaseline();
+    }
     // 特别版：会话切换/加载时清空上一次的接口真实用量
     _lastRealUsage = null;
     // 会话切换/加载：解除列表冻结（回到真实数据）。
@@ -959,6 +969,70 @@ class ChatViewModel extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  /// v51：按当前消息链恢复 tracker 基线状态——倒序找最近一条角色消息
+  /// 的 v3 快照（该消息时刻的最终状态），用 replace 写入变量表（清除
+  /// 旧分支存在、当前分支不存在的 tracker 字段），并刷新变量缓存。
+  Future<void> _restoreTrackerBaseline() async {
+    final session = _activeSession;
+    final character = _activeCharacter;
+    if (session == null || character == null || _messages.isEmpty) {
+      return;
+    }
+    final config = TrackerConfig.fromCardJson(character.cardJson);
+    if (!config.isEnabled) {
+      return;
+    }
+    final variables = await ChatDatabaseService.instance
+        .getSessionVariables(session.id);
+    Map<String, dynamic>? baseline;
+    for (final msg in _messages.reversed) {
+      if (msg.isMe || msg.id == null) {
+        continue;
+      }
+      final raw = variables[ChatService.messageStatusHtmlKey(msg.id!)];
+      if (raw == null || raw.trim().isEmpty) {
+        continue;
+      }
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          final state = <String, dynamic>{
+            for (final e in decoded.entries)
+              if (e.key is String) e.key as String: e.value,
+          };
+          if (state.isNotEmpty) {
+            baseline = state;
+            break;
+          }
+        }
+      } catch (_) {
+        // 坏快照跳过，继续找更早的角色消息
+      }
+    }
+    if (baseline == null) {
+      return; // 无快照不恢复（保持现状）
+    }
+    final trackerKeys = <String>{
+      ...config.stateSchema.keys,
+      ...config.initialState.keys,
+    };
+    final replaced = Map<String, String>.from(variables);
+    for (final key in trackerKeys) {
+      final v = baseline[key];
+      if (v != null) {
+        replaced[key] = '$v';
+      } else {
+        replaced.remove(key);
+      }
+    }
+    await ChatDatabaseService.instance.replaceSessionVariables(
+      session.id,
+      replaced,
+      replaceKeys: trackerKeys,
+    );
+    await _refreshSessionVariables(session.id);
   }
 
   /// 从侧边栏选择一个会话。返回是否已开始切换（false 表示当前正在发送）。
@@ -1198,9 +1272,6 @@ class ChatViewModel extends ChangeNotifier {
       // 用户主动终止，不弹错误提示。
     } finally {
       _resetPendingMessages();
-      // 特别版：输出结束自动合入——非 reverse 列表在尾部追加
-      // 消息不会顶动视口，成功/取消/失败一律解冻，视口保持。
-      _unfreezeMessages();
       if (!_isDisposed) {
         // 特别版：发送状态复位必须在 await 前——_loadSession 抛异常
         // 也不会锁死发送状态
@@ -1209,8 +1280,14 @@ class ChatViewModel extends ChangeNotifier {
         _activeCompletionCancelToken = null;
       }
       final reloadSessionId = persistedSession?.id;
-      if (reloadSessionId != null || !_isDraftSession) {
-        await _loadSession(preferredSessionId: reloadSessionId ?? session.id);
+      // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
+      // 再加载产生多次中间重建、流式结束后视口跳动
+      try {
+        if (reloadSessionId != null || !_isDraftSession) {
+          await _loadSession(preferredSessionId: reloadSessionId ?? session.id);
+        }
+      } finally {
+        _unfreezeMessages();
       }
       if (!_isDisposed) {
         notifyListeners();
@@ -1324,9 +1401,6 @@ class ChatViewModel extends ChangeNotifier {
       // 用户主动终止，不弹错误提示。
     } finally {
       _resetPendingMessages();
-      // 特别版：输出结束自动合入——非 reverse 列表在尾部追加
-      // 消息不会顶动视口，成功/取消/失败一律解冻，视口保持。
-      _unfreezeMessages();
       if (!_isDisposed) {
         // 特别版：发送状态复位必须在 await 前——_loadSession 抛异常
         // 也不会锁死发送状态
@@ -1335,8 +1409,14 @@ class ChatViewModel extends ChangeNotifier {
         _activeCompletionCancelToken = null;
       }
       final reloadSessionId = persistedSession?.id;
-      if (reloadSessionId != null || !_isDraftSession) {
-        await _loadSession(preferredSessionId: reloadSessionId ?? session.id);
+      // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
+      // 再加载产生多次中间重建、流式结束后视口跳动
+      try {
+        if (reloadSessionId != null || !_isDraftSession) {
+          await _loadSession(preferredSessionId: reloadSessionId ?? session.id);
+        }
+      } finally {
+        _unfreezeMessages();
       }
       if (!_isDisposed) {
         notifyListeners();
@@ -1440,8 +1520,6 @@ class ChatViewModel extends ChangeNotifier {
       rethrow;
     } finally {
       _resetPendingMessages();
-      // 特别版：输出结束自动合入（非 reverse 列表尾部追加不顶动视口）
-      _unfreezeMessages();
       if (!_isDisposed) {
         // 特别版：发送状态复位必须在 await 前——_loadSession 抛异常
         // 也不会锁死发送状态
@@ -1449,7 +1527,13 @@ class ChatViewModel extends ChangeNotifier {
         // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
         _activeCompletionCancelToken = null;
       }
-      await _loadSession(preferredSessionId: session.id);
+      // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
+      // 再加载产生多次中间重建、流式结束后视口跳动
+      try {
+        await _loadSession(preferredSessionId: session.id);
+      } finally {
+        _unfreezeMessages();
+      }
       if (!_isDisposed) {
         notifyListeners();
       }
@@ -1554,8 +1638,6 @@ class ChatViewModel extends ChangeNotifier {
       rethrow;
     } finally {
       _resetPendingMessages();
-      // 特别版：输出结束自动合入（非 reverse 列表尾部追加不顶动视口）
-      _unfreezeMessages();
       if (!_isDisposed) {
         // 特别版：发送状态复位必须在 await 前——_loadSession 抛异常
         // 也不会锁死发送状态
@@ -1563,7 +1645,13 @@ class ChatViewModel extends ChangeNotifier {
         // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
         _activeCompletionCancelToken = null;
       }
-      await _loadSession(preferredSessionId: session.id);
+      // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
+      // 再加载产生多次中间重建、流式结束后视口跳动
+      try {
+        await _loadSession(preferredSessionId: session.id);
+      } finally {
+        _unfreezeMessages();
+      }
       if (!_isDisposed) {
         notifyListeners();
       }

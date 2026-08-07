@@ -655,6 +655,46 @@ class TrackerRuntime {
         .replaceAll('&quot;', '"');
   }
 
+  /// v51：把旁白修改（（烙印值+10）等，已由 [parseNarrationStateChanges]
+  /// 解析）应用到状态上——与 sendMessage 发送时旁白块同款逻辑：
+  /// isAdd 走 addValues（reduce clamp），number 字段 = 赋值走 setValues
+  /// （clamp），string 字段直接写入。返回更新后的状态副本。
+  static Map<String, dynamic> applyNarrationChanges(
+    Map<String, dynamic> state,
+    Map<String, (String, bool)> narrationChanges,
+    TrackerConfig config,
+  ) {
+    if (narrationChanges.isEmpty) {
+      return Map<String, dynamic>.from(state);
+    }
+    var result = Map<String, dynamic>.from(state);
+    for (final entry in narrationChanges.entries) {
+      final key = entry.key;
+      final (value, isAdd) = entry.value;
+      if (isAdd) {
+        final next = reduce(
+          current: initState(config: config, existing: result),
+          patch: StatePatch(addValues: {key: num.tryParse(value) ?? 0}),
+          config: config,
+        );
+        result = next;
+      } else {
+        final schema = config.stateSchema[key];
+        if (schema != null && schema.isNumber) {
+          final next = reduce(
+            current: initState(config: config, existing: result),
+            patch: StatePatch(setValues: {key: num.tryParse(value) ?? 0}),
+            config: config,
+          );
+          result = next;
+        } else {
+          result[key] = value;
+        }
+      }
+    }
+    return result;
+  }
+
   /// 把状态格式化为注入 prompt 的自然文本。
   static String formatStateText({
     required Map<String, dynamic> state,

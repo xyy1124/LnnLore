@@ -307,6 +307,12 @@ class _ChatPageState extends State<ChatPage> {
       for (var i = 0; i < 40; i++) {
         await WidgetsBinding.instance.endOfFrame;
 
+        // v51：生成/重生成期间立即放弃滚动恢复——否则打开会话后的
+        // 自动跳底循环会在发送期间继续 ensureVisible，把视口拉走
+        if (_viewModel.isSending) {
+          return;
+        }
+
         if (!mounted ||
             token != _scrollRestoreToken ||
             _viewModel.activeSession?.id != sessionId) {

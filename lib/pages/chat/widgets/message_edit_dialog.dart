@@ -132,21 +132,6 @@ class _MessageEditDialogState extends State<MessageEditDialog> {
         .clamp(240.0, mediaQuery.size.height)
         .toDouble();
     final keyboardVisible = keyboardInset > 0;
-    final actionButtons = <Widget>[
-      TextButton(
-        onPressed: () => Navigator.of(context).pop(),
-        child: const Text('取消'),
-      ),
-      TextButton(
-        onPressed: () => _closeWith(MessageEditAction.save),
-        child: const Text('保存'),
-      ),
-      if (widget.canSaveAndSend)
-        FilledButton(
-          onPressed: () => _closeWith(MessageEditAction.saveAndSend),
-          child: const Text('保存并发送'),
-        ),
-    ];
 
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -176,29 +161,44 @@ class _MessageEditDialogState extends State<MessageEditDialog> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 特别版：编辑时插入快捷指令（占位标记，斜体彩色显示）
-                      if (widget.quickCommands.isNotEmpty)
-                        TextButton.icon(
-                          onPressed: () => _openQuickCommandMenu(context),
-                          icon: const Icon(Icons.add_circle_outline, size: 16),
-                          label: const Text('插入快捷指令'),
-                          style: TextButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        ),
-                      for (var i = 0; i < actionButtons.length; i++) ...[
-                        if (i > 0 || widget.quickCommands.isNotEmpty)
-                          const SizedBox(width: 8),
-                        actionButtons[i],
-                      ],
-                    ],
+                // v51：按钮区改为两层布局（不再横向滚动）——手机宽度
+                // 不够时"保存并发送"之前会被横向滚动藏到屏幕外，看起来
+                // 像没有发送按钮。快捷指令单独一行，主操作固定在底部。
+                if (widget.quickCommands.isNotEmpty) ...[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => _openQuickCommandMenu(context),
+                      icon: const Icon(Icons.add_circle_outline, size: 16),
+                      label: const Text('插入快捷指令'),
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
                   ),
+                  const SizedBox(height: 8),
+                ],
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('取消'),
+                    ),
+                    const Spacer(),
+                    OutlinedButton(
+                      onPressed: () => _closeWith(MessageEditAction.save),
+                      child: const Text('保存'),
+                    ),
+                    if (widget.canSaveAndSend) ...[
+                      const SizedBox(width: 8),
+                      FilledButton.icon(
+                        onPressed: () =>
+                            _closeWith(MessageEditAction.saveAndSend),
+                        icon: const Icon(Icons.send, size: 18),
+                        label: const Text('发送'),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),
