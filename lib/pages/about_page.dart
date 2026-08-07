@@ -13,6 +13,11 @@ class AboutPage extends StatefulWidget {
 }
 
 class _AboutPageState extends State<AboutPage> {
+  // v56：源码提交与构建日期——每次发版同步更新（对应 github_upload.js
+  // 的提交 hash），方便确认手机安装包对应的源码版本。
+  static const String _kSourceCommit = '02bcbe08';
+  static const String _kBuildDate = '2026-08-07';
+
   static final Uri _githubUri = Uri.parse(
     'https://github.com/adoretes/PocketInn',
   );
@@ -58,6 +63,17 @@ class _AboutPageState extends State<AboutPage> {
                       label: '构建号',
                       value: packageInfo?.buildNumber ?? '读取中...',
                     ),
+                    const SizedBox(height: 8),
+                    // v56：便于确认手机安装包对应哪份源码
+                    _InfoRow(
+                      label: '源码提交',
+                      value: _kSourceCommit,
+                    ),
+                    const SizedBox(height: 8),
+                    _InfoRow(
+                      label: '构建日期',
+                      value: _kBuildDate,
+                    ),
                   ],
                 );
               },
@@ -80,6 +96,18 @@ class _AboutPageState extends State<AboutPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.56',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】状态事务（核心）：旁白（（烙印值+10）等）改为**内存延迟提交**——发送前只在内存应用（模型状态注入/快照用），模型回复成功、assistant 消息保存后与 patch/setvar 一起写入；取消生成/API 失败/思维链重试耗尽/崩溃时状态保持原样，不再出现"状态变了但剧情没保存"',
+                    '【特别版】模型回复成功但未输出状态协议时，仍提交内存中的旁白状态（用户确定性指令不依赖模型输出）',
+                    '【特别版】setvar 统一 canonicalize：`{{setvar::烙印值::30}}` 与 `{{setvar::yw_brand::30}}` 现在结果一致（中文 label 映射回真实 key，未知字段丢弃）——之前只有 JSON patch 走 canonicalize，setvar 直接进 reducer',
+                    '【特别版】删除消息分支时同步清理对应的状态快照（`__msg_tracker_state_v3__:<id>`），不再残留孤儿数据污染变量表',
+                    '【特别版】状态面板折叠偏好持久化：用户手动展开/收起按"会话+角色卡"记忆（`__tracker_expanded__:<角色id>`），优先级：手动偏好 > 卡 defaultExpanded > 默认收起；面板加稳定 key，列表重建时折叠状态不再串消息',
+                    '【特别版】关于页新增"源码提交 + 构建日期"显示，方便确认手机安装包对应的源码版本',
+                  ],
+                ),
                 _UpdateLogItem(
                   version: 'v1.4.0-special.55',
                   date: '2026-08-07',

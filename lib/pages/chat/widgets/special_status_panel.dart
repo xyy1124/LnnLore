@@ -23,6 +23,8 @@ class SpecialStatusPanel extends StatefulWidget {
     this.title,
     this.expanded = true,
     this.onTap,
+    /// v56：折叠状态变化回调（供外部持久化用户偏好）。
+    this.onExpandedChanged,
   });
 
   final String html;
@@ -35,6 +37,9 @@ class SpecialStatusPanel extends StatefulWidget {
 
   /// 折叠切换时的外部回调（可选，兼容旧调用方）。
   final VoidCallback? onTap;
+
+  /// v56：展开/收起切换后的回调（携带新状态）。
+  final ValueChanged<bool>? onExpandedChanged;
 
   @override
   State<SpecialStatusPanel> createState() => _SpecialStatusPanelState();
@@ -61,6 +66,7 @@ class _SpecialStatusPanelState extends State<SpecialStatusPanel> {
   void _toggleExpanded() {
     setState(() => _expanded = !_expanded);
     widget.onTap?.call();
+    widget.onExpandedChanged?.call(_expanded);
   }
 
   @override

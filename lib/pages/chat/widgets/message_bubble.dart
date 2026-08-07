@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -602,6 +603,10 @@ class _MessageBubbleState extends State<MessageBubble> {
     // v50：面板默认收起——标题栏兜底"状态面板"（无 summary 的面板
     // 也必须有可点击标题栏，否则无法展开），点击展开/收起。
     // v54：初始展开状态跟随卡声明 tracker.defaultExpanded（默认收起）。
+    // v56：用户手动展开/收起偏好持久化在会话变量表
+    // （`__tracker_expanded__:<角色id>`）——优先级：手动偏好 > 卡
+    // defaultExpanded > 默认收起；并给面板稳定 key，避免列表重建时
+    // 一条消息的折叠状态被复用到另一条。
     final effectiveTitle =
         panelTitle != null && panelTitle.trim().isNotEmpty
             ? panelTitle.trim()
@@ -609,12 +614,34 @@ class _MessageBubbleState extends State<MessageBubble> {
     final trackerConfig = TrackerConfig.fromCardJson(
       _messageCharacter?.cardJson ?? widget.character?.cardJson,
     );
+    final trackerCharacterId = _messageCharacter?.id ?? widget.character?.id;
+    final expandedPrefKey =
+        '__tracker_expanded__:${trackerCharacterId ?? ''}';
+    final expandedPref = widget.sessionVariables[expandedPrefKey] == '1';
+    final initialExpanded =
+        expandedPref ? true : trackerConfig.defaultExpanded;
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: SpecialStatusPanel(
+        key: ValueKey<String>(
+          'tracker_${widget.message.id}_${trackerCharacterId ?? ''}',
+        ),
         html: html,
         title: effectiveTitle,
-        expanded: trackerConfig.defaultExpanded,
+        expanded: initialExpanded,
+        onExpandedChanged: (expanded) {
+          final sessionId = widget.message.sessionId;
+          if (sessionId == null || trackerCharacterId == null) {
+            return;
+          }
+          // 异步持久化用户偏好（不阻塞 UI）
+          unawaited(
+            ChatDatabaseService.instance.upsertSessionVariables(
+              sessionId,
+              {expandedPrefKey: expanded ? '1' : '0'},
+            ),
+          );
+        },
       ),
     );
   }

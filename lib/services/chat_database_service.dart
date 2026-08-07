@@ -914,6 +914,17 @@ class ChatDatabaseService {
         whereArgs: subtreeIds,
       );
 
+      // v56：删除分支时同步清理消息级状态快照
+      // （__msg_tracker_state_v3__:<id> 存在 chat_variables 表）——
+      // 否则删除分支后快照残留成孤儿数据，长期累积污染变量表。
+      for (final id in subtreeIds) {
+        await tx.delete(
+          'chat_variables',
+          where: 'session_id = ? AND key = ?',
+          whereArgs: [sessionId, '__msg_tracker_state_v3__:$id'],
+        );
+      }
+
       await tx.delete(
         'chat_messages',
         where: 'id IN ($placeholders)',

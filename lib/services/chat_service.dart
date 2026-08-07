@@ -198,10 +198,10 @@ class ChatService {
             }
           }
         }
-        await ChatDatabaseService.instance.upsertSessionVariables(
-          activeSession.id,
-          narrationVariables,
-        );
+        // v56：状态事务——旁白先在内存应用（模型状态注入/消息快照用），
+        // **不立即写库**；模型生成成功、assistant 消息与快照保存后由
+        // _processAssistantOutput（baseVariables 基线）一起提交。取消/
+        // 失败/崩溃时状态保持原样，不会出现"状态变了但剧情没保存"。
         localVariables = narrationVariables;
         debugPrint('[旁白] 应用状态修改: $narrationChanges');
         debugPrint(
@@ -282,6 +282,9 @@ class ChatService {
         cardJson: character.cardJson,
         // 旁白字段本轮去重：模型对这些字段的 set/add 一律忽略
         protectedStateKeys: narrationChanges.keys.toSet(),
+        // v56：状态事务——内存基线（含已应用的旁白），模型成功后
+        // 与 patch/setvar 一起提交；取消/失败则状态保持原样
+        baseVariables: localVariables,
       );
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
@@ -293,6 +296,18 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
+      // v56：状态事务提交点——assistant 消息保存成功即视为本轮成功。
+      // ① _processAssistantOutput 已写库（有 setvar/patch/面板）→ 用它；
+      // ② 模型回复成功但未输出任何状态协议（finalVariables 为 null）时，
+      //    仍提交内存中的旁白状态（用户确定性指令不依赖模型输出）；
+      // ③ 取消/失败路径不提交（旁白不落库，状态保持原样）。
+      final finalVars = processed.finalVariables ?? localVariables;
+      if (processed.finalVariables == null && narrationChanges.isNotEmpty) {
+        await ChatDatabaseService.instance.upsertSessionVariables(
+          activeSession.id,
+          finalVars,
+        );
+      }
       // 特别版：本条消息的规范状态快照按消息关联持久化——始终用该
       // 消息处理后的最终变量表 + 角色卡模板生成（JSON-only 回复也
       // 有快照；数值=消息时刻状态，不被后续轮次污染）
@@ -300,7 +315,7 @@ class ChatService {
         activeSession.id,
         assistantNode.id,
         character.cardJson,
-        processed.finalVariables ?? localVariables,
+        finalVars,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -979,11 +994,17 @@ class ChatService {
   /// [protectedStateKeys]：本轮已由旁白确定性修改的字段（用户输入
   /// （烙印值+10）等已落地）。模型若再对同一字段输出 patch 会被过滤，
   /// 防止"旁白 +10 后又叠加模型 +10"（20→30→40）。
+  ///
+  /// [baseVariables]：v56 状态事务——调用方已在本轮内存中应用了旁白
+  /// （未写库），传入它作为 reduce 的基线（否则 _processAssistantOutput
+  /// 读库会拿到不含旁白的旧状态，旁白丢失）。不传时读库（重生成/
+  /// 继续/群聊等无发送前旁白的路径）。
   Future<ProcessedAssistantOutput> _processAssistantOutput(
     String sessionId,
     String text, {
     Map<String, dynamic>? cardJson,
     Set<String> protectedStateKeys = const {},
+    Map<String, String>? baseVariables,
   }) async {
     final calls = ChatVariableService.parseSetVarCalls(text);
     final config = TrackerConfig.fromCardJson(cardJson);
@@ -1068,8 +1089,12 @@ class ChatService {
     // 有副作用（setvar / patch / 状态栏）才读写变量表
     if (calls.isNotEmpty || !patch.isEmpty || specialStatusHtml != null) {
       // 读当前变量 → 应用 setvar 覆盖 + tracker reducer → 写回
-      final variables = await ChatDatabaseService.instance
-          .getSessionVariables(sessionId);
+      // v56：优先使用调用方传入的内存基线（含已应用的旁白），
+      // 否则读库（无发送前旁白的路径）
+      final variables = baseVariables != null
+          ? Map<String, String>.from(baseVariables)
+          : await ChatDatabaseService.instance
+                .getSessionVariables(sessionId);
       // v54：setvar 统一经过 tracker 保护与校验——受保护字段（旁白已
       // 落地）过滤；tracker 声明字段走 reducer（类型校验 + clamp）；
       // 其余字段直接写入。之前 setvar 直接覆盖变量表，模型同一轮输出
@@ -1080,13 +1105,19 @@ class ChatService {
       });
       if (!setVarPatch.isEmpty) {
         if (config.isEnabled) {
+          // v56：setvar 与 JSON patch 一样先 canonicalize（中文 label
+          // 映射回真实 key，未知字段丢弃）——{{setvar::烙印值::30}} 与
+          // {{setvar::yw_brand::30}} 结果一致（v55 之前只 patch 走了
+          // canonicalize，setvar 直接进 reducer）。
+          final (canonicalSetVar, _) =
+              TrackerRuntime.canonicalizePatch(setVarPatch, config);
           final initialized = TrackerRuntime.initState(
             config: config,
             existing: variables,
           );
           final next = TrackerRuntime.reduce(
             current: initialized,
-            patch: setVarPatch,
+            patch: canonicalSetVar,
             config: config,
           );
           variables
