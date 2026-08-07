@@ -104,13 +104,13 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
-                  version: 'v1.4.0',
+                  version: 'v1.4.0-special.57',
                   date: '2026-08-07',
                   changes: [
-                    '【正式版】首个稳定版本（自 special.56 收口发布）：setvar 保护顺序修正——先 canonicalize（中文 label → 真实 key）再过滤受保护字段，`{{setvar::烙印值::5}}` 不再覆盖旁白（（烙印值+10））已落地的结果',
-                    '【正式版】关于页源码提交/构建日期改为构建时注入（--dart-define=SOURCE_COMMIT / BUILD_DATE），不再硬编码',
-                    '【正式版】更新检查默认指向本分支发布仓库 xyy1124/LnnLore，并与本地安装版本比较（可配置回上游 adoretes/PocketInn）',
-                    '【正式版】版本号体系切换：1.4.0+112（不再使用 special.XX 开发命名）——后续 1.4.1 修复、1.5.0 新功能、2.0.0 协议变更',
+                    '【特别版】setvar 保护顺序修正：先 canonicalize（中文 label → 真实 key）再过滤受保护字段，`{{setvar::烙印值::5}}` 不再覆盖旁白（（烙印值+10））已落地的结果',
+                    '【特别版】关于页源码提交/构建日期改为构建时注入（--dart-define=SOURCE_COMMIT / BUILD_DATE），不再硬编码',
+                    '【特别版】更新检查默认指向本分支发布仓库 xyy1124/LnnLore，并与本地安装版本比较（可配置回上游 adoretes/PocketInn）',
+                    '【特别版】8 张角色卡全部补齐阶段描述（母猪教 mz_drug/mz_serv 补 states + 模板阶段行；新卡"一觉睡醒"已达标）；角色卡生成技能约束升级（string 字段 states 逐字段强制、verify 扩到 10 项）',
                   ],
                 ),
                 _UpdateLogItem(
