@@ -1,0 +1,909 @@
+import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../core/error_handler.dart';
+import '../services/version_check_service.dart';
+
+class AboutPage extends StatefulWidget {
+  const AboutPage({super.key});
+
+  @override
+  State<AboutPage> createState() => _AboutPageState();
+}
+
+class _AboutPageState extends State<AboutPage> {
+  static final Uri _githubUri = Uri.parse(
+    'https://github.com/adoretes/PocketInn',
+  );
+
+  late final Future<PackageInfo> _packageInfoFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _packageInfoFuture = PackageInfo.fromPlatform();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('关于')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // 应用信息卡片
+          _AppInfoCard(colorScheme: colorScheme),
+          const SizedBox(height: 16),
+
+          // 版本信息
+          _SectionCard(
+            title: '版本信息',
+            subtitle: '当前应用版本详情',
+            child: FutureBuilder<PackageInfo>(
+              future: _packageInfoFuture,
+              builder: (context, snapshot) {
+                final packageInfo = snapshot.data;
+
+                return Column(
+                  children: [
+                    _InfoRow(
+                      label: '版本号',
+                      value: packageInfo?.version ?? '读取中...',
+                    ),
+                    const SizedBox(height: 8),
+                    _InfoRow(
+                      label: '构建号',
+                      value: packageInfo?.buildNumber ?? '读取中...',
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // 检查更新
+          _SectionCard(
+            title: '检查更新',
+            subtitle: '自动检查 GitHub 发布的新版本（特别版）',
+            child: _VersionCheckCard(colorScheme: colorScheme),
+          ),
+          const SizedBox(height: 16),
+
+          // 更新日志
+          _SectionCard(
+            title: '更新日志',
+            subtitle: '最近更新内容',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.14',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】角色立绘清晰度修复：列表缩略图 256→1024（书架封面/头像放大不糊）；导入与同名覆盖的头像超预算不再丢弃，自动降采样 ≤2048 保存（不管多大图都能加载成功）',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.13',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】消息动作按钮（choices）：模型输出 {reply, patch, choices} 时 choices 解析入库，显示为消息下方可点击动作条（ActionChip），点击把动作发送给模型；ProcessedAssistantOutput 结构体重构（正文+patch+choices 一体化）',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.12',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】修复消息显示协议内容：开场消息（first_mes）与流式输出均走状态块/协议 JSON 剥离，模型流式吐 {reply,patch} 时界面不再露出协议原文；协议 JSON 解析失败也不显示原文',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.11',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】角色列表书架卡片改竖版：双列网格 16:9 竖封面（头像铺满+底部角色名），长按菜单不变',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.10',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】修复消息正文丢失：模型输出 {reply, patch} 结构时 reply 字段提取为正文（不再整块剥离只剩状态），含 \\n/转义还原',
+                    '【特别版】角色列表改书架式：长方形封面卡片（头像铺满+底部角色名），点击进编辑，长按弹菜单（开始聊天/AI 通读/导出/删除）',
+                    '【特别版】AI 通读入口移到角色列表顶部按钮行（auto_awesome 图标），点击后选择角色进入 AI 通读介绍',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.9',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】修复导入新角色卡后发消息报"未知错误"：tracker 声明强转崩溃（schemaVersion 为字符串、template 畸形、ST 正则数组字段等）全部改为安全读取+顶层兜底，任何卡结构都不再崩',
+                    '【特别版】导入角色卡同名改为覆盖：保留原 id 与会话关联，替换卡内容/头像/内嵌世界书（旧图清理，无新图保留旧头像）',
+                    '【特别版】压缩包/多选导入与文件夹导入统一：只收角色卡（json/png），配套世界书一律走角色卡内嵌 character_book 自动创建关联',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.8',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】状态跟踪（Tracker）协议体系：角色卡 data.extensions.tracker 声明 stateSchema/initialState/uiHints；模型只输出结构化 patch（JSON patch set/add 或 <STATE> 兜底），App 解析+校验（类型/clamp）+reducer 叠加后持久化，副作用块不入库不显示',
+                    '【特别版】下一轮自动把当前状态注入 prompt（【当前状态】自然文本段，按 schema 中文标签）；聊天页顶部原生状态栏实时显示（App 渲染，非模型 HTML），可折叠',
+                    '【特别版】协议与既有 setvar/getvar 变量持久化互通：同一会话变量表，状态栏、{{getvar}} 注入、正则脚本共用一套状态',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.7',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】ST 变量宏跨轮持久化：AI 回复中的 {{setvar::key::value}} 自动写入会话变量表（DB v7），下一轮 {{getvar::key}} 注入角色卡/世界书/预设时取真实值；状态栏数值跨轮更新生效，setvar 副作用文本不入库不显示',
+                    '【特别版】正则脚本系统：角色卡自带 ST extensions.regex_scripts 自动执行（AI 输出显示阶段，支持捕获组替换/删除/trim/禁用），状态栏兜底等正则原样可用；设置页新增总开关',
+                    '【特别版】HTML 面板完善：div/table/span/font/style 标签保留内容渲染，状态栏面板可直接展示（配合 {{getvar}} 动态数值）',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.6',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】快捷指令占位符体系：插入型/询问型在输入框以斜体彩色【快捷指令：名】占位显示，发送时才展开提示词给模型（界面/复制/预览均不暴露提示词原文）；编辑消息时可再插入快捷指令；编辑重发后消息仍显示占位形式',
+                    '【特别版】输入区 UI 重做（E 方案）：发送键内嵌输入框右下角圆形渐变（发送/停止切换、禁用点击穿透）；快捷指令入口改输入框上方左侧胶囊；工具按钮（用户设定/世界书/预设）统一圆角胶囊靠左一组，长名自动限字省略不超界；输入栏默认两行高度',
+                    '【特别版】版本号与功能对齐：1.4.0-special.6+61（覆盖安装必生效，请在关于页核对版本号）',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.5',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】群聊上下文上限修复：群聊会话未记录预设时继承全局预设，上下文用量不再回退模型默认 128K（与单聊 1M 一致）；新建群聊自动携带当前预设',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.4',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】上下文用量常驻显示：每个聊天输入框右上侧始终显示用量条（环形进度 + 已用/总量），打开会话即估算，发送后更新为接口精确值',
+                    '【特别版】正文支持角色状态栏 HTML：列表（ul/li）转 markdown、表格降级为 | 分隔文本、span/font/center 等剥标签保留内容、br 换行',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.3',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】DeepSeek 原生思考模式：设置新增档位（关闭/高/最高，默认最高 max），仅官方端点发送 thinking + reasoning_effort；原生思考走宽松校验，不再 10 次退回烧 token',
+                    '【特别版】思维链模板强化：明确第三方导演/编剧/审稿人视角，严禁角色第一人称替角色思考；开关语义理清为"严格校验/仅引导"',
+                    '【特别版】回底/到底稳定性重做：列表末尾真实底部锚点，打开会话与"到底"按钮统一 Scrollable.ensureVisible 对齐真实底部（不再误信 maxScrollExtent 假底部白空白）；浏览位置保存 wasAtBottom，上次在底部时重新可靠跳底',
+                    '【特别版】用户滚动位置仅在真实手势时保存（NotificationListener），自动跳底/布局校正不再污染；Markdown 图片固定宽度 + 加载期占位高度，抑制高度抖动',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.2',
+                  date: '2026-08-06',
+                  changes: [
+                    '【特别版】快捷指令新增"插入输入框"类型：点击插入光标处可多次累计；编辑询问型消息可直接改补充内容；菜单改三组网格卡片；类型选择即时高亮',
+                    '【特别版】群聊人设修复：历史消息带发言人前缀并转 user 角色（模型不再把他人发言当自己说的），每次请求注入当前发言者自己的角色卡',
+                    '【特别版】历史会话滚动位置：记住每个会话浏览位置，切换恢复；无记录时多帧校准可靠跳底；"到底"按钮循环校准一次到位（AI 输出中/完成后界面保持不动）',
+                    '【特别版】上下文用量口径理清：按最终发送的 prompt 统计（世界书按实际注入文本、未分类来源不静默丢失），接入接口真实 usage（流式 stream_options）展示校准',
+                    '【特别版】长期记忆提取修复：assistant 计数语义明确、合并所有记忆去重（手动添加记忆不再导致每次都提取）',
+                    '【特别版】DeepSeek 余额修复：host 精确匹配、金额字符串兼容、加载/不可用状态展示、配置变化自动重查',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.1',
+                  date: '2026-08-04',
+                  changes: [
+                    '【特别版】强制思维链：最高优先级 12 步模板（可多方案编辑），兼容 DeepSeek reasoning 思考（CoT 抑制模型不再误退），违规自动退回/摧毁重试',
+                    '【特别版】群聊：多角色创建、轮流回复、发言人标识',
+                    '【特别版】角色 AI 通读介绍：深度解读 + Markdown 渲染，可独立选择模型',
+                    '【特别版】快捷指令、文本样式预设、48 色调色板、键盘安全编辑面板、503 自动重试',
+                    '【特别版】GitHub 新版本自动检查提示',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.3.2',
+                  date: '2026-07-30',
+                  changes: ['为聊天消息列表添加渐变遮罩效果，提升视觉体验', '优化 ResolvedApiConfig 的请求体构建，支持合并自定义消息'],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.3.1',
+                  date: '2026-07-25',
+                  changes: ['修复上传和恢复错误时静默略过的问题', '优化备份和恢复功能，增加进度反馈和状态更新', '调整预设温度参数为可选，并更新相关处理逻辑', '角色编辑页支持创建并绑定世界书'],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // 开源许可
+          _SectionCard(
+            title: '开源许可',
+            subtitle: '第三方开源库',
+            child: Column(
+              children: [
+                _LicenseItem(
+                  name: 'Flutter',
+                  license: 'BSD-3-Clause',
+                  onTap: () =>
+                      _showLicenseDialog(context, 'Flutter', flutterLicense),
+                ),
+                const SizedBox(height: 8),
+                _LicenseItem(
+                  name: 'Dart',
+                  license: 'BSD-3-Clause',
+                  onTap: () => _showLicenseDialog(context, 'Dart', dartLicense),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // 联系方式
+          _SectionCard(
+            title: '联系方式',
+            subtitle: '反馈与支持',
+            child: Column(
+              children: [
+                _ContactItem(
+                  icon: Icons.code_rounded,
+                  label: 'GitHub',
+                  value: _githubUri.toString(),
+                  onTap: _openGitHub,
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // 版权信息
+          Center(
+            child: Text(
+              '© 2026 PocketInn Team. All rights reserved.',
+              style: TextStyle(
+                fontSize: 12,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  void _showLicenseDialog(BuildContext context, String name, String license) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('$name 许可证'),
+        content: SingleChildScrollView(
+          child: Text(
+            license,
+            style: const TextStyle(fontSize: 12, height: 1.5),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openGitHub() async {
+    var launched = false;
+
+    try {
+      launched = await launchUrl(
+        _githubUri,
+        mode: LaunchMode.externalApplication,
+      );
+    } on Object catch (error) {
+      debugPrint('about_page: launchUrl failed: $error');
+      launched = false;
+    }
+
+    if (!launched && mounted) {
+      handleAppException(
+        context,
+        toAppException(
+          StateError('launchUrl returned false'),
+          fallbackMessage: '无法打开 GitHub 链接',
+        ),
+      );
+    }
+  }
+}
+
+class _AppInfoCard extends StatelessWidget {
+  static const _appIconAsset = 'assets/PInn.png';
+
+  const _AppInfoCard({required this.colorScheme});
+
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            // 应用图标
+            DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(30),
+                boxShadow: [
+                  BoxShadow(
+                    color: colorScheme.shadow.withValues(alpha: 0.12),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(30),
+                child: Image.asset(
+                  _appIconAsset,
+                  width: 120,
+                  height: 120,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // 应用名称
+            const Text(
+              'LnnLore',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'PocketInn 是一款基于 Flutter 开发的类SillyTavern AI 聊天应用，支持多种 AI 模型接口配置，提供角色扮演、世界书、预设等核心功能，让您与 AI 角色进行沉浸式对话体验。',
+              style: TextStyle(
+                fontSize: 14,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({
+    required this.title,
+    required this.subtitle,
+    required this.child,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.4,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: TextStyle(fontSize: 14, color: colorScheme.onSurfaceVariant),
+        ),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+}
+
+class _UpdateLogItem extends StatelessWidget {
+  const _UpdateLogItem({
+    required this.version,
+    required this.date,
+    required this.changes,
+  });
+
+  final String version;
+  final String date;
+  final List<String> changes;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: colorScheme.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                version,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.primary,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              date,
+              style: TextStyle(
+                fontSize: 12,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ...changes.map(
+          (change) => Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.check_circle_outline,
+                  size: 16,
+                  color: colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    change,
+                    style: const TextStyle(fontSize: 13, height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 特别版：版本检查卡片（开关、发布仓库配置、手动检查、结果展示）。
+class _VersionCheckCard extends StatefulWidget {
+  const _VersionCheckCard({required this.colorScheme});
+
+  final ColorScheme colorScheme;
+
+  @override
+  State<_VersionCheckCard> createState() => _VersionCheckCardState();
+}
+
+class _VersionCheckCardState extends State<_VersionCheckCard> {
+  bool _enabled = true;
+  String _owner = VersionCheckService.defaultOwner;
+  String _repo = VersionCheckService.defaultRepo;
+  String? _lastCheckedText;
+  bool _checking = false;
+  String? _resultText;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final service = VersionCheckService.instance;
+    final enabled = await service.isEnabled();
+    final owner = await service.getOwner();
+    final repo = await service.getRepo();
+    final lastChecked = await service.getLastChecked();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _enabled = enabled;
+      _owner = owner;
+      _repo = repo;
+      _lastCheckedText = lastChecked == null
+          ? null
+          : '${lastChecked.year}-${lastChecked.month.toString().padLeft(2, '0')}-'
+                '${lastChecked.day.toString().padLeft(2, '0')} '
+                '${lastChecked.hour.toString().padLeft(2, '0')}:'
+                '${lastChecked.minute.toString().padLeft(2, '0')}';
+    });
+  }
+
+  Future<void> _check() async {
+    final service = VersionCheckService.instance;
+    setState(() {
+      _checking = true;
+      _resultText = null;
+    });
+    try {
+      final latestTag = await service.fetchLatestTag();
+      if (!mounted) {
+        return;
+      }
+      if (latestTag == null) {
+        setState(() {
+          _checking = false;
+          _resultText = '未获取到远程版本信息（网络问题或仓库无 release）';
+        });
+        return;
+      }
+      // 上游锚点比较：上游发布的新版本高于 fork 时的版本即提示
+      final hasUpdate = VersionCheckService.isUpstreamUpdateAvailable(
+        latestTag,
+      );
+      await _load(); // 刷新上次检查时间显示
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _checking = false;
+        if (!hasUpdate) {
+          _resultText = '上游暂无新版本（最新 $latestTag，特别版基于 '
+              '${VersionCheckService.baselineUpstreamVersion}）';
+        } else {
+          _resultText = '上游已发布新版本：$latestTag'
+              '（当前特别版基于 ${VersionCheckService.baselineUpstreamVersion}），'
+              '可前往 GitHub 查看更新说明并获取新版本';
+        }
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _checking = false;
+        _resultText = '检查失败：$error';
+      });
+    }
+  }
+
+  Future<void> _editConfig() async {
+    final nameController = TextEditingController(text: _owner);
+    final repoController = TextEditingController(text: _repo);
+    final service = VersionCheckService.instance;
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('发布仓库设置'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'GitHub 用户名（owner）',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: repoController,
+                decoration: const InputDecoration(
+                  labelText: '仓库名（repo）',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '新版本提示将查询 https://api.github.com/repos/{owner}/{repo}/releases/latest',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                nameController.dispose();
+                repoController.dispose();
+                Navigator.pop(context);
+              },
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                await service.setOwner(nameController.text.trim());
+                await service.setRepo(repoController.text.trim());
+                nameController.dispose();
+                repoController.dispose();
+                if (context.mounted) {
+                  Navigator.pop(context);
+                }
+                await _load();
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('启动时自动检查更新'),
+          subtitle: const Text('发现新版本时自动提示'),
+          value: _enabled,
+          onChanged: (value) async {
+            await VersionCheckService.instance.setEnabled(value);
+            if (!mounted) {
+              return;
+            }
+            setState(() {
+              _enabled = value;
+            });
+          },
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '发布仓库：$_owner/$_repo',
+          style: const TextStyle(fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        if (_lastCheckedText != null)
+          Text(
+            '上次检查：$_lastCheckedText',
+            style: const TextStyle(
+              fontSize: 12,
+              color: Color(0xFF8A8A8A),
+            ),
+          ),
+        if (_resultText != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _resultText!,
+            style: const TextStyle(fontSize: 13, height: 1.4),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            FilledButton.tonalIcon(
+              onPressed: _checking ? null : _check,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: Text(_checking ? '检查中…' : '检查更新'),
+            ),
+            const SizedBox(width: 8),
+            TextButton.icon(
+              onPressed: _editConfig,
+              icon: const Icon(Icons.settings_outlined, size: 18),
+              label: const Text('发布仓库设置'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _LicenseItem extends StatelessWidget {
+  const _LicenseItem({
+    required this.name,
+    required this.license,
+    required this.onTap,
+  });
+
+  final String name;
+  final String license;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(name, style: const TextStyle(fontSize: 14)),
+            Row(
+              children: [
+                Text(
+                  license,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  size: 18,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ContactItem extends StatelessWidget {
+  const _ContactItem({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isLink = onTap != null;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            Icon(icon, size: 20, color: colorScheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: isLink ? colorScheme.primary : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isLink) ...[
+              const SizedBox(width: 8),
+              Icon(
+                Icons.open_in_new_rounded,
+                size: 18,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+const String flutterLicense = '''
+Copyright 2014 The Flutter Authors. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following
+disclaimer in the documentation and/or other materials provided
+with the distribution.
+   * Neither the name of Google Inc. nor the names of its
+contributors may be used to endorse or promote products derived
+from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+''';
+
+const String dartLicense = '''
+Copyright 2012, the Dart project authors. All rights reserved.
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following
+disclaimer in the documentation and/or other materials provided
+with the distribution.
+   * Neither the name of Google Inc. nor the names of its
+contributors may be used to endorse or promote products derived
+from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+''';

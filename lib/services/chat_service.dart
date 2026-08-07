@@ -1,0 +1,1556 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:get_it/get_it.dart';
+
+import '../data/api_configs.dart';
+import '../data/app_settings.dart';
+import '../data/mock_user_settings.dart';
+import '../models/api_config.dart';
+import '../models/chat_message.dart';
+import '../models/chat_session.dart';
+import '../models/preset.dart';
+import '../models/processed_assistant_output.dart';
+import '../models/prompt_assembly.dart';
+import '../models/tracker_config.dart';
+import '../models/world_book.dart';
+import 'chat_character_resolver.dart';
+import 'chat_database_service.dart';
+import 'chat_display_sanitizer.dart';
+import 'chat_memory_service.dart';
+import 'chat_variable_service.dart';
+import 'tracker_runtime.dart';
+import 'deepseek_balance_service.dart';
+import 'i_openai_api_service.dart';
+import 'openai_compatible_api_service.dart';
+import 'preset_service.dart';
+import 'prompt_assembler.dart';
+import 'thinking_chain_guard.dart';
+import 'thinking_chain_preset_service.dart';
+import 'world_book_service.dart';
+
+class ChatSendResult {
+  const ChatSendResult({
+    required this.userNode,
+    required this.assistantNode,
+    required this.promptAssembly,
+    required this.completion,
+  });
+
+  /// 特别版：群聊全员回复模式下无用户消息，此字段为 null。
+  final ChatNode? userNode;
+  final ChatNode assistantNode;
+  final PromptAssemblyResult promptAssembly;
+  final ChatCompletionResult completion;
+}
+
+class ChatService {
+  ChatService._();
+
+  static final ChatService instance = ChatService._();
+
+  /// 特别版：强制思维链的最大自动重试次数（防止模型始终不合规时无限烧 token；
+  /// 超过后抛出带原因的异常，用户可点击发送重试）。
+  static const int maxThinkingChainRetryAttempts = 10;
+
+  /// 特别版：角色卡预览（诊断日志用，截断超长内容）。
+  static String _cardPreview(dynamic cardJson) {
+    final raw = cardJson.toString();
+    return raw.length > 300 ? raw.substring(0, 300) : raw;
+  }
+
+  Future<ChatSendResult> sendMessage({
+    required ChatSession session,
+    required ResolvedChatCharacter character,
+    required List<ChatMessage> chatMessages,
+    required String input,
+    String? selectedPresetId,
+    String? selectedUserSettingId,
+    Set<String> selectedWorldBookIds = const <String>{},
+    /// 特别版：群聊发言人名字映射（历史消息带发言人前缀）
+    Map<String, String> groupCharacterNames = const {},
+    bool useStreaming = false,
+    ChatCompletionCancelToken? cancellationToken,
+    void Function(ChatCompletionProgress progress)? onStreamProgress,
+    Future<ChatSession> Function()? persistSession,
+    void Function(int attempt, String reason)? onThinkingChainRetry,
+    /// 特别版：发送给模型的完整内容（快捷指令场景：界面显示 [input]，
+    /// 实际送模型的为 [modelText]）
+    String? modelText,
+    /// 特别版：群聊中本条回复的发言角色 id（assistant 消息归属）
+    String? assistantCharacterId,
+  }) async {
+    final normalizedInput = input.trim();
+    if (normalizedInput.isEmpty) {
+      throw const FormatException('消息不能为空');
+    }
+
+    final config = resolvedSelectedApi;
+    if (config == null) {
+      throw StateError('当前未选择 API 模型');
+    }
+    if (config.model.trim().isEmpty) {
+      throw const FormatException('当前选中的模型未填写 Model ID');
+    }
+
+    final preset = await _resolvePreset(
+      selectedPresetId ?? session.selectedPresetId,
+    );
+    final userSetting = _resolveUserSetting(
+      selectedUserSettingId ?? session.selectedUserSettingId,
+    );
+    final worldBooks = await _loadSelectedWorldBooks(
+      selectedWorldBookIds.isNotEmpty
+          ? selectedWorldBookIds
+          : session.selectedWorldBookIds.toSet(),
+    );
+
+    final memoryContext = await _buildMemoryContext(
+      sessionId: session.id,
+      chatMessages: chatMessages,
+    );
+
+    // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
+    final localVariables = await ChatDatabaseService.instance
+        .getSessionVariables(session.id);
+
+    final truncatedChatMessages = _truncateChatMessages(chatMessages);
+
+    final normalizedModelText = modelText?.trim().isNotEmpty == true
+        ? modelText!.trim()
+        : null;
+
+    // 特别版：群聊诊断日志——确认每次请求实际注入的发言者角色卡
+    // （speakerId/name 轮转时 cardHash 也应随之变化；若 hash 不变
+    // 说明角色卡注入链路有误）。仅群聊打印；release 构建自动忽略。
+    if (groupCharacterNames.isNotEmpty) {
+      debugPrint(
+        '[GROUP_SEND_SPEAKER_CARD] '
+        'speakerId=${character.id}, '
+        'speakerName=${character.name}, '
+        'cardHash=${character.cardJson.toString().hashCode}, '
+        'cardPreview=${_cardPreview(character.cardJson)}',
+      );
+    }
+
+    final promptAssembly = PromptAssembler.build(
+      PromptAssemblyContext(
+        characterName: character.name,
+        characterCardData: character.cardJson,
+        userName: userSetting.name,
+        userSettingPrompt: userSetting.prompt,
+        preset: preset,
+        selectedWorldBooks: worldBooks,
+        chatMessages: truncatedChatMessages,
+        currentInput: normalizedModelText ?? normalizedInput,
+        memoryContext: memoryContext,
+        groupCharacterNames: groupCharacterNames,
+        localVariables: localVariables,
+      ),
+    );
+    cancellationToken?.throwIfCancelled();
+
+    final activeSession = persistSession == null
+        ? session
+        : await persistSession();
+
+    final userNode = await ChatDatabaseService.instance.appendUserMessage(
+      sessionId: activeSession.id,
+      parentMessageId: activeSession.currentLeafMessageId,
+      text: normalizedInput,
+      modelText: normalizedModelText,
+    );
+
+    try {
+      final completion = await _createCompletion(
+        config,
+        promptAssembly: promptAssembly,
+        preset: preset,
+        useStreaming: useStreaming,
+        cancellationToken: cancellationToken,
+        onStreamProgress: onStreamProgress,
+        enforceThinkingChain: true,
+        onThinkingChainRetry: onThinkingChainRetry,
+        trackerStateText: _trackerStateText(
+          character.cardJson,
+          localVariables,
+        ),
+      );
+
+      final processed = await _processAssistantOutput(
+        activeSession.id,
+        completion.text,
+        cardJson: character.cardJson,
+      );
+      final assistantNode = await ChatDatabaseService.instance
+          .appendAssistantMessage(
+            sessionId: activeSession.id,
+            parentMessageId: userNode.id,
+            text: processed.displayText,
+            characterId: assistantCharacterId,
+            isPartial: completion.isPartial,
+            thinkingChain: completion.thinkingChain,
+          );
+
+      // 特别版：本条消息提取的状态面板按消息关联持久化
+      // （key 带消息 id，气泡内跟随消息渲染）
+      await _persistMessageStatusHtml(
+        activeSession.id,
+        assistantNode.id,
+        processed.specialStatusHtml,
+      );
+
+      // 特别版：消息动作按钮（模型 choices）挂到该消息下
+      if (processed.hasChoices) {
+        await ChatDatabaseService.instance.saveMessageChoices(
+          assistantNode.id,
+          processed.choices.map((c) => c.toJson()).toList(),
+        );
+      }
+
+      if (!completion.isPartial) {
+        unawaited(
+          _tryAutoExtractMemories(
+            sessionId: activeSession.id,
+            branchLeafId: assistantNode.id,
+            chatMessages: chatMessages,
+            userMessage: ChatMessage(
+              id: userNode.id,
+              text: userNode.text,
+              isMe: true,
+            ),
+            assistantMessage: ChatMessage(
+              id: assistantNode.id,
+              text: assistantNode.text,
+              isMe: false,
+            ),
+            characterName: character.name,
+            userName: userSetting.name,
+            currentInput: userNode.text,
+            cardData: _extractCardData(character.cardJson),
+          ),
+        );
+      }
+
+      return ChatSendResult(
+        userNode: userNode,
+        assistantNode: assistantNode,
+        promptAssembly: promptAssembly,
+        completion: completion,
+      );
+    } on ChatCompletionCancelledException {
+      rethrow;
+    } catch (error) {
+      throw StateError('发送聊天请求失败: $error');
+    }
+  }
+
+  /// 特别版：群聊"全员回复"模式——让 [character] 对当前对话的最后一条
+  /// 消息直接回复（不追加用户消息、不注入用户输入）。
+  /// 用于全员模式下成员按顺序自动连续发言。
+  Future<ChatSendResult> generateGroupReply({
+    required ChatSession session,
+    required ResolvedChatCharacter character,
+    required List<ChatMessage> chatMessages,
+    /// 特别版：显式指定本条回复的父消息 id（全员模式第一轮挂在
+    /// 上一位发言者的回复下）；缺省时取 [chatMessages] 最后一条。
+    String? parentMessageId,
+    String? selectedPresetId,
+    String? selectedUserSettingId,
+    Set<String> selectedWorldBookIds = const <String>{},
+    /// 特别版：群聊发言人名字映射（历史消息带发言人前缀）
+    Map<String, String> groupCharacterNames = const {},
+    bool useStreaming = false,
+    ChatCompletionCancelToken? cancellationToken,
+    void Function(ChatCompletionProgress progress)? onStreamProgress,
+    Future<ChatSession> Function()? persistSession,
+    void Function(int attempt, String reason)? onThinkingChainRetry,
+  }) async {
+    final config = resolvedSelectedApi;
+    if (config == null) {
+      throw StateError('当前未选择 API 模型');
+    }
+    if (config.model.trim().isEmpty) {
+      throw const FormatException('当前选中的模型未填写 Model ID');
+    }
+
+    final preset = await _resolvePreset(
+      selectedPresetId ?? session.selectedPresetId,
+    );
+    final userSetting = _resolveUserSetting(
+      selectedUserSettingId ?? session.selectedUserSettingId,
+    );
+    final worldBooks = await _loadSelectedWorldBooks(
+      selectedWorldBookIds.isNotEmpty
+          ? selectedWorldBookIds
+          : session.selectedWorldBookIds.toSet(),
+    );
+    final memoryContext = await _buildMemoryContext(
+      sessionId: session.id,
+      chatMessages: chatMessages,
+    );
+
+    // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
+    final localVariables = await ChatDatabaseService.instance
+        .getSessionVariables(session.id);
+
+    final truncatedChatMessages = _truncateChatMessages(chatMessages);
+
+    // 特别版：群聊诊断日志——全员模式每轮确认注入的发言者角色卡
+    debugPrint(
+      '[GROUP_GENERATE_CARD] '
+      'speakerId=${character.id}, '
+      'speakerName=${character.name}, '
+      'cardHash=${character.cardJson.toString().hashCode}, '
+      'cardPreview=${_cardPreview(character.cardJson)}',
+    );
+
+    final promptAssembly = PromptAssembler.build(
+      PromptAssemblyContext(
+        characterName: character.name,
+        characterCardData: character.cardJson,
+        userName: userSetting.name,
+        userSettingPrompt: userSetting.prompt,
+        preset: preset,
+        selectedWorldBooks: worldBooks,
+        chatMessages: truncatedChatMessages,
+        // 群聊轮次发言：无新用户输入，基于上一条消息回复
+        currentInput: '',
+        memoryContext: memoryContext,
+        groupCharacterNames: groupCharacterNames,
+        localVariables: localVariables,
+      ),
+    );
+    cancellationToken?.throwIfCancelled();
+
+    final activeSession = persistSession == null
+        ? session
+        : await persistSession();
+
+    try {
+      final completion = await _createCompletion(
+        config,
+        promptAssembly: promptAssembly,
+        preset: preset,
+        useStreaming: useStreaming,
+        cancellationToken: cancellationToken,
+        onStreamProgress: onStreamProgress,
+        enforceThinkingChain: true,
+        onThinkingChainRetry: onThinkingChainRetry,
+        trackerStateText: _trackerStateText(
+          character.cardJson,
+          localVariables,
+        ),
+      );
+
+      final processed = await _processAssistantOutput(
+        activeSession.id,
+        completion.text,
+        cardJson: character.cardJson,
+      );
+      final assistantNode = await ChatDatabaseService.instance
+          .appendAssistantMessage(
+            sessionId: activeSession.id,
+            // 全员模式链式发言：显式指定父消息，保证消息链完整
+            parentMessageId:
+                parentMessageId ??
+                (chatMessages.isNotEmpty
+                    ? chatMessages.last.id
+                    : null) ??
+                activeSession.currentLeafMessageId,
+            text: processed.displayText,
+            characterId: character.id,
+            isPartial: completion.isPartial,
+            thinkingChain: completion.thinkingChain,
+          );
+
+      // 特别版：本条消息提取的状态面板按消息关联持久化
+      await _persistMessageStatusHtml(
+        activeSession.id,
+        assistantNode.id,
+        processed.specialStatusHtml,
+      );
+
+      // 特别版：消息动作按钮（模型 choices）挂到该消息下
+      if (processed.hasChoices) {
+        await ChatDatabaseService.instance.saveMessageChoices(
+          assistantNode.id,
+          processed.choices.map((c) => c.toJson()).toList(),
+        );
+      }
+
+      return ChatSendResult(
+        userNode: null,
+        assistantNode: assistantNode,
+        promptAssembly: promptAssembly,
+        completion: completion,
+      );
+    } on ChatCompletionCancelledException {
+      rethrow;
+    } catch (error) {
+      throw StateError('群聊发言生成失败: $error');
+    }
+  }
+
+  Future<ChatSendResult> regenerateAssistantResponse({
+    required ChatSession session,
+    required ResolvedChatCharacter character,
+    required List<ChatMessage> historyBeforeUserMessage,
+    required ChatMessage userMessage,
+    String? selectedPresetId,
+    String? selectedUserSettingId,
+    Set<String> selectedWorldBookIds = const <String>{},
+    /// 特别版：群聊发言人名字映射（历史消息带发言人前缀）
+    Map<String, String> groupCharacterNames = const {},
+    bool useStreaming = false,
+    ChatCompletionCancelToken? cancellationToken,
+    void Function(ChatCompletionProgress progress)? onStreamProgress,
+    void Function(int attempt, String reason)? onThinkingChainRetry,
+  }) async {
+    if (userMessage.id == null) {
+      throw StateError('用户消息缺少 ID，无法重新生成');
+    }
+    if (!userMessage.isMe) {
+      throw StateError('只能基于用户消息重新生成回复');
+    }
+
+    final config = resolvedSelectedApi;
+    if (config == null) {
+      throw StateError('当前未选择 API 模型');
+    }
+    if (config.model.trim().isEmpty) {
+      throw const FormatException('当前选中的模型未填写 Model ID');
+    }
+
+    final preset = await _resolvePreset(
+      selectedPresetId ?? session.selectedPresetId,
+    );
+    final userSetting = _resolveUserSetting(
+      selectedUserSettingId ?? session.selectedUserSettingId,
+    );
+    final worldBooks = await _loadSelectedWorldBooks(
+      selectedWorldBookIds.isNotEmpty
+          ? selectedWorldBookIds
+          : session.selectedWorldBookIds.toSet(),
+    );
+
+    final memoryContext = await _buildMemoryContext(
+      sessionId: session.id,
+      chatMessages: historyBeforeUserMessage,
+    );
+
+    // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
+    final localVariables = await ChatDatabaseService.instance
+        .getSessionVariables(session.id);
+
+    final truncatedHistory = _truncateChatMessages(historyBeforeUserMessage);
+
+    final userTextForModel = userMessage.modelText?.isNotEmpty == true
+        ? userMessage.modelText!
+        : userMessage.text;
+
+    final promptAssembly = PromptAssembler.build(
+      PromptAssemblyContext(
+        characterName: character.name,
+        characterCardData: character.cardJson,
+        userName: userSetting.name,
+        userSettingPrompt: userSetting.prompt,
+        preset: preset,
+        selectedWorldBooks: worldBooks,
+        chatMessages: truncatedHistory,
+        currentInput: userTextForModel,
+        memoryContext: memoryContext,
+        groupCharacterNames: groupCharacterNames,
+        localVariables: localVariables,
+      ),
+    );
+    cancellationToken?.throwIfCancelled();
+
+    try {
+      final completion = await _createCompletion(
+        config,
+        promptAssembly: promptAssembly,
+        preset: preset,
+        useStreaming: useStreaming,
+        cancellationToken: cancellationToken,
+        onStreamProgress: onStreamProgress,
+        enforceThinkingChain: true,
+        onThinkingChainRetry: onThinkingChainRetry,
+        trackerStateText: _trackerStateText(
+          character.cardJson,
+          localVariables,
+        ),
+      );
+
+      final processed = await _processAssistantOutput(
+        session.id,
+        completion.text,
+        cardJson: character.cardJson,
+      );
+      final assistantNode = await ChatDatabaseService.instance
+          .appendAssistantMessage(
+            sessionId: session.id,
+            parentMessageId: userMessage.id,
+            text: processed.displayText,
+            isPartial: completion.isPartial,
+            thinkingChain: completion.thinkingChain,
+          );
+
+      // 特别版：本条消息提取的状态面板按消息关联持久化
+      await _persistMessageStatusHtml(
+        session.id,
+        assistantNode.id,
+        processed.specialStatusHtml,
+      );
+
+      // 特别版：消息动作按钮（模型 choices）挂到该消息下
+      if (processed.hasChoices) {
+        await ChatDatabaseService.instance.saveMessageChoices(
+          assistantNode.id,
+          processed.choices.map((c) => c.toJson()).toList(),
+        );
+      }
+
+      if (!completion.isPartial) {
+        unawaited(
+          _tryAutoExtractMemories(
+            sessionId: session.id,
+            branchLeafId: assistantNode.id,
+            chatMessages: historyBeforeUserMessage,
+            userMessage: ChatMessage(
+              id: userMessage.id,
+              text: userMessage.text,
+              isMe: true,
+            ),
+            assistantMessage: ChatMessage(
+              id: assistantNode.id,
+              text: assistantNode.text,
+              isMe: false,
+            ),
+            characterName: character.name,
+            userName: userSetting.name,
+            currentInput: userMessage.text,
+            cardData: _extractCardData(character.cardJson),
+          ),
+        );
+      }
+
+      return ChatSendResult(
+        userNode: ChatNode(
+          id: userMessage.id!,
+          sessionId: userMessage.sessionId ?? session.id,
+          parentId: userMessage.parentId,
+          role: ChatNodeRole.user,
+          text: userMessage.text,
+          createdAt: DateTime.now(),
+          siblingOrder: userMessage.index - 1,
+        ),
+        assistantNode: assistantNode,
+        promptAssembly: promptAssembly,
+        completion: completion,
+      );
+    } on ChatCompletionCancelledException {
+      rethrow;
+    } catch (error) {
+      throw StateError('重新生成聊天回复失败: $error');
+    }
+  }
+
+  /// 继续推进：基于最后一条角色消息生成新的角色消息。
+  /// 使用预设中的 `continue_nudge_prompt` 作为继续提示。
+  Future<ChatCompletionResult> continueAssistantResponse({
+    required ChatSession session,
+    required ResolvedChatCharacter character,
+    required List<ChatMessage> chatMessages,
+    String? selectedPresetId,
+    String? selectedUserSettingId,
+    Set<String> selectedWorldBookIds = const <String>{},
+    /// 特别版：群聊发言人名字映射（历史消息带发言人前缀）
+    Map<String, String> groupCharacterNames = const {},
+    bool useStreaming = false,
+    ChatCompletionCancelToken? cancellationToken,
+    void Function(ChatCompletionProgress progress)? onStreamProgress,
+    void Function(int attempt, String reason)? onThinkingChainRetry,
+  }) async {
+    if (chatMessages.isEmpty) {
+      throw StateError('没有可继续的消息');
+    }
+    final lastMessage = chatMessages.last;
+    if (lastMessage.isMe) {
+      throw StateError('只能继续角色消息');
+    }
+    final lastMessageId = lastMessage.id;
+    if (lastMessageId == null) {
+      throw StateError('角色消息缺少 ID，无法继续');
+    }
+
+    final config = resolvedSelectedApi;
+    if (config == null) {
+      throw StateError('当前未选择 API 模型');
+    }
+    if (config.model.trim().isEmpty) {
+      throw const FormatException('当前选中的模型未填写 Model ID');
+    }
+
+    final preset = await _resolvePreset(
+      selectedPresetId ?? session.selectedPresetId,
+    );
+    final userSetting = _resolveUserSetting(
+      selectedUserSettingId ?? session.selectedUserSettingId,
+    );
+    final worldBooks = await _loadSelectedWorldBooks(
+      selectedWorldBookIds.isNotEmpty
+          ? selectedWorldBookIds
+          : session.selectedWorldBookIds.toSet(),
+    );
+
+    final memoryContext = await _buildMemoryContext(
+      sessionId: session.id,
+      chatMessages: chatMessages,
+    );
+
+    // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
+    final localVariables = await ChatDatabaseService.instance
+        .getSessionVariables(session.id);
+
+    final truncatedChatMessages = _truncateChatMessages(chatMessages);
+
+    final promptAssembly = PromptAssembler.build(
+      PromptAssemblyContext(
+        characterName: character.name,
+        characterCardData: character.cardJson,
+        userName: userSetting.name,
+        userSettingPrompt: userSetting.prompt,
+        preset: preset,
+        selectedWorldBooks: worldBooks,
+        chatMessages: truncatedChatMessages,
+        currentInput: '',
+        memoryContext: memoryContext,
+        groupCharacterNames: groupCharacterNames,
+        localVariables: localVariables,
+      ),
+    );
+    cancellationToken?.throwIfCancelled();
+
+    final continueNudge = ChatVariableService.replacePlaceholders(
+      preset.extra['continue_nudge_prompt'] as String? ??
+          '[Continue your last message without repeating its original content.]',
+      characterName: character.name,
+      userName: userSetting.name,
+    ).trim();
+
+    final fixedRole = preset.extra['fixed_prompts_role'] as String? ?? 'system';
+
+    final requestMessages = <Map<String, dynamic>>[
+      for (final message in promptAssembly.messages)
+        {'role': message.role, 'content': message.content},
+      if (continueNudge.isNotEmpty)
+        {'role': fixedRole, 'content': continueNudge},
+    ];
+
+    try {
+      final completion = await _createCompletionFromMessages(
+        config,
+        messages: requestMessages,
+        preset: preset,
+        useStreaming: useStreaming,
+        cancellationToken: cancellationToken,
+        onStreamProgress: onStreamProgress,
+        enforceThinkingChain: true,
+        onThinkingChainRetry: onThinkingChainRetry,
+      );
+
+      final processed = await _processAssistantOutput(
+        session.id,
+        completion.text,
+        cardJson: character.cardJson,
+      );
+      final assistantNode = await ChatDatabaseService.instance
+          .appendAssistantMessage(
+        sessionId: session.id,
+        parentMessageId: lastMessageId,
+        text: processed.displayText,
+        isPartial: completion.isPartial,
+        thinkingChain: completion.thinkingChain,
+      );
+
+      // 特别版：本条消息提取的状态面板按消息关联持久化
+      await _persistMessageStatusHtml(
+        session.id,
+        assistantNode.id,
+        processed.specialStatusHtml,
+      );
+
+      // 特别版：消息动作按钮（模型 choices）挂到该消息下
+      if (processed.hasChoices) {
+        await ChatDatabaseService.instance.saveMessageChoices(
+          assistantNode.id,
+          processed.choices.map((c) => c.toJson()).toList(),
+        );
+      }
+
+      return completion;
+    } on ChatCompletionCancelledException {
+      rethrow;
+    } catch (error) {
+      throw StateError('继续推进失败: $error');
+    }
+  }
+
+  /// 助手帮答：基于当前对话生成一条用户回复，填入输入框。
+  /// 使用预设中的 `impersonation_prompt` 作为扮演提示。不写入数据库。
+  Future<String> generateUserReply({
+    required ChatSession session,
+    required ResolvedChatCharacter character,
+    required List<ChatMessage> chatMessages,
+    String? selectedPresetId,
+    String? selectedUserSettingId,
+    Set<String> selectedWorldBookIds = const <String>{},
+    /// 特别版：群聊发言人名字映射（历史消息带发言人前缀）
+    Map<String, String> groupCharacterNames = const {},
+    bool useStreaming = false,
+    ChatCompletionCancelToken? cancellationToken,
+    void Function(ChatCompletionProgress progress)? onStreamProgress,
+  }) async {
+    final config = resolvedSelectedApi;
+    if (config == null) {
+      throw StateError('当前未选择 API 模型');
+    }
+    if (config.model.trim().isEmpty) {
+      throw const FormatException('当前选中的模型未填写 Model ID');
+    }
+
+    final preset = await _resolvePreset(
+      selectedPresetId ?? session.selectedPresetId,
+    );
+    final userSetting = _resolveUserSetting(
+      selectedUserSettingId ?? session.selectedUserSettingId,
+    );
+    final worldBooks = await _loadSelectedWorldBooks(
+      selectedWorldBookIds.isNotEmpty
+          ? selectedWorldBookIds
+          : session.selectedWorldBookIds.toSet(),
+    );
+
+    final memoryContext = await _buildMemoryContext(
+      sessionId: session.id,
+      chatMessages: chatMessages,
+    );
+
+    // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
+    final localVariables = await ChatDatabaseService.instance
+        .getSessionVariables(session.id);
+
+    final truncatedChatMessages = _truncateChatMessages(chatMessages);
+
+    final promptAssembly = PromptAssembler.build(
+      PromptAssemblyContext(
+        characterName: character.name,
+        characterCardData: character.cardJson,
+        userName: userSetting.name,
+        userSettingPrompt: userSetting.prompt,
+        preset: preset,
+        selectedWorldBooks: worldBooks,
+        chatMessages: truncatedChatMessages,
+        currentInput: '',
+        memoryContext: memoryContext,
+        groupCharacterNames: groupCharacterNames,
+        localVariables: localVariables,
+      ),
+    );
+    cancellationToken?.throwIfCancelled();
+
+    final impersonationPrompt = ChatVariableService.replacePlaceholders(
+      preset.extra['impersonation_prompt'] as String? ??
+          '[Write your next reply from the point of view of {{user}}, using the chat history so far as a guideline for the writing style of {{user}}. Don\'t write as {{char}} or system. Don\'t describe actions of {{char}}.]',
+      characterName: character.name,
+      userName: userSetting.name,
+    ).trim();
+
+    final fixedRole = preset.extra['fixed_prompts_role'] as String? ?? 'system';
+
+    final requestMessages = <Map<String, dynamic>>[
+      for (final message in promptAssembly.messages)
+        {'role': message.role, 'content': message.content},
+      if (impersonationPrompt.isNotEmpty)
+        {'role': fixedRole, 'content': impersonationPrompt},
+    ];
+
+    try {
+      final completion = await _createCompletionFromMessages(
+        config,
+        messages: requestMessages,
+        preset: preset,
+        useStreaming: useStreaming,
+        cancellationToken: cancellationToken,
+        onStreamProgress: onStreamProgress,
+      );
+      return completion.text;
+    } on ChatCompletionCancelledException {
+      rethrow;
+    } catch (error) {
+      throw StateError('助手帮答失败: $error');
+    }
+  }
+
+  /// 特别版：解析 AI 回复中的 {{setvar::k::v}} 宏与 Tracker 状态 patch
+  /// （JSON patch / <STATE> 块），持久化到会话变量表；返回剥离了
+  /// setvar 宏与状态块的显示文本（副作用内容不入库、不显示）。
+  /// 重构版：返回 [ProcessedAssistantOutput]（正文 + patch + choices
+  /// + 特殊状态栏 HTML）。
+  Future<ProcessedAssistantOutput> _processAssistantOutput(
+    String sessionId,
+    String text, {
+    Map<String, dynamic>? cardJson,
+  }) async {
+    final calls = ChatVariableService.parseSetVarCalls(text);
+    final config = TrackerConfig.fromCardJson(cardJson);
+    final patch = TrackerRuntime.extractPatch(text);
+    final choices = TrackerRuntime.extractChoices(text);
+
+    // raw 与 reply 都扫：模型输出 {reply, patch} 时状态面板可能在
+    // reply 里，也可能在 reply 外（patch 块旁边）。
+    final rawExtracted = ChatDisplaySanitizer.extract(text);
+    final replyExtracted = patch.reply == null
+        ? null
+        : ChatDisplaySanitizer.extract(patch.reply!);
+
+    final specialStatusHtml = _nonEmpty(rawExtracted.specialStatusHtml) ??
+        _nonEmpty(replyExtracted?.specialStatusHtml);
+
+    var displayText =
+        replyExtracted != null && replyExtracted.displayText.trim().isNotEmpty
+            ? replyExtracted.displayText
+            : rawExtracted.displayText;
+
+    // extract 是破坏性拆解器。若误判导致正文为空，遍历候选源
+    // （协议 reply 优先、其次原文），跳过纯面板后用恢复函数找回正文；
+    // 纯面板（原文内容就是面板本身）保持空（面板 HTML 不应入正文）。
+    if (displayText.trim().isEmpty) {
+      final fallbackSources = <String>[
+        if (patch.reply != null && patch.reply!.trim().isNotEmpty) patch.reply!,
+        text,
+      ];
+
+      for (final source in fallbackSources) {
+        if (ChatDisplaySanitizer.isPurePanelText(source, specialStatusHtml)) {
+          continue;
+        }
+
+        final recovered =
+            ChatDisplaySanitizer.recoverDisplayTextAfterExtraction(
+          source,
+          specialStatusHtml: specialStatusHtml,
+        );
+
+        if (recovered.trim().isNotEmpty) {
+          displayText = recovered.trim();
+          break;
+        }
+      }
+    }
+
+    // 特别版：诊断日志（定位"状态栏不渲染"用）——装带日志的包后
+    // adb logcat 过滤 [状态栏] 即可看到每条回复的提取结果。
+    if (specialStatusHtml != null || calls.isNotEmpty || !patch.isEmpty) {
+      debugPrint(
+        '[状态栏] 原始前300字: ${text.length > 300 ? text.substring(0, 300) : text}',
+      );
+      debugPrint(
+        '[状态栏] 提取: 正文${displayText.length}字 | '
+        '面板${specialStatusHtml == null ? "无" : "${specialStatusHtml.length}字: ${specialStatusHtml.length > 100 ? specialStatusHtml.substring(0, 100) : specialStatusHtml}"}',
+      );
+    }
+
+    // 有副作用（setvar / patch / 状态栏）才读写变量表
+    if (calls.isNotEmpty || !patch.isEmpty || specialStatusHtml != null) {
+      // 读当前变量 → 应用 setvar 覆盖 + tracker reducer → 写回
+      final variables = await ChatDatabaseService.instance
+          .getSessionVariables(sessionId);
+      for (final (k, v) in calls) {
+        variables[k] = v;
+      }
+      if (config.isEnabled && !patch.isEmpty) {
+        // 先补 initialState（缺失字段），再应用 patch
+        final initialized = TrackerRuntime.initState(
+          config: config,
+          existing: variables,
+        );
+        final next = TrackerRuntime.reduce(
+          current: initialized,
+          patch: patch,
+          config: config,
+        );
+        variables
+          ..clear()
+          ..addAll(next.map((k, v) => MapEntry(k, '$v')));
+      }
+      // 特殊状态栏 HTML 一并持久化（TrackerStatusBar 优先渲染它）
+      if (specialStatusHtml != null) {
+        variables[kSpecialStatusHtmlKey] = specialStatusHtml;
+        // 模型输出的是面板文本（而非 patch 协议）时，从面板解析
+        // `label：值` 回写状态变量——保证状态栏随模型输出更新。
+        if (config.isEnabled) {
+          final parsed = TrackerRuntime.extractValuesFromPanelText(
+            specialStatusHtml,
+            config,
+          );
+          for (final e in parsed.entries) {
+            variables[e.key] = e.value;
+          }
+        }
+      }
+      await ChatDatabaseService.instance.upsertSessionVariables(
+        sessionId,
+        variables,
+      );
+    }
+    return ProcessedAssistantOutput(
+      displayText: displayText,
+      patch: patch,
+      choices: choices,
+      specialStatusHtml: specialStatusHtml,
+    );
+  }
+
+  /// 去空：null / 全空白返回 null。
+  static String? _nonEmpty(String? value) {
+    final text = value?.trim();
+    if (text == null || text.isEmpty) {
+      return null;
+    }
+    return text;
+  }
+
+  /// 消息级状态面板的变量表 key（按消息 id 关联，气泡内跟随渲染）。
+  static String messageStatusHtmlKey(String messageId) =>
+      '__msg_status_html__:$messageId';
+
+  /// 把本条消息提取的状态面板 HTML 持久化到会话变量表
+  /// （key 带消息 id，不覆盖全局最新面板 key）。
+  Future<void> _persistMessageStatusHtml(
+    String sessionId,
+    String messageId,
+    String? html,
+  ) async {
+    final value = html?.trim();
+    if (value == null || value.isEmpty) {
+      return;
+    }
+    await ChatDatabaseService.instance.upsertSessionVariables(sessionId, {
+      messageStatusHtmlKey(messageId): value,
+    });
+  }
+
+  /// 特别版：生成 Tracker 状态自然文本（无卡声明时返回 null）。
+  /// 追加"回复末尾必须按卡面板模板输出状态"的指令——模型照模板输出后，
+  /// App 从面板解析 label:值 回写变量表，状态更新才能闭环。
+  /// ⚠️ 变量表为空（新会话）时必须用 initialState 兜底继续注入——
+  ///    否则第一轮就没有输出指令，模型不知道要输出面板，旁白永不更新。
+  String? _trackerStateText(
+    Map<String, dynamic>? cardJson,
+    Map<String, String> variables,
+  ) {
+    final config = TrackerConfig.fromCardJson(cardJson);
+    if (!config.isEnabled) {
+      return null;
+    }
+    final state = variables.isEmpty
+        ? config.initialState.map((k, v) => MapEntry(k, '$v'))
+        : variables;
+    if (state.isEmpty) {
+      return null;
+    }
+    final text = TrackerRuntime.formatStateText(
+      state: Map<String, dynamic>.from(state),
+      config: config,
+    );
+    if (text.isEmpty) {
+      return null;
+    }
+    final panelTemplate =
+        TrackerRuntime.statusFallbackTemplate(cardJson) ?? _schemaTemplate(config);
+    if (panelTemplate == null) {
+      return text;
+    }
+    // 输出指令：要求模型按模板输出面板（{{getvar::key}} 提示用当前值替换）
+    return '$text\n\n'
+        '（请在本条回复末尾，用以下状态面板模板输出当前状态：\n'
+        '$panelTemplate\n'
+        '把其中的 {{getvar::xxx}} 替换为当前实际值后原样输出即可。'
+        '状态若因剧情发生改变，必须在面板中体现新数值。）';
+  }
+
+  /// 卡无 StatusFallback 模板时，用 schema 生成简易面板模板。
+  static String? _schemaTemplate(TrackerConfig config) {
+    if (config.displayOrder.isEmpty) {
+      return null;
+    }
+    final parts = <String>[];
+    for (final key in config.displayOrder) {
+      final schema = config.stateSchema[key];
+      if (schema == null || schema.hidden) {
+        continue;
+      }
+      final label = schema.label.isNotEmpty ? schema.label : key;
+      parts.add('$label：{{getvar::$key}}');
+    }
+    if (parts.isEmpty) {
+      return null;
+    }
+    return '<details><summary>📊 状态栏</summary>${parts.join(' · ')}</details>';
+  }
+
+  Future<Preset> _resolvePreset(String? presetId) async {
+    if (presetId != null && presetId.trim().isNotEmpty) {
+      final preset = await PresetService.instance.loadById(presetId);
+      if (preset != null) {
+        return preset;
+      }
+    }
+
+    final fallback = await PresetService.instance.loadDefaultPreset();
+    if (fallback != null) {
+      return fallback;
+    }
+    throw StateError('未找到可用预设');
+  }
+
+  UserSetting _resolveUserSetting(String? userSettingId) {
+    final settings = userSettingsNotifier.value;
+    if (settings.isEmpty) {
+      return defaultUserSettings.first;
+    }
+
+    if (userSettingId != null) {
+      for (final item in settings) {
+        if (item.id == userSettingId) {
+          return item;
+        }
+      }
+    }
+
+    return settings.first;
+  }
+
+  Future<List<WorldBook>> _loadSelectedWorldBooks(Set<String> ids) async {
+    if (ids.isEmpty) {
+      return const [];
+    }
+
+    final books = <WorldBook>[];
+    for (final id in ids) {
+      final book = await WorldBookService.instance.loadById(id);
+      if (book != null) {
+        books.add(book);
+      }
+    }
+    return books;
+  }
+
+  Future<ChatCompletionResult> _createCompletion(
+    ResolvedApiConfig config, {
+    required PromptAssemblyResult promptAssembly,
+    required Preset preset,
+    required bool useStreaming,
+    ChatCompletionCancelToken? cancellationToken,
+    void Function(ChatCompletionProgress progress)? onStreamProgress,
+    bool enforceThinkingChain = false,
+    void Function(int attempt, String reason)? onThinkingChainRetry,
+    /// 特别版：Tracker 状态自然文本（追加到 system 段）
+    String? trackerStateText,
+  }) async {
+    var requestMessages = [
+      for (final message in promptAssembly.messages)
+        {'role': message.role, 'content': message.content},
+    ];
+
+    // 特别版：状态注入——把当前状态追加到 system 段末尾
+    if (trackerStateText != null && trackerStateText.trim().isNotEmpty) {
+      final systemIdx = requestMessages.indexWhere(
+        (m) => m['role'] == 'system',
+      );
+      if (systemIdx >= 0) {
+        requestMessages[systemIdx] = {
+          ...requestMessages[systemIdx],
+          'content': '${requestMessages[systemIdx]['content']}\n\n$trackerStateText',
+        };
+      } else {
+        requestMessages.insert(
+          0,
+          {'role': 'system', 'content': trackerStateText},
+        );
+      }
+    }
+
+    return _createCompletionFromMessages(
+      config,
+      messages: requestMessages,
+      preset: preset,
+      useStreaming: useStreaming,
+      cancellationToken: cancellationToken,
+      onStreamProgress: onStreamProgress,
+      enforceThinkingChain: enforceThinkingChain,
+      onThinkingChainRetry: onThinkingChainRetry,
+    );
+  }
+
+  /// 在请求消息列表最前面注入【强制思维模式】模板（作为固定 system 指令），
+  /// 并在消息尾部追加轻量提醒。
+  ///
+  /// [template] 为当前选中的思维链约束方案模板（特别版可配置）。
+  /// 模板位于所有消息之前（先于角色卡/世界书/预设，保证最高优先级）；
+  /// 尾部提醒紧跟在最后一条消息之后，确保每次回复都再次被提示。
+  static List<Map<String, dynamic>> _injectThinkingChainTemplate(
+    List<Map<String, dynamic>> messages,
+    String template,
+  ) {
+    return [
+      {'role': 'system', 'content': template.trim()},
+      ...messages,
+      {
+        'role': 'system',
+        'content': ThinkingChainGuard.thinkingChainTailReminder,
+      },
+    ];
+  }
+
+  /// 以独立 system 消息注入逐级强化的强制指令（第 [attempt] 次重试）。
+  ///
+  /// 独立成一条短消息（紧跟模板之后），比追加到模板尾部更醒目，
+  /// 模型不易忽略。
+  static List<Map<String, dynamic>> _injectThinkingChainRetryInstruction(
+    List<Map<String, dynamic>> messages,
+    int attempt,
+    String reason,
+  ) {
+    final instruction = ThinkingChainGuard.buildRetryInstruction(
+      attempt,
+      reason,
+    );
+    return [
+      messages.first,
+      {'role': 'system', 'content': instruction},
+      ...messages.skip(1),
+    ];
+  }
+
+  /// 单次补全请求（不做思维链重试）。
+  ///
+  /// [enforceThinkingChain] 为 true 时，流式输出在累积到阈值（200~300 token）
+  /// 处检查是否以 `<think>` 开头，流结束/非流式完成后检查模板完整性，
+  /// 违规抛出 [ThinkingChainViolationException]。
+  Future<ChatCompletionResult> _createCompletionOnce(
+    ResolvedApiConfig config, {
+    required List<Map<String, dynamic>> messages,
+    required Preset preset,
+    required bool useStreaming,
+    ChatCompletionCancelToken? cancellationToken,
+    void Function(ChatCompletionProgress progress)? onStreamProgress,
+    bool enforceThinkingChain = false,
+  }) async {
+    final api = GetIt.instance<IOpenAiApiService>();
+    // 特别版：DeepSeek 官方端点判断（host 精确匹配）
+    final isDeepSeek = DeepSeekBalanceService.isDeepSeekEndpoint(config.baseUrl);
+    // 特别版：DeepSeek 原生 thinking 开启时用宽松校验（自由推理不承诺 12 步标题），
+    // 防止最多 10 次退回重试烧 token。
+    final deepSeekThinkingMode = appSettingsNotifier.value.deepSeekThinkingMode;
+    final nativeThinking =
+        isDeepSeek && deepSeekThinkingMode != DeepSeekThinkingMode.disabled;
+    if (!useStreaming) {
+      final completion = await api.createChatCompletion(
+        config,
+        messages: messages,
+        defaults: buildCompletionDefaults(
+          preset,
+          useStreaming: false,
+          isDeepSeek: isDeepSeek,
+          deepSeekThinkingMode: deepSeekThinkingMode,
+        ),
+        cancellationToken: cancellationToken,
+      );
+      if (enforceThinkingChain) {
+        final violation = nativeThinking
+            ? ThinkingChainGuard.validateCompleteLenient(
+                completion.text,
+                completion.thinkingChain ?? '',
+              )
+            : ThinkingChainGuard.validateCompleteAny(
+                completion.text,
+                completion.thinkingChain ?? '',
+              );
+        if (violation != null) {
+          throw ThinkingChainViolationException(violation);
+        }
+      }
+      return completion;
+    }
+
+    final textBuffer = StringBuffer();
+    final thinkingBuffer = StringBuffer();
+    var checkpointChecked = false;
+    String? violation;
+    // 特别版：流式最后 chunk 携带的真实用量（stream_options 开启时）
+    ChatCompletionUsage? streamUsage;
+    try {
+      await for (final progress
+          in api.createStreamingChatCompletion(
+            config,
+            messages: messages,
+            defaults: buildCompletionDefaults(
+              preset,
+              useStreaming: true,
+              isDeepSeek: isDeepSeek,
+              deepSeekThinkingMode: deepSeekThinkingMode,
+            ),
+            cancellationToken: cancellationToken,
+          )) {
+        if (progress.textDelta.isNotEmpty) {
+          textBuffer.write(progress.textDelta);
+        }
+        if (progress.thinkingDelta.isNotEmpty) {
+          thinkingBuffer.write(progress.thinkingDelta);
+        }
+        if (progress.usage != null && progress.usage!.totalTokens > 0) {
+          streamUsage = progress.usage;
+        }
+        onStreamProgress?.call(progress);
+
+        if (enforceThinkingChain && violation == null) {
+          final text = textBuffer.toString();
+          final thinking = thinkingBuffer.toString();
+          if (!checkpointChecked &&
+              (text.length + thinking.length) >=
+                  ThinkingChainGuard.thresholdToChars(
+                    ThinkingChainGuard.defaultCheckThresholdTokens,
+                  )) {
+            checkpointChecked = true;
+            violation = nativeThinking
+                ? ThinkingChainGuard.validateAtCheckpointLenient(thinking)
+                : ThinkingChainGuard.validateAtCheckpointAny(text, thinking);
+          }
+          if (violation == null && progress.done) {
+            violation = nativeThinking
+                ? ThinkingChainGuard.validateCompleteLenient(text, thinking)
+                : ThinkingChainGuard.validateCompleteAny(text, thinking);
+          }
+        }
+        if (violation != null) {
+          // 中断订阅：生成器 finally 会关闭底层连接；不调用 cancel token，
+          // 避免污染用户取消标志（重试循环仍需复用该 token 检查停止）。
+          break;
+        }
+      }
+    } on ChatCompletionCancelledException {
+      // 用户主动停止：保留已输出的部分内容（停止≠违规）。
+      // 部分思考链/正文仅作展示，不入库为完整回复；
+      // 什么都不输出时保持取消语义。
+      final partialText = textBuffer.toString().trim();
+      final partialThinking = thinkingBuffer.toString().trim();
+      if (partialText.isEmpty && partialThinking.isEmpty) {
+        rethrow;
+      }
+      return ChatCompletionResult(
+        text: partialText,
+        thinkingChain: partialThinking.isEmpty ? null : partialThinking,
+        isPartial: true,
+      );
+    }
+
+    if (violation == null && enforceThinkingChain) {
+      // 流自然结束（无 [DONE]）时补一次完整性校验。
+      violation = nativeThinking
+          ? ThinkingChainGuard.validateCompleteLenient(
+              textBuffer.toString(),
+              thinkingBuffer.toString(),
+            )
+          : ThinkingChainGuard.validateCompleteAny(
+              textBuffer.toString(),
+              thinkingBuffer.toString(),
+            );
+    }
+    if (violation != null) {
+      throw ThinkingChainViolationException(violation);
+    }
+
+    final text = textBuffer.toString().trim();
+    if (text.isEmpty) {
+      throw const FormatException('聊天接口返回了空回复');
+    }
+    final thinking = thinkingBuffer.toString().trim();
+    return ChatCompletionResult(
+      text: text,
+      thinkingChain: thinking.isEmpty ? null : thinking,
+      usageTokens: streamUsage,
+    );
+  }
+
+  /// 带强制思维链的补全请求：注入模板、校验，违规则自动重试直到成功或用户取消。
+  ///
+  /// 每次违规都会生成逐级强化的强制指令并重新发起请求（退回/摧毁循环）；
+  /// 用户在 UI 点击停止（cancel token）可随时终止循环。
+  Future<ChatCompletionResult> _createCompletionFromMessages(
+    ResolvedApiConfig config, {
+    required List<Map<String, dynamic>> messages,
+    required Preset preset,
+    required bool useStreaming,
+    ChatCompletionCancelToken? cancellationToken,
+    void Function(ChatCompletionProgress progress)? onStreamProgress,
+    bool enforceThinkingChain = false,
+    void Function(int attempt, String reason)? onThinkingChainRetry,
+  }) async {
+    if (!enforceThinkingChain) {
+      return _createCompletionOnce(
+        config,
+        messages: messages,
+        preset: preset,
+        useStreaming: useStreaming,
+        cancellationToken: cancellationToken,
+        onStreamProgress: onStreamProgress,
+      );
+    }
+    if (!appSettingsNotifier.value.enableThinkingChainGuard) {
+      // 设置中关闭了思维链约束：模板与尾部提醒仍注入（模型仍被要求
+      // 按 12 步模板思考），但不校验、不退回——AI 自由输出，用户可自行
+      // 查看思考链是否合规。
+      final activeTemplate = await ThinkingChainPresetService.instance
+          .resolveActiveTemplate();
+      final guidedMessages = _injectThinkingChainTemplate(
+        messages,
+        activeTemplate,
+      );
+      return _createCompletionOnce(
+        config,
+        messages: guidedMessages,
+        preset: preset,
+        useStreaming: useStreaming,
+        cancellationToken: cancellationToken,
+        onStreamProgress: onStreamProgress,
+      );
+    }
+
+    var attempt = 0;
+    var transientRetries = 0;
+    final activeTemplate = await ThinkingChainPresetService.instance
+        .resolveActiveTemplate();
+    var requestMessages = _injectThinkingChainTemplate(messages, activeTemplate);
+    while (true) {
+      cancellationToken?.throwIfCancelled();
+      try {
+        return await _createCompletionOnce(
+          config,
+          messages: requestMessages,
+          preset: preset,
+          useStreaming: useStreaming,
+          cancellationToken: cancellationToken,
+          onStreamProgress: onStreamProgress,
+          enforceThinkingChain: true,
+        );
+      } on ThinkingChainViolationException catch (error) {
+        attempt++;
+        // 用户点停止则终止重试循环（抛 ChatCompletionCancelledException）。
+        cancellationToken?.throwIfCancelled();
+        if (attempt > maxThinkingChainRetryAttempts) {
+          throw StateError(
+            '已连续 $attempt 次输出未按强制思维链格式（最后一次原因：${error.reason}）。'
+            '已停止自动重试，可点击发送重新尝试。',
+          );
+        }
+        onThinkingChainRetry?.call(
+          attempt,
+          '输出未按思维链格式（第 $attempt 次强制），已退回重写：${error.reason}',
+        );
+        requestMessages = _injectThinkingChainRetryInstruction(
+          requestMessages,
+          attempt,
+          error.reason,
+        );
+      } on HttpException catch (error) {
+        // 503/429/5xx 等瞬时服务端错误：退避重试，不消耗思维链重试次数。
+        cancellationToken?.throwIfCancelled();
+        if (!_isTransientHttpError(error.message) ||
+            transientRetries >= maxTransientRetryAttempts) {
+          rethrow;
+        }
+        transientRetries++;
+        onThinkingChainRetry?.call(
+          transientRetries,
+          '服务端繁忙（HTTP ${_extractHttpStatus(error.message)}），'
+          '${2 * transientRetries} 秒后自动重试',
+        );
+        await Future<void>.delayed(
+          Duration(seconds: 2 * transientRetries),
+        );
+        // 等待期间用户可能已点停止。
+        cancellationToken?.throwIfCancelled();
+      }
+    }
+  }
+
+  /// 特别版：瞬时服务端错误（503/429/5xx）的最大自动重试次数。
+  static const int maxTransientRetryAttempts = 3;
+
+  /// 判断是否为可重试的瞬时服务端错误。
+  static bool _isTransientHttpError(String message) {
+    return message.contains('HTTP 429') ||
+        message.contains('HTTP 5') ||
+        message.contains('HTTP 503') ||
+        message.contains('HTTP 504');
+  }
+
+  /// 从错误消息中提取 HTTP 状态码（如 '请求失败，HTTP 503: ...' → '503'）。
+  static String _extractHttpStatus(String message) {
+    final match = RegExp(r'HTTP (\d{3})').firstMatch(message);
+    return match?.group(1) ?? '未知';
+  }
+
+  List<ChatMessage> _truncateChatMessages(List<ChatMessage> messages) {
+    return ChatMemoryService.truncateToRecentRounds(
+      messages,
+      memoryExtractionNotifier.value.recentRounds,
+    );
+  }
+
+  Future<List<String>> _buildMemoryContext({
+    required String sessionId,
+    required List<ChatMessage> chatMessages,
+  }) async {
+    final memoryConfig = memoryExtractionNotifier.value;
+    if (!memoryConfig.enabled) return const [];
+
+    final pathIds = chatMessages
+        .where((m) => m.id != null)
+        .map((m) => m.id!)
+        .toList();
+    if (pathIds.isEmpty) return const [];
+
+    final memories = await ChatMemoryService.instance.getRecentBranchMemories(
+      sessionId: sessionId,
+      pathMessageIds: pathIds,
+      count: memoryConfig.recallCount,
+    );
+    return memories.map((m) => m.content).toList();
+  }
+
+  Future<void> _tryAutoExtractMemories({
+    required String sessionId,
+    required String branchLeafId,
+    required List<ChatMessage> chatMessages,
+    required ChatMessage userMessage,
+    required ChatMessage assistantMessage,
+    required String characterName,
+    required String userName,
+    required String currentInput,
+    required Map<String, String> cardData,
+  }) async {
+    final memoryConfig = memoryExtractionNotifier.value;
+    if (!memoryConfig.enabled) return;
+    if (memoryConfig.interval <= 0) return;
+
+    final allMessages = [...chatMessages, userMessage, assistantMessage]
+        // 部分输出（用户中途停止）不参与记忆提取
+        .where((m) => !m.isPartial)
+        .toList();
+    final pathIds = chatMessages
+        .where((m) => m.id != null)
+        .map((m) => m.id!)
+        .toList();
+    final newAssistantCount = await _countNewAssistantSinceLastExtraction(
+      sessionId: sessionId,
+      allMessages: allMessages,
+      pathIds: pathIds,
+    );
+    if (newAssistantCount < memoryConfig.interval) return;
+
+    await ChatMemoryService.instance.tryExtractAndSave(
+      sessionId: sessionId,
+      branchLeafId: branchLeafId,
+      messages: allMessages,
+      characterName: characterName,
+      userName: userName,
+      currentInput: currentInput,
+      cardData: cardData,
+    );
+  }
+
+  Future<int> _countNewAssistantSinceLastExtraction({
+    required String sessionId,
+    required List<ChatMessage> allMessages,
+    required List<String> pathIds,
+  }) async {
+    final memories = await ChatMemoryService.instance.getBranchMemories(
+      sessionId: sessionId,
+      pathMessageIds: pathIds,
+    );
+    // 明确"真实完成的助手回复"：非用户消息且已持久化（id 非空），
+    // 排除开场消息/未完成的占位消息等非回复内容。
+    final assistantReplies =
+        allMessages.where((m) => !m.isMe && m.id != null).toList();
+    if (memories.isEmpty) {
+      return assistantReplies.length;
+    }
+    // 合并**所有**记忆的 sourceMessageIds（不只最新一条）：
+    // 最新一条记忆可能是手动添加（sourceMessageIds 为空），
+    // 只看它会导致去重失效、每次都触发提取。
+    final processedIds = <String>{};
+    for (final memory in memories) {
+      processedIds.addAll(memory.sourceMessageIds);
+    }
+    return assistantReplies
+        .where((m) => !processedIds.contains(m.id))
+        .length;
+  }
+
+  /// 构建请求默认参数。
+  ///
+  /// DeepSeek 官方端点（[isDeepSeek]）走原生 thinking mode：
+  /// - [deepSeekThinkingMode] 非 disabled：传 `thinking: {type: enabled}` + `reasoning_effort`
+  /// - disabled：传 `thinking: {type: disabled}`
+  /// - 官方文档明确 thinking mode 下 temperature/top_p/presence/frequency 不生效，故不传
+  ///
+  /// 非 DeepSeek 端点保持原行为（preset.extra['enable_reasoning'] 兼容路径，
+  /// reasoning_effort 默认 high——medium 不在 DeepSeek 官方取值内）。
+  @visibleForTesting
+  Map<String, dynamic> buildCompletionDefaults(
+    Preset preset, {
+    required bool useStreaming,
+    // 特别版：DeepSeek 官方端点与思考档位
+    bool isDeepSeek = false,
+    DeepSeekThinkingMode deepSeekThinkingMode = DeepSeekThinkingMode.max,
+  }) {
+    // DeepSeek thinking mode：thinking/reasoning_effort 只对官方端点传；
+    // 官方文档明确 temperature/top_p 等在 thinking mode 下不生效，故不传。
+    if (isDeepSeek) {
+      final effort = deepSeekThinkingMode.reasoningEffort;
+      return {
+        'stream': useStreaming,
+        if (preset.openaiMaxTokens > 0) 'max_tokens': preset.openaiMaxTokens,
+        if (effort != null) ...{
+          'thinking': {'type': 'enabled'},
+          'reasoning_effort': effort,
+        } else
+          'thinking': {'type': 'disabled'},
+      };
+    }
+    return {
+      'stream': useStreaming,
+      if (preset.temperature != null) 'temperature': preset.temperature,
+      if (preset.openaiMaxTokens > 0) 'max_tokens': preset.openaiMaxTokens,
+      if (preset.extra['enable_reasoning'] == true) ...{
+        // 修正：非 DeepSeek 的 reasoning_effort 默认值 medium 不在
+        // DeepSeek 官方取值内；这里仅保留非 DeepSeek 兼容路径。
+        'reasoning_effort': preset.extra['reasoning_effort'] ?? 'high',
+      },
+    };
+  }
+
+  static Map<String, String> _extractCardData(Map<String, dynamic> cardJson) {
+    final data = (cardJson['data'] as Map<String, dynamic>?) ?? cardJson;
+    return {
+      'personality': (data['personality'] as String?) ?? '',
+      'description': (data['description'] as String?) ?? '',
+      'scenario': (data['scenario'] as String?) ?? '',
+    };
+  }
+}
