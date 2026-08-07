@@ -104,6 +104,16 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.59',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】滚动竞态修复（"流式输出有时跳底、有时不跳"）：统一取消入口 `_cancelAutomaticScrollWork`——生成开始（isSending 上升沿）/用户拖动/会话切换时一次性取消跳底、位置恢复与 pending restore 全部待执行任务',
+                    '【特别版】`_scheduleScrollRestore` 加统一令牌 + isSending/frozen/sessionId 检查（之前无令牌，等待布局期间开始生成/手动滚动后仍会突然 jumpTo）；跳底循环每次 jumpTo/ensureVisible 前再查令牌与生成状态',
+                    '【特别版】解冻后显式恢复像素位置（`_preserveOffsetAfterUnfreeze`）：解冻通知发生、新列表布局前保存 pixels，下一帧恢复——用户流式期间手动滚动到哪里，完成后停在哪里（不再依赖"尾部追加不会动"假设）',
+                    '【特别版】移除消息列表 `ValueKey(sessionId)`：草稿会话第一次发送创建正式会话并更换 ID，key 变化重建整棵列表、新 ID 被当成首次打开触发可靠跳底（"有时跳底"来源之一）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.58',
                   date: '2026-08-07',
                   changes: [

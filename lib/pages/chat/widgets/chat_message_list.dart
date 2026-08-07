@@ -119,7 +119,10 @@ class ChatMessageList extends StatelessWidget {
           ).createShader(bounds),
           blendMode: BlendMode.dstIn,
           child: ListView.builder(
-          key: ValueKey(sessionId),
+          // v59：移除 ValueKey(sessionId)——草稿会话第一次发送会创建
+          // 正式会话并更换 ID，key 变化会让 Flutter 重建整棵列表、随后
+          // 新 ID 被当成"首次打开"触发可靠跳底（"有时跳底"来源之一）。
+          // 消息气泡自带消息 ID key，列表滚动位置由外层手动管理。
           controller: scrollController,
           // 特别版：普通列表（非 reverse）——新消息追加到尾部不顶动
           // 视口；解冻合入后视口位置天然保持，与"界面不动"目标一致。

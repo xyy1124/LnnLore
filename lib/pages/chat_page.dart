@@ -192,6 +192,9 @@ class _ChatPageState extends State<ChatPage> {
   /// 自动滚动恢复/跳底的竞态令牌：新会话切换使旧恢复链立即失效。
   int _scrollRestoreToken = 0;
 
+  /// v59：解冻后像素恢复令牌（_preserveOffsetAfterUnfreeze 用）。
+  int _viewportRestoreToken = 0;
+
   /// 是否正在执行自动滚动恢复（此期间禁止把位置写回保存 Map）。
   bool _restoringScroll = false;
 
@@ -326,6 +329,10 @@ class _ChatPageState extends State<ChatPage> {
         final anchorContext = _bottomAnchorKey.currentContext;
         if (anchorContext == null) {
           // 锚点尚未构建：先粗滚到估算底部，下一轮等锚点出现
+          // v59：执行前再查令牌/生成状态（布局等待期间可能开始生成）
+          if (token != _scrollRestoreToken || _viewModel.isSending) {
+            return;
+          }
           _scrollController.jumpTo(
             _scrollController.position.maxScrollExtent.clamp(
               0.0,
@@ -335,6 +342,10 @@ class _ChatPageState extends State<ChatPage> {
           continue;
         }
 
+        // v59：ensureVisible 前再查令牌/生成状态
+        if (token != _scrollRestoreToken || _viewModel.isSending) {
+          return;
+        }
         await Scrollable.ensureVisible(
           anchorContext,
           alignment: 1.0,
@@ -376,15 +387,21 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 多帧等待布局稳定后滚动到目标（已保存的浏览位置恢复）。
   /// 仅会话切换时调用；当前会话内的任何数据变化都不走这里。
+  /// v59：加统一令牌 + isSending/frozen/sessionId 检查——之前无令牌，
+  /// 用户在等待期间开始生成/手动滚动时，它仍会在布局稳定后突然
+  /// jumpTo（"有时跳底、有时不跳"根因之一）。
   void _scheduleScrollRestore(String sessionId, double? target) {
+    final token = ++_scrollRestoreToken;
     var attempts = 0;
     double? lastMax;
     void attempt() {
-      if (!mounted) {
-        return;
-      }
-      if (_viewModel.activeSession?.id != sessionId) {
-        // 等待期间用户已切走：放弃本次恢复
+      if (!mounted ||
+          token != _scrollRestoreToken ||
+          _viewModel.isSending ||
+          _viewModel.isMessagesFrozen ||
+          _viewModel.activeSession?.id != sessionId) {
+        // 令牌失效（生成开始/用户拖动/会话切换）或等待期间开始生成
+        // 或冻结：放弃本次恢复
         return;
       }
       if (!_scrollController.hasClients) {
@@ -405,7 +422,12 @@ class _ChatPageState extends State<ChatPage> {
         WidgetsBinding.instance.addPostFrameCallback((_) => attempt());
         return;
       }
-      // 布局稳定（或重试上限兜底）：执行滚动
+      // 布局稳定（或重试上限兜底）：执行前再查一次令牌/生成状态
+      if (token != _scrollRestoreToken ||
+          _viewModel.isSending ||
+          _viewModel.isMessagesFrozen) {
+        return;
+      }
       _restoringScroll = true;
       _scrollController.jumpTo(target!.clamp(0.0, max));
       _restoringScroll = false;
@@ -420,6 +442,10 @@ class _ChatPageState extends State<ChatPage> {
       // 自动跳底/恢复产生的 offset 不污染保存位置
       return;
     }
+    // v59：用户开始拖动时统一取消所有待执行自动滚动任务——
+    // 之前只让 _scrollToBottomReliably 令牌失效，无令牌的
+    // _scheduleScrollRestore 仍会在布局稳定后突然 jumpTo。
+    _cancelAutomaticScrollWork();
     final id = _lastLoadedSessionId;
     if (id == null || !_scrollController.hasClients) {
       return;
@@ -431,6 +457,15 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  /// v59：统一取消所有待执行的自动滚动任务（跳底 / 位置恢复 /
+  /// pending restore）。生成开始、用户拖动、会话切换时调用。
+  void _cancelAutomaticScrollWork() {
+    _scrollRestoreToken++;
+    _viewportRestoreToken++;
+    _clearPendingRestore();
+    _restoringScroll = false;
+  }
+
   /// "到底"按钮统一走可靠跳底（bottom anchor 对齐真实底部）。
   void _onScrollToBottomPressed() {
     final id = _viewModel.activeSession?.id;
@@ -440,9 +475,54 @@ class _ChatPageState extends State<ChatPage> {
     unawaited(_scrollToBottomReliably(id, animated: true));
   }
 
+  /// v59：解冻后恢复原像素位置——在解冻通知发生、新列表尚未布局前
+  /// 取得当前 pixels，下一帧布局完成后 jumpTo 回去。用户在流式期间
+  /// 手动滚动到哪里，完成后就停在哪里（不再依赖"尾部追加不会动"）。
+  void _preserveOffsetAfterUnfreeze() {
+    if (!_scrollController.hasClients) {
+      return;
+    }
+    final sessionId = _viewModel.activeSession?.id;
+    final pixels = _scrollController.position.pixels;
+    final token = ++_viewportRestoreToken;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          token != _viewportRestoreToken ||
+          sessionId != _viewModel.activeSession?.id ||
+          !_scrollController.hasClients) {
+        return;
+      }
+      final position = _scrollController.position;
+      _restoringScroll = true;
+      position.jumpTo(
+        pixels.clamp(position.minScrollExtent, position.maxScrollExtent),
+      );
+      _restoringScroll = false;
+    });
+  }
+
+  bool _previouslySending = false;
+  bool _previouslyFrozen = false;
+
   void _onViewModelChanged() {
-    // 冻结方案 + 非 reverse 列表下，输出期间/完成合入均不动视口，
-    // 无需任何滚动干预。
+    // v59：统一滚动任务生命周期——
+    // ① 生成开始（isSending 上升沿）：取消所有待执行滚动任务，防止
+    //    遗留的跳底/位置恢复在生成期间落下 jumpTo（"有时跳底"根因）；
+    // ② 解冻（frozen 下降沿）：显式恢复解冻前像素位置。
+    final sending = _viewModel.isSending;
+    final frozen = _viewModel.isMessagesFrozen;
+
+    if (!_previouslySending && sending) {
+      _cancelAutomaticScrollWork();
+    }
+
+    if (_previouslyFrozen && !frozen) {
+      _preserveOffsetAfterUnfreeze();
+    }
+
+    _previouslySending = sending;
+    _previouslyFrozen = frozen;
   }
 
   void _dismissInputKeyboard() {
@@ -1259,12 +1339,11 @@ class _ChatPageState extends State<ChatPage> {
                               final isUserInertia =
                                   notification is UserScrollNotification;
                               if (isUserDrag) {
-                                // 用户开始拖动：中断进行中的恢复链，
-                                // 避免 ensureVisible 每帧覆盖用户操作；
-                                // 同步复位 _restoringScroll（旧链 finally 的
-                                // token 已失效不会复位，防止位置保存永久失效）
-                                _scrollRestoreToken++;
-                                _restoringScroll = false;
+                                // 用户开始拖动：统一取消所有待执行自动
+                                // 滚动任务（v59——之前只失效跳底令牌，
+                                // 无令牌的 _scheduleScrollRestore 仍会
+                                // 在布局稳定后突然 jumpTo）
+                                _cancelAutomaticScrollWork();
                               }
                               if (isUserDrag || isUserInertia) {
                                 _onUserScroll();
