@@ -16,6 +16,9 @@ final RegExp _markPattern = RegExp(
   '$kQuickCommandMarkStart([\\s\\S]*?)$kQuickCommandMarkEnd',
 );
 
+/// 公开正则：占位标记（v53——输入控制器删除拦截需要）。
+final RegExp kQuickCommandMarkPattern = _markPattern;
+
 /// 包裹指令名为占位标记。
 String wrapQuickCommandMark(String name) =>
     '$kQuickCommandMarkStart$name$kQuickCommandMarkEnd';

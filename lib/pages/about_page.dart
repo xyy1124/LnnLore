@@ -81,6 +81,15 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.53',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】插入型快捷指令占位标记一键删除：Backspace/Delete 删到标记（`\uE000指令名\uE001`）任意一个字符时一次性删除整个标记——之前按一次只删一个码元，留下半截标记（渲染异常），还要删很多下才能删完（用户反馈）',
+                    '【特别版】其余 6 张角色卡批量升级阶段描述系统（presentation）：夜无央/洗脑女仙/芭蕾三姐妹/苏蕴泠/蜜欧拉/假小子青梅全部字段声明 ranges/states 并接入 `{{gettitle}}`/`{{gettext}}`/`{{getcolor}}` 模板变量（母猪教 v52 已升级）——7 张卡全部支持"数值跨段自动切换阶段标题与长描述"',
+                    '【特别版】角色卡生成技能（character-card-creator）强制要求升级：stateSchema 每个字段必须声明 presentation（number 字段 ranges≥3 段、string 字段 states≥2 枚举）、面板模板必须含阶段描述行、verify 检查扩到 8 项——后续新生成的卡自动带阶段描述系统',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.52',
                   date: '2026-08-07',
                   changes: [
