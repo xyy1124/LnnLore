@@ -111,9 +111,17 @@ class ChatService {
       chatMessages: chatMessages,
     );
 
-    // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
+    // 特别版：先建立正式会话（草稿 → 真实）再读写变量——否则旁白/
+    // 变量会写进草稿 session.id，而 persistSession 创建的是全新 id 的
+    // 正式会话，第一轮状态更新会全部丢失（"数值不更新"根因之一）。
+    final activeSession = persistSession == null
+        ? session
+        : await persistSession();
+
+    // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）——从正式会话
+    // id 读取，避免草稿/正式 id 不一致导致变量表错位。
     var localVariables = await ChatDatabaseService.instance
-        .getSessionVariables(session.id);
+        .getSessionVariables(activeSession.id);
 
     final truncatedChatMessages = _truncateChatMessages(chatMessages);
 
@@ -164,7 +172,7 @@ class ChatService {
           }
         }
         await ChatDatabaseService.instance.upsertSessionVariables(
-          session.id,
+          activeSession.id,
           narrationVariables,
         );
         localVariables = narrationVariables;
@@ -205,10 +213,6 @@ class ChatService {
       ),
     );
     cancellationToken?.throwIfCancelled();
-
-    final activeSession = persistSession == null
-        ? session
-        : await persistSession();
 
     final userNode = await ChatDatabaseService.instance.appendUserMessage(
       sessionId: activeSession.id,

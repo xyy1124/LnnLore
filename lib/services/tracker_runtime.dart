@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:pocket_inn/models/tracker_config.dart';
 
+import 'character_card_extensions_reader.dart';
+
 /// 特别版：状态跟踪（Tracker）运行时——LLM 输出解析 + reducer。
 ///
 /// 模型只输出结构化 patch（不直接产 HTML）：
@@ -314,9 +316,6 @@ class TrackerRuntime {
     required Map<String, String> variables,
   }) {
     final config = TrackerConfig.fromCardJson(cardJson);
-    if (!config.isEnabled) {
-      return null;
-    }
     String? valueOf(String key) {
       final v = variables[key];
       if (v != null && v.isNotEmpty) {
@@ -328,6 +327,9 @@ class TrackerRuntime {
 
     // ① 卡 StatusFallback 模板（卡内定义的状态栏样子）。getvar 检测
     // 大小写不敏感（与解析正则一致，模板写 {{GETVAR::k}} 也能命中）。
+    // 注意：模板渲染不依赖 tracker 是否解析成功——即使 tracker 声明
+    // 缺失/畸形，只要卡有 StatusFallback 模板也按模板渲染（避免所有
+    // 卡静默降级成同一个内置面板"每张卡样式都一样"）。
     final template = statusFallbackTemplate(cardJson);
     if (template != null &&
         RegExp(r'getvar', caseSensitive: false).hasMatch(template)) {
@@ -350,6 +352,11 @@ class TrackerRuntime {
             'border:1px solid rgba(120,80,220,0.25);'
             'font-size:12px;">$rendered</div>';
       }
+    }
+
+    // 卡未启用（无 tracker 声明）且无模板 → 无状态面板
+    if (!config.isEnabled) {
+      return null;
     }
 
     // ② 内置深色卡片（卡无模板/无 getvar 时兜底）
@@ -404,28 +411,37 @@ class TrackerRuntime {
 
   /// 从卡 `data.extensions.regex_scripts` 取 StatusFallback 的 replaceString
   /// 模板（各卡"状态栏样子"定义；含 `{{getvar::key}}` 占位）。
+  ///
+  /// 查找放宽（兼容真实卡数据变体）：
+  /// - 统一读取器兼容运行时 map 类型（Map<dynamic, dynamic> 等）；
+  /// - 脚本名大小写不敏感、允许首尾空格，兼容 `script_name`/`name` 键名；
+  /// - 替换文本取 `replaceString`/`replace_string` 任一键。
   static String? statusFallbackTemplate(Map<String, dynamic>? cardJson) {
-    if (cardJson == null) {
+    final rawScripts = CharacterCardExtensionsReader.regexScripts(cardJson);
+    if (rawScripts == null) {
       return null;
     }
-    final data = cardJson['data'];
-    if (data is! Map) {
-      return null;
-    }
-    final extensions = data['extensions'];
-    if (extensions is! Map) {
-      return null;
-    }
-    final scripts = extensions['regex_scripts'];
-    if (scripts is! List) {
-      return null;
-    }
-    for (final s in scripts) {
-      if (s is Map && s['scriptName'] == 'StatusFallback') {
-        final r = s['replaceString'];
-        if (r is String && r.isNotEmpty) {
-          return r;
-        }
+    for (final value in rawScripts) {
+      final script = CharacterCardExtensionsReader.asMap(value);
+      if (script == null) {
+        continue;
+      }
+      final name = (script['scriptName'] ??
+              script['script_name'] ??
+              script['name'] ??
+              '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (name != 'statusfallback') {
+        continue;
+      }
+      final replacement = (script['replaceString'] ??
+              script['replace_string'] ??
+              '')
+          .toString();
+      if (replacement.trim().isNotEmpty) {
+        return replacement;
       }
     }
     return null;

@@ -81,6 +81,17 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.46',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】统一角色卡扩展读取器（CharacterCardExtensionsReader）：TrackerConfig / StatusFallback 模板 / 正则脚本全部改用统一读取——兼容真实手机导入链路的运行时 map 类型（Map<dynamic,dynamic>、顶层已展开 data 等），不再因类型检查过严导致某张卡静默降级为统一内置面板（"每张卡样式都一样"根因修复）',
+                    '【特别版】StatusFallback 查找放宽：脚本名大小写不敏感、容忍首尾空格、兼容 script_name/name 键名与 replace_string 字段',
+                    '【特别版】模板渲染不依赖 tracker 是否启用：只要卡有 StatusFallback 模板就按模板渲染（即使 tracker 声明缺失/畸形），避免所有卡退化成同一个内置面板；旁白解析随 TrackerConfig 放宽同步恢复',
+                    '【特别版】修复草稿会话状态丢失：发送时先建立正式会话（persistSession 提前），旁白/变量写入正式会话 id（原逻辑写入草稿 id，第一轮"（烙印值+10）"等状态更新会全部丢失）',
+                    '【特别版】变量刷新显式等待：会话加载/发送/重生成/继续/群聊后 await 变量表刷新（原 unawaited 可能让状态栏显示旧值直到下一次 notify）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.45',
                   date: '2026-08-07',
                   changes: [

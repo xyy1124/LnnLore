@@ -1,32 +1,27 @@
 import 'package:pocket_inn/models/regex_script.dart';
 
+import 'character_card_extensions_reader.dart';
+
 /// 特别版：正则脚本执行服务（ST extensions.regex_scripts 对齐）。
 class RegexScriptService {
   RegexScriptService._();
 
   /// 从角色卡 cardJson 读取 ST 正则脚本列表。
   /// ST 卡结构：data.extensions.regex_scripts（数组）。
+  /// 统一读取器兼容真实手机导入链路的运行时 map 类型
+  /// （Map<dynamic, dynamic> / 顶层已展开 data 等），避免某张卡
+  /// 因类型检查过严而静默丢失脚本。
   static List<RegexScript> scriptsFromCharacterCard(
     Map<String, dynamic>? cardJson,
   ) {
-    if (cardJson == null) {
-      return const [];
-    }
-    final data = cardJson['data'];
-    if (data is! Map<String, dynamic>) {
-      return const [];
-    }
-    final extensions = data['extensions'];
-    if (extensions is! Map<String, dynamic>) {
-      return const [];
-    }
-    final raw = extensions['regex_scripts'];
-    if (raw is! List) {
+    final raw = CharacterCardExtensionsReader.regexScripts(cardJson);
+    if (raw == null) {
       return const [];
     }
     return [
       for (final item in raw)
-        if (item is Map<String, dynamic>) RegexScript.fromJson(item),
+        if (CharacterCardExtensionsReader.asMap(item) != null)
+          RegexScript.fromJson(CharacterCardExtensionsReader.asMap(item)!),
     ];
   }
 

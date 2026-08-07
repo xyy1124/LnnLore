@@ -851,8 +851,11 @@ class ChatViewModel extends ChangeNotifier {
     _activeSession = bundle.session;
     _activeCharacter = resolvedCharacter;
     _messages = bundle.activeMessages;
-    // 特别版：会话加载即刷新变量缓存（消息/状态栏 getvar 显示解析用）
-    unawaited(_refreshSessionVariables(bundle.session.id));
+    // 特别版：会话加载即刷新变量缓存（消息/状态栏 getvar 显示解析用）。
+    // v46：显式等待完成——发送/重生成/继续/群聊后的 _loadSession 也走
+    // 这里，若 unawaited 则 UI 可能在变量刷新完成前渲染（状态栏显示
+    // 旧值直到下一次 notify）。await 保证气泡拿到的是数据库最终值。
+    await _refreshSessionVariables(bundle.session.id);
     // 特别版：会话切换/加载时清空上一次的接口真实用量
     _lastRealUsage = null;
     // 会话切换/加载：解除列表冻结（回到真实数据）。

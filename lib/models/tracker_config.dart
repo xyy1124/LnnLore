@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../services/character_card_extensions_reader.dart';
+
 /// 特别版：角色卡状态跟踪（Tracker）协议——卡声明部分。
 ///
 /// 读取角色卡 `data.extensions.tracker`（Character Cards V2 扩展数据）：
@@ -109,25 +111,21 @@ class TrackerConfig {
     if (cardJson == null) {
       return const TrackerConfig();
     }
-    final data = cardJson['data'];
-    if (data is! Map<String, dynamic>) {
-      return const TrackerConfig();
-    }
-    final extensions = data['extensions'];
-    if (extensions is! Map<String, dynamic>) {
-      return const TrackerConfig();
-    }
-    final tracker = extensions['tracker'];
-    if (tracker is! Map<String, dynamic>) {
+    // 统一读取器：兼容真实手机导入链路的运行时 map 类型
+    // （Map<dynamic, dynamic> / 顶层已展开 data 等），避免某张卡
+    // 因类型检查过严而静默降级为禁用配置（"所有卡样式都一样"）。
+    final tracker = CharacterCardExtensionsReader.tracker(cardJson);
+    if (tracker == null) {
       return const TrackerConfig();
     }
 
-    final rawSchema = tracker['stateSchema'];
+    final rawSchema = CharacterCardExtensionsReader.asMap(tracker['stateSchema']);
     final schema = <String, TrackerFieldSchema>{};
-    if (rawSchema is Map<String, dynamic>) {
+    if (rawSchema != null) {
       rawSchema.forEach((key, value) {
-        if (value is Map<String, dynamic>) {
-          schema[key] = TrackerFieldSchema.fromJson(value);
+        final field = CharacterCardExtensionsReader.asMap(value);
+        if (field != null) {
+          schema[key] = TrackerFieldSchema.fromJson(field);
         } else if (value is String) {
           // 简写：{"energy": "number"} 直接给类型
           schema[key] = TrackerFieldSchema(type: value);
@@ -135,9 +133,11 @@ class TrackerConfig {
       });
     }
 
-    final rawInitial = tracker['initialState'];
+    final rawInitial = CharacterCardExtensionsReader.asMap(
+      tracker['initialState'],
+    );
     final initialState = <String, dynamic>{};
-    if (rawInitial is Map<String, dynamic>) {
+    if (rawInitial != null) {
       initialState.addAll(rawInitial);
     }
 
@@ -145,18 +145,22 @@ class TrackerConfig {
     final actions = <TrackerAction>[];
     if (rawActions is List) {
       for (final item in rawActions) {
-        if (item is Map<String, dynamic>) {
-          final action = TrackerAction.fromJson(item);
-          if (action.id.isNotEmpty) {
-            actions.add(action);
-          }
+        final actionMap = CharacterCardExtensionsReader.asMap(item);
+        if (actionMap == null) {
+          continue;
+        }
+        final action = TrackerAction.fromJson(actionMap);
+        if (action.id.isNotEmpty) {
+          actions.add(action);
         }
       }
     }
 
-    final rawUiHints = tracker['uiHints'];
+    final rawUiHints = CharacterCardExtensionsReader.asMap(
+      tracker['uiHints'],
+    );
     final uiOrder = <String>[];
-    if (rawUiHints is Map<String, dynamic>) {
+    if (rawUiHints != null) {
       final order = rawUiHints['order'];
       if (order is List) {
         for (final key in order) {
