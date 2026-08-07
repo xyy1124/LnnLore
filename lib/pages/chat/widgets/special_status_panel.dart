@@ -83,50 +83,49 @@ class _SpecialStatusPanelState extends State<SpecialStatusPanel> {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-      // v50：外层容器兜底色/边框——卡 HTML 根节点的 background 若被
-      // 渲染器忽略（linear-gradient 等），面板仍保留统一的深色底；
-      // 卡内部根节点若自带 background-color 会覆盖内层区域（优先显示
-      // 每张卡自己的配色）。收起时标题栏也有底色与边框。
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFF17131F),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.08),
-          ),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        clipBehavior: Clip.antiAlias,
+      // v58：外层恢复**透明**——Safe HTML 模式下面板外观由角色卡
+      // HTML 自己控制（底色/边框/圆角），App 不再套统一深色外框
+      // （v50 的兜底外框造成"双层卡片"，还裁剪卡的圆角/外边距）。
+      // 标题栏单独带轻底色，由 App 控制外观。
+      child: Material(
+        color: Colors.transparent,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (hasTitle)
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: _toggleExpanded,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          title!,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainer.withValues(alpha: 0.72),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: _toggleExpanded,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title!,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
                           ),
                         ),
-                      ),
-                      Icon(
-                        _expanded
-                            ? Icons.keyboard_arrow_up
-                            : Icons.keyboard_arrow_down,
-                        size: 20,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ],
+                        Icon(
+                          _expanded
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
+                          size: 20,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),

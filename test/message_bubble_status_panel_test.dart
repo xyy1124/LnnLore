@@ -249,4 +249,122 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('v58: 折叠偏好三态——defaultExpanded=true 但用户保存 0 时保持收起', (tester) async {
+    final card = character(
+      id: 'A',
+      name: '角色A',
+      cardJson: {
+        'data': {
+          'name': '角色A',
+          'post_history_instructions':
+              '<!--panel-->\n<div>烙印值：{{getvar::yw_brand}}/100</div>\n<!--/panel-->',
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {
+                  'type': 'number',
+                  'label': '烙印值',
+                  'min': 0,
+                  'max': 100,
+                },
+              },
+              'initialState': {'yw_brand': 0},
+              'defaultExpanded': true,
+            },
+          },
+        },
+      },
+    );
+    await tester.pumpWidget(
+      buildBubble(
+        message: ChatMessage(id: 'm1', text: '回复', isMe: false),
+        character: card,
+        // 用户手动收起偏好 '0'——即使卡声明 defaultExpanded=true
+        sessionVariables: {'__tracker_expanded__:A': '0'},
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 收起：正文不可见，标题栏兜底可见
+    expect(
+      find.textContaining('烙印值：0/100', findRichText: true),
+      findsNothing,
+    );
+    // 点击展开后可见
+    await tester.tap(find.text('状态面板'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('烙印值：0/100', findRichText: true),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('v58: 折叠偏好三态——偏好 1 时展开（无视 defaultExpanded=false）', (tester) async {
+    final card = character(
+      id: 'A',
+      name: '角色A',
+      cardJson: {
+        'data': {
+          'name': '角色A',
+          'post_history_instructions':
+              '<!--panel-->\n<div>烙印值：{{getvar::yw_brand}}/100</div>\n<!--/panel-->',
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {
+                  'type': 'number',
+                  'label': '烙印值',
+                  'min': 0,
+                  'max': 100,
+                },
+              },
+              'initialState': {'yw_brand': 0},
+            },
+          },
+        },
+      },
+    );
+    await tester.pumpWidget(
+      buildBubble(
+        message: ChatMessage(id: 'm1', text: '回复', isMe: false),
+        character: card,
+        sessionVariables: {'__tracker_expanded__:A': '1'},
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('烙印值：0/100', findRichText: true),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('v58: Safe HTML 面板不再套统一深色外框（外层透明）', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SpecialStatusPanel(
+            title: '测试面板',
+            html: '<div style="background-color:#171020;border:2px solid #8e44ad;">'
+                '烙印值：30/100</div>',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 无 v50 的统一深色外框 Container（0xFF17131F）
+    expect(
+      find.byWidgetPredicate(
+        (w) =>
+            w is Container &&
+            w.decoration is BoxDecoration &&
+            (w.decoration! as BoxDecoration).color == const Color(0xFF17131F),
+      ),
+      findsNothing,
+    );
+    // 卡自己的 HTML 正常渲染
+    expect(
+      find.textContaining('烙印值：30/100', findRichText: true),
+      findsOneWidget,
+    );
+  });
 }

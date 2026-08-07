@@ -296,13 +296,13 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
-      // v56：状态事务提交点——assistant 消息保存成功即视为本轮成功。
-      // ① _processAssistantOutput 已写库（有 setvar/patch/面板）→ 用它；
-      // ② 模型回复成功但未输出任何状态协议（finalVariables 为 null）时，
-      //    仍提交内存中的旁白状态（用户确定性指令不依赖模型输出）；
-      // ③ 取消/失败路径不提交（旁白不落库，状态保持原样）。
+      // v58：状态事务提交点——assistant 消息保存成功后才写库。
+      // ① _processAssistantOutput 计算出了最终变量（有 setvar/patch/
+      // 面板）→ 提交；② 模型回复成功但未输出任何状态协议时，提交
+      // 内存中的旁白状态（用户确定性指令不依赖模型输出）；③ 取消/
+      // 失败路径不提交（状态保持原样）。
       final finalVars = processed.finalVariables ?? localVariables;
-      if (processed.finalVariables == null && narrationChanges.isNotEmpty) {
+      if (processed.finalVariables != null || narrationChanges.isNotEmpty) {
         await ChatDatabaseService.instance.upsertSessionVariables(
           activeSession.id,
           finalVars,
@@ -485,13 +485,22 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
+      // v58：状态事务提交点——assistant 消息保存成功后才写库
+      // （_processAssistantOutput 已改为纯计算，不写库）
+      final groupFinalVars = processed.finalVariables;
+      if (groupFinalVars != null) {
+        await ChatDatabaseService.instance.upsertSessionVariables(
+          activeSession.id,
+          groupFinalVars,
+        );
+      }
       // 特别版：本条消息的规范状态快照按消息关联持久化
       // （JSON-only 回复也有快照；数值=消息时刻最终状态）
       await _persistMessageStatusHtml(
         activeSession.id,
         assistantNode.id,
         character.cardJson,
-        processed.finalVariables ?? localVariables,
+        groupFinalVars ?? localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -650,13 +659,22 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
+      // v58：状态事务提交点——assistant 消息保存成功后才写库
+      // （_processAssistantOutput 已改为纯计算，不写库）
+      final branchFinalVars = processed.finalVariables;
+      if (branchFinalVars != null) {
+        await ChatDatabaseService.instance.upsertSessionVariables(
+          session.id,
+          branchFinalVars,
+        );
+      }
       // 特别版：本条消息的规范状态快照按消息关联持久化
       // （JSON-only 回复也有快照；数值=消息时刻最终状态）
       await _persistMessageStatusHtml(
         session.id,
         assistantNode.id,
         character.cardJson,
-        processed.finalVariables ?? localVariables,
+        branchFinalVars ?? localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -864,13 +882,22 @@ class ChatService {
         thinkingChain: completion.thinkingChain,
       );
 
+      // v58：状态事务提交点——assistant 消息保存成功后才写库
+      // （_processAssistantOutput 已改为纯计算，不写库）
+      final branchFinalVars = processed.finalVariables;
+      if (branchFinalVars != null) {
+        await ChatDatabaseService.instance.upsertSessionVariables(
+          session.id,
+          branchFinalVars,
+        );
+      }
       // 特别版：本条消息的规范状态快照按消息关联持久化
       // （JSON-only 回复也有快照；数值=消息时刻最终状态）
       await _persistMessageStatusHtml(
         session.id,
         assistantNode.id,
         character.cardJson,
-        processed.finalVariables ?? localVariables,
+        branchFinalVars ?? localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -1202,10 +1229,10 @@ class ChatService {
           }
         }
       }
-      await ChatDatabaseService.instance.upsertSessionVariables(
-        sessionId,
-        variables,
-      );
+      // v58：**此处不写库**——_processAssistantOutput 为纯计算（解析 +
+      // 应用 setvar/patch/面板回写），最终变量表由调用方在 assistant
+      // 消息保存成功后才统一提交（状态事务：消息保存失败/取消时状态
+      // 不会单独前进）。
       return ProcessedAssistantOutput(
         displayText: displayText,
         patch: patch,

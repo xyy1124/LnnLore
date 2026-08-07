@@ -1137,6 +1137,116 @@ void main() {
     });
   });
 
+  group('v58: 模板选择「第一个有效」（渲染回归根因）', () {
+    test('uiHints.template 无效（占位文本）时回退 post_history HTML', () {
+      // 真实卡结构：uiHints.template = "{label}：{value}"（无 getvar），
+      // post_history_instructions 才有真正的 HTML 面板——v54 兼容读取
+      // 后无效 template 截断了 HTML 面板（渲染回归根因）
+      final card = {
+        'data': {
+          'name': '测试卡',
+          'post_history_instructions': '规则\n'
+              '<!--panel-->\n'
+              '<details><summary>🩸 测试面板</summary>'
+              '<div style="padding:10px;background-color:#171020;'
+              'border:2px solid #8e44ad;">'
+              '烙印值：<b>【{{getvar::yw_brand}}/100】</b></div>'
+              '</details>\n'
+              '<!--/panel-->',
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {
+                  'type': 'number',
+                  'label': '烙印值',
+                  'min': 0,
+                  'max': 100,
+                },
+              },
+              'initialState': {'yw_brand': 0},
+              'uiHints': {
+                'order': ['yw_brand'],
+                'template': '{label}：{value}',
+              },
+            },
+          },
+        },
+      };
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: card,
+        variables: {'yw_brand': '35'},
+      );
+      // 必须使用 post_history 的 HTML 面板（带卡的自定义样式）
+      expect(html, contains('background-color:#171020'));
+      expect(html, contains('border:2px solid #8e44ad'));
+      expect(html, contains('烙印值：'));
+      expect(html, contains('35/100'));
+      // 不能掉进内置统一面板
+      expect(html, isNot(contains('class="status-panel"')));
+    });
+
+    test('tracker.template 有效时优先于 post_history', () {
+      final card = {
+        'data': {
+          'name': '测试卡',
+          'post_history_instructions': '规则\n'
+              '<!--panel-->\n'
+              '<details><summary>面板</summary><div>PHI模板</div></details>\n'
+              '<!--/panel-->',
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {
+                  'type': 'number',
+                  'label': '烙印值',
+                  'min': 0,
+                  'max': 100,
+                },
+              },
+              'initialState': {'yw_brand': 0},
+              'template': '<div>tracker模板：{{getvar::yw_brand}}</div>',
+            },
+          },
+        },
+      };
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: card,
+        variables: {'yw_brand': '20'},
+      );
+      expect(html, contains('tracker模板：20'));
+      expect(html, isNot(contains('PHI模板')));
+    });
+
+    test('全部候选无效时回退内置面板', () {
+      final card = {
+        'data': {
+          'name': '测试卡',
+          'post_history_instructions': '没有面板模板',
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {
+                  'type': 'number',
+                  'label': '烙印值',
+                  'min': 0,
+                  'max': 100,
+                },
+              },
+              'initialState': {'yw_brand': 0},
+              'uiHints': {'template': '{label}：{value}'},
+            },
+          },
+        },
+      };
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: card,
+        variables: {'yw_brand': '20'},
+      );
+      expect(html, contains('class="status-panel"'));
+      expect(html, contains('烙印值：20/100'));
+    });
+  });
+
   group('filterProtectedPatch（旁白字段本轮去重）', () {
     test('模型对旁白已落地字段的 add 被过滤（20→30 而非 40）', () {
       // 发送链路：旁白（烙印值+10）确定性落地 → 模型又输出 add +10

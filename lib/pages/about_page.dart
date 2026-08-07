@@ -104,6 +104,16 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.58',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】渲染回归修复（根因）：模板选择从"第一个非 null"改为"第一个**有效**"——角色卡 uiHints.template 常是 "{label}：{value}" 占位文本（不含 get 变量），v54 兼容读取后它会截断 post_history_instructions 的真实 HTML 面板、所有卡掉进统一内置面板（"面板样式丢失/每张卡一样"回归根因）；新增 TRACKER_RENDER 诊断日志（source=tracker.template/post_history_instructions/StatusFallback/builtin）',
+                    '【特别版】Safe HTML 外层恢复透明：状态面板不再套统一深色外框（v50 兜底造成"双层卡片"并裁剪卡自定义圆角）——面板外观完全由角色卡 HTML 控制；标题栏单独带轻底色由 App 控制',
+                    '【特别版】折叠偏好三态判断：\'1\' 展开 / \'0\' 收起 / 未保存回退卡 defaultExpanded——之前 \'0\' 与未保存等同，defaultExpanded=true 时用户手动收起后重建又被展开',
+                    '【特别版】状态事务完整化：_processAssistantOutput 改为**纯计算不写库**（解析 + 应用 setvar/patch/面板回写），最终变量表由调用方在 assistant 消息保存成功后统一提交（sendMessage/重生成/继续/群聊四个入口一致）——消息保存失败/取消时状态不再单独前进',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.57',
                   date: '2026-08-07',
                   changes: [

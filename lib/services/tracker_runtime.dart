@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:pocket_inn/models/tracker_config.dart';
 
 import 'character_card_extensions_reader.dart';
@@ -444,9 +445,31 @@ class TrackerRuntime {
     // StatusFallback 只是纯文本行——若只读 StatusFallback，所有卡
     // 都会退化成同一个紫色文字容器（"每张卡样式都一样"根因）。
     // getvar 检测大小写不敏感；模板渲染不依赖 tracker 是否解析成功。
-    final template = config.template ??
-        postHistoryPanelTemplate(cardJson) ??
-        statusFallbackTemplate(cardJson);
+    //
+    // v58：模板选择"第一个**有效**"而非"第一个非 null"——卡声明的
+    // uiHints.template 常是 "{label}：{value}" 占位文本（不含 get 变量），
+    // 若优先命中它会截断 post_history_instructions 的真实 HTML 面板、
+    // 掉进内置面板（v54 兼容 uiHints.template 后出现的渲染回归根因）。
+    final templateCandidates = <(String, String?)>[
+      ('tracker.template', config.template),
+      ('post_history_instructions', postHistoryPanelTemplate(cardJson)),
+      ('StatusFallback', statusFallbackTemplate(cardJson)),
+    ];
+    String? template;
+    String templateSource = 'builtin';
+    for (final (source, candidate) in templateCandidates) {
+      if (_isValidStatusTemplate(candidate)) {
+        template = candidate!.trim();
+        templateSource = source;
+        break;
+      }
+    }
+    // v58：模板来源诊断日志——手机上确认读到的是哪个模板
+    debugPrint(
+      '[TRACKER_RENDER] source=$templateSource '
+      'card=${cardJson?['data'] is Map ? (cardJson!['data'] as Map)['name'] : cardJson?['name']} '
+      'html=${template != null && RegExp(r'<[a-zA-Z]').hasMatch(template)}',
+    );
     // v52：模板检测扩展到所有展示变量（getvar/gettitle/gettext/getcolor/
     // getpercent 任一出现即视为模板）。
     if (template != null &&
@@ -580,6 +603,19 @@ class TrackerRuntime {
         'border:1px solid rgba(120,80,220,0.25);">'
         '<span style="font-size:12px;font-weight:600;color:#b388ff;">'
         '📊 状态</span>${parts.join('')}</div>';
+  }
+
+  /// v58：模板是否有效——非空且含至少一个展示变量
+  /// （getvar/gettitle/gettext/getcolor/getpercent）。占位文本
+  /// （如 "{label}：{value}"）或纯说明文字视为无效，跳过。
+  static bool _isValidStatusTemplate(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return false;
+    }
+    return RegExp(
+      r'\{\{\s*get(var|title|text|color|percent)::[^}]+\}\}',
+      caseSensitive: false,
+    ).hasMatch(value);
   }
 
   /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`。

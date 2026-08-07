@@ -617,9 +617,16 @@ class _MessageBubbleState extends State<MessageBubble> {
     final trackerCharacterId = _messageCharacter?.id ?? widget.character?.id;
     final expandedPrefKey =
         '__tracker_expanded__:${trackerCharacterId ?? ''}';
-    final expandedPref = widget.sessionVariables[expandedPrefKey] == '1';
-    final initialExpanded =
-        expandedPref ? true : trackerConfig.defaultExpanded;
+    // v58：折叠偏好三态判断——'1' 展开 / '0' 收起 / 未保存回退卡声明。
+    // 之前 `pref == '1' ? true : defaultExpanded` 把 '0' 与未保存等同，
+    // defaultExpanded=true 时用户手动收起后重建又会被展开。
+    final initialExpanded = switch (
+      widget.sessionVariables[expandedPrefKey]
+    ) {
+      '1' => true,
+      '0' => false,
+      _ => trackerConfig.defaultExpanded,
+    };
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: SpecialStatusPanel(
