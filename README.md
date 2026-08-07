@@ -5,7 +5,6 @@
 **LnnLore** 是一个基于 Flutter 开发的 AI 聊天应用，偏向角色扮演与沉浸式对话体验。它保留了上游 PocketInn 的全部功能，并在此基础上加入了**角色状态面板系统**、**强制思维链**、**群聊**等大量增强功能。
 
 > 🤖 本项目由 **DeepSeek AI** 辅助开发。
-
 ## 📇 角色卡格式
 
 本应用兼容 **Chara Card V2** 格式的角色卡（JSON / PNG 卡，与 SillyTavern 互通）。状态系统由角色卡通过 `data.extensions.tracker` 声明，App 运行时负责解析、校验、持久化与渲染。

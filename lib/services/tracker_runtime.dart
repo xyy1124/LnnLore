@@ -45,11 +45,16 @@ class StatePatch {
     /// 协议正文：JSON 输出含 "reply" 字段时，用它作为消息正文（
     /// 防止 {reply, patch} 结构正文丢失）。
     this.reply,
+    /// v55：是否检测到状态协议（JSON `patch` 键或 `<STATE>` 块）。
+    /// 用于区分"模型输出了合法空 patch（判断无变化）"与"模型完全没
+    /// 有输出协议"——空 patch 的 set/add 为空，但 protocolDetected=true。
+    this.protocolDetected = false,
   });
 
   final Map<String, dynamic> setValues;
   final Map<String, num> addValues;
   final String? reply;
+  final bool protocolDetected;
 
   bool get isEmpty => setValues.isEmpty && addValues.isEmpty;
 }
@@ -313,6 +318,7 @@ class TrackerRuntime {
           if (!protectedKeys.contains(e.key)) e.key: e.value,
       },
       reply: patch.reply,
+      protocolDetected: patch.protocolDetected,
     );
   }
 
@@ -1016,7 +1022,12 @@ class TrackerRuntime {
       }
     });
     return (
-      StatePatch(setValues: setValues, addValues: addValues, reply: patch.reply),
+      StatePatch(
+        setValues: setValues,
+        addValues: addValues,
+        reply: patch.reply,
+        protocolDetected: patch.protocolDetected,
+      ),
       dropped,
     );
   }
@@ -1095,6 +1106,9 @@ class TrackerRuntime {
         final patchRaw = decoded['patch'];
         final setValues = <String, dynamic>{};
         final addValues = <String, num>{};
+        // v55：只要 JSON 含 "patch" 键即视为协议出现（空 patch 也算）——
+        // 区分"模型输出了合法空 patch（判断无变化）"与"没输出协议"
+        var protocolDetected = decoded.containsKey('patch');
         if (patchRaw is Map<String, dynamic>) {
           final set = patchRaw['set'];
           if (set is Map<String, dynamic>) {
@@ -1110,13 +1124,14 @@ class TrackerRuntime {
             });
           }
         }
-        if (setValues.isNotEmpty || addValues.isNotEmpty) {
+        if (protocolDetected || setValues.isNotEmpty || addValues.isNotEmpty) {
           // 协议正文：JSON 含 "reply" 字段时一并携带（防止正文丢失）
           final reply = decoded['reply'];
           return StatePatch(
             setValues: setValues,
             addValues: addValues,
             reply: reply is String && reply.isNotEmpty ? reply : null,
+            protocolDetected: protocolDetected,
           );
         }
       } catch (_) {
@@ -1209,6 +1224,11 @@ class TrackerRuntime {
         setValues[key] = raw;
       }
     }
-    return StatePatch(setValues: setValues, addValues: addValues);
+    return StatePatch(
+      setValues: setValues,
+      addValues: addValues,
+      // v55：STATE 块出现即视为协议
+      protocolDetected: true,
+    );
   }
 }

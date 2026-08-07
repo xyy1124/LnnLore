@@ -393,9 +393,16 @@ class ChatService {
       chatMessages: chatMessages,
     );
 
+    // v55：先建立正式会话再读变量（与 sendMessage 统一）——草稿场景下
+    // session.id 是草稿 id，读到的变量与后续写入的正式会话不一致
+    // （新建群聊第一轮会读到空的草稿状态）。
+    final activeSession = persistSession == null
+        ? session
+        : await persistSession();
+
     // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
     final localVariables = await ChatDatabaseService.instance
-        .getSessionVariables(session.id);
+        .getSessionVariables(activeSession.id);
 
     final truncatedChatMessages = _truncateChatMessages(chatMessages);
 
@@ -425,10 +432,6 @@ class ChatService {
       ),
     );
     cancellationToken?.throwIfCancelled();
-
-    final activeSession = persistSession == null
-        ? session
-        : await persistSession();
 
     try {
       final completion = await _createCompletion(
@@ -568,50 +571,18 @@ class ChatService {
             .toSet()
         : <String>{};
 
-    // v51：分支状态回滚（核心修复）——消息树是分支化的，但 tracker
+    // v51/v55：分支状态回滚（核心修复）——消息树是分支化的，但 tracker
     // 状态是会话级单份全局变量；重生成/编辑重发直接读全局变量会拿到
-    // 旧分支推进后的状态（"编辑像新消息"根因）。这里：
-    // ① 从历史消息恢复基线（最近角色消息的 v3 快照，无快照用 initialState）
-    // ② 重新应用本条用户消息的旁白修改
-    // ③ replace 写入（清除旧分支存在、当前分支不存在的 tracker 字段）
+    // 旧分支推进后的状态（"编辑像新消息"根因）。逻辑抽为公共方法
+    // [_restoreTrackerBaselineForHistory]：重生成/编辑重发/继续生成共用。
     if (regenerateNarrationConfig.isEnabled) {
-      final baseline = _trackerBaselineFromHistory(
-        historyBeforeUserMessage,
-        localVariables,
-        regenerateNarrationConfig,
-      );
-      final narrationChanges = TrackerRuntime.parseNarrationStateChanges(
-        userTextForModel,
-        regenerateNarrationConfig,
-      );
-      final startingState = TrackerRuntime.applyNarrationChanges(
-        baseline,
-        narrationChanges,
-        regenerateNarrationConfig,
-      );
-      final trackerKeys = <String>{
-        ...regenerateNarrationConfig.stateSchema.keys,
-        ...regenerateNarrationConfig.initialState.keys,
-      };
-      final replaced = Map<String, String>.from(localVariables);
-      for (final key in trackerKeys) {
-        final v = startingState[key];
-        if (v != null) {
-          replaced[key] = '$v';
-        } else {
-          replaced.remove(key);
-        }
-      }
-      await ChatDatabaseService.instance.replaceSessionVariables(
-        session.id,
-        replaced,
-        replaceKeys: trackerKeys,
-      );
-      localVariables = await ChatDatabaseService.instance
-          .getSessionVariables(session.id);
-      debugPrint(
-        '[TRACKER_FLOW] 重生成状态回滚: baseline=$baseline '
-        'narration=$narrationChanges -> ${startingState}',
+      localVariables = await _restoreTrackerBaselineForHistory(
+        sessionId: session.id,
+        history: historyBeforeUserMessage,
+        userTextForModel: userTextForModel,
+        cardJson: character.cardJson,
+        currentVariables: localVariables,
+        logLabel: '重生成状态回滚',
       );
     }
 
@@ -780,8 +751,23 @@ class ChatService {
     );
 
     // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
-    final localVariables = await ChatDatabaseService.instance
+    // var：v55 分支基线恢复后会重新读取恢复后的变量表
+    var localVariables = await ChatDatabaseService.instance
         .getSessionVariables(session.id);
+
+    // v55：继续生成同样按当前消息链恢复分支基线（与重生成一致）——
+    // 否则从记忆树/分支切换后"继续"会从全局最新状态继续，状态错位。
+    final continueTrackerConfig = TrackerConfig.fromCardJson(character.cardJson);
+    if (continueTrackerConfig.isEnabled) {
+      localVariables = await _restoreTrackerBaselineForHistory(
+        sessionId: session.id,
+        history: chatMessages,
+        userTextForModel: '',
+        cardJson: character.cardJson,
+        currentVariables: localVariables,
+        logLabel: '继续生成状态回滚',
+      );
+    }
 
     final truncatedChatMessages = _truncateChatMessages(chatMessages);
 
@@ -1011,10 +997,11 @@ class ChatService {
     if (droppedKeys.isNotEmpty) {
       debugPrint('[TRACKER_RESPONSE] 丢弃未知字段: $droppedKeys');
     }
-    // v50：始终打印模型状态诊断——区分"模型没输出协议"（protocol=无）
-    // 与"模型判断无变化"（protocol=有但 set/add 为空）。
+    // v50/v55：始终打印模型状态诊断——protocolDetected 区分"模型没
+    // 输出协议"（protocol=无）与"模型判断无变化"（protocol=有但
+    // set/add 为空，即合法空 patch）。
     debugPrint(
-      '[TRACKER_RESPONSE] protocol=${RegExp(r'"patch"\s*:').hasMatch(text) ? '有' : '无'} '
+      '[TRACKER_RESPONSE] protocol=${patch.protocolDetected ? '有' : '无'} '
       'set=${patch.setValues} add=${patch.addValues}',
     );
     // 旁白字段本轮去重：模型对已落地旁白字段的 set/add 一律忽略
@@ -1138,6 +1125,9 @@ class ChatService {
         // 模型输出的是面板文本（而非 patch 协议）时，从面板解析
         // `label：值` 回写状态变量——但 **不得覆盖** patch/setvar
         // 已经修改过的字段（否则旧面板会把新 patch 值盖回去）。
+        // v55：回写统一走 reducer（canonicalize + clamp）——之前直接
+        // variables[e.key] = e.value，模型输出"烙印值：999/100"会把
+        // 999 绕过 min/max 直接入库。
         if (config.isEnabled) {
           final protectedKeys = <String>{
             for (final (k, _) in calls) k,
@@ -1148,11 +1138,25 @@ class ChatService {
             specialStatusHtml,
             config,
           );
-          for (final e in parsed.entries) {
-            if (protectedKeys.contains(e.key)) {
-              continue;
-            }
-            variables[e.key] = e.value;
+          final panelSet = StatePatch(setValues: {
+            for (final e in parsed.entries)
+              if (!protectedKeys.contains(e.key)) e.key: e.value,
+          });
+          if (!panelSet.isEmpty) {
+            final initialized = TrackerRuntime.initState(
+              config: config,
+              existing: variables,
+            );
+            final (canonical, _) =
+                TrackerRuntime.canonicalizePatch(panelSet, config);
+            final next = TrackerRuntime.reduce(
+              current: initialized,
+              patch: canonical,
+              config: config,
+            );
+            variables
+              ..clear()
+              ..addAll(next.map((k, v) => MapEntry(k, '$v')));
           }
         }
       }
@@ -1325,6 +1329,65 @@ class ChatService {
       }
     }
     return config.initialState.map((k, v) => MapEntry(k, '$v'));
+  }
+
+  /// v55：按历史消息链恢复 tracker 基线并应用本条用户消息的旁白——
+  /// 重生成/编辑重发/继续生成共用（v51 的 regenerate 回滚逻辑抽公共）。
+  /// ① 从历史恢复基线（最近角色消息 v3 快照，无快照用 initialState）
+  /// ② 重新应用 [userTextForModel] 的旁白修改（继续生成为空则只恢复）
+  /// ③ replace 写入（清除旧分支存在、当前分支不存在的 tracker 字段）
+  /// 返回恢复后的变量表（调用方应替换本地引用）。
+  Future<Map<String, String>> _restoreTrackerBaselineForHistory({
+    required String sessionId,
+    required List<ChatMessage> history,
+    required String userTextForModel,
+    required Map<String, dynamic>? cardJson,
+    required Map<String, String> currentVariables,
+    String logLabel = '分支状态回滚',
+  }) async {
+    final config = TrackerConfig.fromCardJson(cardJson);
+    if (!config.isEnabled) {
+      return currentVariables;
+    }
+    final baseline = _trackerBaselineFromHistory(
+      history,
+      currentVariables,
+      config,
+    );
+    final narrationChanges = TrackerRuntime.parseNarrationStateChanges(
+      userTextForModel,
+      config,
+    );
+    final startingState = TrackerRuntime.applyNarrationChanges(
+      baseline,
+      narrationChanges,
+      config,
+    );
+    final trackerKeys = <String>{
+      ...config.stateSchema.keys,
+      ...config.initialState.keys,
+    };
+    final replaced = Map<String, String>.from(currentVariables);
+    for (final key in trackerKeys) {
+      final v = startingState[key];
+      if (v != null) {
+        replaced[key] = '$v';
+      } else {
+        replaced.remove(key);
+      }
+    }
+    await ChatDatabaseService.instance.replaceSessionVariables(
+      sessionId,
+      replaced,
+      replaceKeys: trackerKeys,
+    );
+    final refreshed = await ChatDatabaseService.instance
+        .getSessionVariables(sessionId);
+    debugPrint(
+      '[TRACKER_FLOW] $logLabel: baseline=$baseline '
+      'narration=$narrationChanges -> ${startingState}',
+    );
+    return refreshed;
   }
 
   Future<Preset> _resolvePreset(String? presetId) async {

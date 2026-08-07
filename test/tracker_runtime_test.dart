@@ -1072,6 +1072,71 @@ void main() {
     });
   });
 
+  group('v55: protocolDetected（空 patch 与无协议区分）', () {
+    test('合法空 patch：protocolDetected=true 且 isEmpty', () {
+      final patch = TrackerRuntime.extractPatch(
+        '剧情正文\n```json\n{"reply":"正文","patch":{"set":{},"add":{}}}\n```',
+      );
+      expect(patch.isEmpty, isTrue);
+      expect(patch.protocolDetected, isTrue);
+    });
+
+    test('非空 patch：protocolDetected=true', () {
+      final patch = TrackerRuntime.extractPatch(
+        '```json\n{"patch":{"set":{"mood":"平静"},"add":{"energy":-3}}}\n```',
+      );
+      expect(patch.isEmpty, isFalse);
+      expect(patch.protocolDetected, isTrue);
+    });
+
+    test('无协议：protocolDetected=false', () {
+      final patch = TrackerRuntime.extractPatch('普通剧情回复，没有状态协议');
+      expect(patch.isEmpty, isTrue);
+      expect(patch.protocolDetected, isFalse);
+    });
+
+    test('STATE 块：protocolDetected=true', () {
+      final patch = TrackerRuntime.extractPatch(
+        '正文 <STATE> energy=+5 </STATE>',
+      );
+      expect(patch.addValues, {'energy': 5});
+      expect(patch.protocolDetected, isTrue);
+    });
+
+    test('filterProtectedPatch 透传 protocolDetected', () {
+      final patch = StatePatch(
+        setValues: {'energy': 10},
+        protocolDetected: true,
+      );
+      final filtered = TrackerRuntime.filterProtectedPatch(patch, {'mood'});
+      expect(filtered.protocolDetected, isTrue);
+    });
+
+    test('canonicalizePatch 透传 protocolDetected', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'energy': {'type': 'number', 'label': '体力'},
+              },
+              'initialState': {'energy': 80},
+            },
+          },
+        },
+      });
+      final (canonical, _) = TrackerRuntime.canonicalizePatch(
+        StatePatch(
+          addValues: {'体力': 5},
+          protocolDetected: true,
+        ),
+        config,
+      );
+      expect(canonical.addValues, {'energy': 5});
+      expect(canonical.protocolDetected, isTrue);
+    });
+  });
+
   group('filterProtectedPatch（旁白字段本轮去重）', () {
     test('模型对旁白已落地字段的 add 被过滤（20→30 而非 40）', () {
       // 发送链路：旁白（烙印值+10）确定性落地 → 模型又输出 add +10

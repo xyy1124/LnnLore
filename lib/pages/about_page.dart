@@ -81,6 +81,16 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.55',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】模型面板回写统一走 reducer：旧卡兼容的 HTML 面板解析结果之前直接写变量表（模型输出"烙印值：999/100"会把 999 绕过 min/max 直接入库）——现在转 StatePatch → canonicalize → reduce（类型校验 + clamp），所有状态来源统一入口',
+                    '【特别版】StatePatch.protocolDetected：现在能严格区分"模型输出了合法空 patch（判断无变化）"与"模型完全没输出协议"——空 patch（`{"patch":{"set":{},"add":{}}}`）protocolDetected=true；TRACKER_RESPONSE 日志改用该字段',
+                    '【特别版】继续生成按消息链恢复分支基线：continueAssistantResponse 之前直接读全局最新状态（从记忆树/分支切换后"继续"会状态错位）——现在与重生成共用 `_restoreTrackerBaselineForHistory`（历史快照恢复 + 旁白重应用 + replace 写入）',
+                    '【特别版】群聊变量读取顺序统一：generateGroupReply 之前用 session.id（草稿 id）读变量、之后才建立正式会话——新建群聊第一轮会读到空草稿状态；现在先建立正式会话再读变量（与 sendMessage 一致）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.54',
                   date: '2026-08-07',
                   changes: [
