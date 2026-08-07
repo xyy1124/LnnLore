@@ -1435,7 +1435,8 @@ class _ChatPageState extends State<ChatPage> {
                           _viewModel.sendQuickCommand(command, extraText: extra);
                         },
                         contextUsedTokens: _viewModel.lastContextTotal,
-                        contextMaxTokens: _viewModel.lastContextMax,
+                        // v61：分母用安全输入上限（窗口-输出预留-余量）
+                        contextMaxTokens: _viewModel.lastContextSafeLimit,
                         onOpenContextUsage: _openContextUsagePage,
                       ),
                     ],

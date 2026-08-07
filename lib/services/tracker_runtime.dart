@@ -618,6 +618,16 @@ class TrackerRuntime {
     ).hasMatch(value);
   }
 
+  /// v61：状态协议输出指令（固定尾部）——与状态字段列表拼装成完整
+  /// 状态指令。抽为常量供上下文用量估算共用（避免估算漏算）。
+  static const String kTrackerProtocolSuffix =
+      '（本条回复末尾必须用 JSON 代码块输出结构化状态更新，格式：\n'
+      '```json\n{"reply":"剧情正文","patch":{"set":{},"add":{"字段key":数值变化}}}\n```\n'
+      'reply 为本轮剧情正文，patch 只使用上方列出的 key（set 为直接赋值，'
+      'add 为增减量）。状态有变化就如实输出；没有变化也必须输出空 patch'
+      '（{"reply":"剧情正文","patch":{"set":{},"add":{}}}）。'
+      '不要输出状态面板模板本身，面板由系统自动渲染。）';
+
   /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`。
   ///
   /// v49：`<summary>/<details>` **不再在此删除**——折叠标题（summary）与

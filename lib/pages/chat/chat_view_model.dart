@@ -195,6 +195,21 @@ class ChatViewModel extends ChangeNotifier {
 
   /// 特别版：最近一次请求的上下文用量（估算 token）与最大上下文。
   int get lastContextTotal => _lastContextTotal;
+
+  /// v61：为模型回复预留的输出 token 与协议/消息格式安全余量。
+  static const int kReservedOutputTokens = 8000;
+  static const int kSafetyMarginTokens = 2000;
+
+  /// v61：安全输入上限 = 模型窗口 - 输出预留 - 安全余量。
+  /// 进度条分母与"可用"显示应使用该值（剩余 10K 不意味着还能安全
+  /// 输入 10K——输出也要占空间）。
+  int get lastContextSafeLimit {
+    final max = _lastContextMax;
+    if (max <= 0) {
+      return 0;
+    }
+    return (max - kReservedOutputTokens - kSafetyMarginTokens).clamp(0, max);
+  }
   int get lastContextMax => _lastContextMax;
   int _lastContextTotal = 0;
   int _lastContextMax = 128000;
@@ -2100,6 +2115,43 @@ class ChatViewModel extends ChangeNotifier {
   /// 口径与发送后的精确统计一致：中文≈1 字/token、英文≈4 字符/token；
   /// 统计历史消息文本 + 角色卡 description/personality/scenario +
   /// 思维链模板与尾部提醒。发送成功后由 [_refreshContextUsage] 精确覆盖。
+  /// v61：Tracker 状态指令估算——与 chat_service._trackerStateText
+  /// 同源（formatTrackerInstruction + 固定协议尾部），避免上下文用量
+  /// 漏算 Tracker 每轮常驻指令。返回 null 表示卡未启用 tracker。
+  String? _estimateTrackerInstructionText() {
+    final card = _activeCharacter?.cardJson;
+    if (card == null) {
+      return null;
+    }
+    final config = TrackerConfig.fromCardJson(card);
+    if (!config.isEnabled) {
+      return null;
+    }
+    final trackerKeys = <String>{
+      ...config.stateSchema.keys,
+      ...config.initialState.keys,
+    };
+    if (trackerKeys.isEmpty) {
+      return null;
+    }
+    final variables = _sessionVariablesCache;
+    final existingState = <String, String>{
+      for (final key in trackerKeys)
+        if (variables[key]?.trim().isNotEmpty == true) key: variables[key]!,
+    };
+    final state = existingState.isEmpty
+        ? config.initialState.map((k, v) => MapEntry(k, '$v'))
+        : existingState;
+    final text = TrackerRuntime.formatTrackerInstruction(
+      state: Map<String, dynamic>.from(state),
+      config: config,
+    );
+    if (text.isEmpty) {
+      return null;
+    }
+    return '$text\n\n${TrackerRuntime.kTrackerProtocolSuffix}';
+  }
+
   Future<void> _refreshContextEstimate() async {
     final loadGeneration = _sessionLoadGeneration;
     var total = 0;
@@ -2125,6 +2177,11 @@ class ChatViewModel extends ChangeNotifier {
       // 模板解析失败时忽略
     }
     total += estimateContextTokens(ThinkingChainGuard.thinkingChainTailReminder);
+    // v61：Tracker 每轮常驻指令计入估算（状态 + 规则 + 输出协议）
+    final trackerText = _estimateTrackerInstructionText();
+    if (trackerText != null) {
+      total += estimateContextTokens(trackerText);
+    }
     // 估算期间会话已切换：丢弃旧值（发送后精确值会覆盖）
     if (_isDisposed || loadGeneration != _sessionLoadGeneration) {
       return;
@@ -2138,7 +2195,7 @@ class ChatViewModel extends ChangeNotifier {
   }
 
   /// 特别版：刷新上下文用量缓存（发送成功后调用）。
-  /// 与用量页面口径一致：模板 + 尾部提醒计入总量。
+  /// 与用量页面口径一致：模板 + 尾部提醒 + Tracker 指令计入总量。
   Future<void> _refreshContextUsage(PromptAssemblyResult assembly) async {
     String template = '';
     try {
@@ -2152,10 +2209,16 @@ class ChatViewModel extends ChangeNotifier {
       templateText: template,
       tailReminder: ThinkingChainGuard.thinkingChainTailReminder,
     );
-    _lastContextTotal = breakdown.sections.values.fold<int>(
+    var total = breakdown.sections.values.fold<int>(
           0, (s, v) => s + v) +
         breakdown.worldBookEntries.fold<int>(0, (s, e) => s + e.tokens) +
         breakdown.chatHistory.fold<int>(0, (s, m) => s + m.tokens);
+    // v61：Tracker 每轮常驻指令计入（注入发生在组装之后，分解不含）
+    final trackerText = _estimateTrackerInstructionText();
+    if (trackerText != null) {
+      total += estimateContextTokens(trackerText);
+    }
+    _lastContextTotal = total;
     _lastContextMax = await _resolveContextMax();
   }
 

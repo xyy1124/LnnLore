@@ -10,6 +10,7 @@ import '../../services/deepseek_balance_service.dart';
 import '../../services/openai_compatible_api_service.dart';
 import '../../services/thinking_chain_guard.dart';
 import '../../services/thinking_chain_preset_service.dart';
+import 'chat_view_model.dart';
 
 /// 特别版：上下文用量详情页。
 ///
@@ -161,10 +162,16 @@ class _ContextUsagePageState extends State<ContextUsagePage> {
         breakdown.worldBookEntries.fold<int>(
             0, (sum, e) => sum + e.tokens) +
         breakdown.chatHistory.fold<int>(0, (sum, m) => sum + m.tokens);
-    final usedPercent = maxContext <= 0
+    // v61：进度条分母用安全输入上限（窗口 - 输出预留 - 安全余量），
+    // "剩余" 也是相对安全上限的剩余（剩余 10K 不意味着还能安全输入 10K）
+    final safeLimit = max(
+      0,
+      maxContext - ChatViewModel.kReservedOutputTokens - ChatViewModel.kSafetyMarginTokens,
+    );
+    final usedPercent = safeLimit <= 0
         ? 0.0
-        : (total / maxContext).clamp(0.0, 1.0).toDouble();
-    final remaining = max(0, maxContext - total);
+        : (total / safeLimit).clamp(0.0, 1.0).toDouble();
+    final remainingSafe = max(0, safeLimit - total);
 
     final sectionItems = [
       for (final entry in breakdown.sections.entries)
@@ -233,10 +240,13 @@ class _ContextUsagePageState extends State<ContextUsagePage> {
                                       overflow: TextOverflow.ellipsis,
                                     ),
                                   const SizedBox(height: 4),
+                                  // v61：三组分开——下轮预计（约）/
+                                  // 上轮实际（实，API usage）/ 安全上限
                                   Text(
-                                    '已用 ${_formatTokens(total)} / '
-                                    '最大 ${_formatTokens(maxContext)}\n'
-                                    '剩余 ${_formatTokens(remaining)}',
+                                    '下轮预计输入：${_formatTokens(total)}（约）\n'
+                                    '${widget.realUsage != null && widget.realUsage!.promptTokens > 0 ? '上轮实际输入：${_formatTokens(widget.realUsage!.promptTokens)} · 输出 ${_formatTokens(widget.realUsage!.completionTokens)}（实）\n' : ''}'
+                                    '安全输入上限：${_formatTokens(safeLimit)}\n'
+                                    '预计剩余：${_formatTokens(remainingSafe)}',
                                     style: TextStyle(
                                       fontSize: 13,
                                       color: colorScheme.onSurfaceVariant,

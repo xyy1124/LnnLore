@@ -104,6 +104,17 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.61',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】上下文用量计入 Tracker 每轮常驻指令：状态字段 + 更新规则 + JSON patch 输出协议（抽为共享常量，chat_service 与用量估算同源）——发送后详细统计与会话打开估算都补算 Tracker，不再漏算后置注入',
+                    '【特别版】主界面用量胶囊改为"约 X / 可用 Y（预计 Z%）"——估算值明确标注"约"，不再显示成伪精确的"已用"',
+                    '【特别版】安全输入上限：进度条分母与"可用"从"模型窗口"改为"窗口 - 输出预留 8K - 安全余量 2K"——剩余 10K 不再误导为还能安全输入 10K（输出也要占空间）',
+                    '【特别版】用量详情页分三组：下轮预计输入（约）/ 上轮实际输入与输出（实，API usage）/ 安全输入上限与预计剩余',
+                    '【特别版】Tracker 常驻精简确认：每轮只发送字段 key/label/范围/当前值/模糊程度增量/单轮上限/输出协议——HTML、CSS、阶段长描述等仅用于 App 渲染的内容不进模型上下文',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.60',
                   date: '2026-08-07',
                   changes: [

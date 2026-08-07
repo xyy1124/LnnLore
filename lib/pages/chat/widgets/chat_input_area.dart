@@ -324,9 +324,11 @@ class ChatInputArea extends StatelessWidget {
                         const SizedBox(width: 6),
                         Text(
                           contextUsedTokens > 0
-                              ? '已用 ${_formatTokens(contextUsedTokens)}/'
+                              // v61：明确"预计/约"——估算值不冒充精确
+                              // 已用；分母为安全输入上限（扣除输出预留）
+                              ? '约 ${_formatTokens(contextUsedTokens)}/'
                                   '${_formatTokens(contextMaxTokens)}'
-                                  '（用了 ${contextMaxTokens <= 0 ? 0 : (contextUsedTokens * 100 / contextMaxTokens).toStringAsFixed(0)}%）'
+                                  '（预计 ${contextMaxTokens <= 0 ? 0 : (contextUsedTokens * 100 / contextMaxTokens).toStringAsFixed(0)}%）'
                               : '用量待发送后统计',
                           style: TextStyle(
                             fontSize: 11,

@@ -1435,13 +1435,8 @@ class ChatService {
     // 变化"和"模型完全没遵守协议"。
     // v50：格式改为固定 {reply, patch}（正文与协议分离，避免长剧情
     // 末尾遗漏 patch）；key 映射已在上方列出，只能使用 key。
-    return '$text\n\n'
-        '（本条回复末尾必须用 JSON 代码块输出结构化状态更新，格式：\n'
-        '```json\n{"reply":"剧情正文","patch":{"set":{},"add":{"字段key":数值变化}}}\n```\n'
-        'reply 为本轮剧情正文，patch 只使用上方列出的 key（set 为直接赋值，'
-        'add 为增减量）。状态有变化就如实输出；没有变化也必须输出空 patch'
-        '（{"reply":"剧情正文","patch":{"set":{},"add":{}}}）。'
-        '不要输出状态面板模板本身，面板由系统自动渲染。）';
+    // v61：输出指令为共享常量（上下文用量估算同源计入）。
+    return '$text\n\n${TrackerRuntime.kTrackerProtocolSuffix}';
   }
 
   /// v51：从消息历史恢复 tracker 基线状态——倒序找最近一条角色消息的
