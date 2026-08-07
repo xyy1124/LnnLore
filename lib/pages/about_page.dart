@@ -81,6 +81,45 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.45',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】规范消息快照体系：消息级快照改为 v2（`__msg_status_html_v2__:<id>`）——每条助手消息都用"该消息处理后的最终状态 + 角色卡 StatusFallback 模板"生成规范 HTML（模型只输出 JSON patch 也有快照；数值=消息时刻状态，历史消息不再被后续轮次的最新状态污染）；模型原始 HTML 不再作为显示快照（仅保留解析状态用途），旧 v1 快照一律忽略',
+                    '【特别版】旁白字段本轮去重：用户输入（烙印值+10）等旁白确定性落地后，模型若再对同一字段输出 patch 会被过滤（防止 20→旁白+10→模型add+10→40 的重复叠加）；重生成时从原用户消息解析保护字段（只阻止重复更新，不重新应用）',
+                    '【特别版】群聊状态面板按发言人角色渲染：每条消息用各自 resolvedSpeaker 的角色卡模板/tracker 配置/正则脚本（不再套用全局 activeCharacter）',
+                    '【特别版】状态面板渲染尊重卡样式：卡模板是富 HTML 时直接渲染（不再强制套 App 紫色容器），纯文本模板才套默认容器；getvar 检测改为大小写不敏感',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.44',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】旁白 = 赋值越界保护：number 字段直接赋值（烙印值=999）也走 reducer 按 min/max clamp，字符串字段直接写入',
+                    '【特别版】移除全局旧 HTML 面板兜底：模型已改为输出 JSON patch，旧全局面板（`__special_status_html__`）里写死的数值不再显示在每轮消息上',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.43',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】版本号与功能对齐：1.4.0-special.43+98（状态栏/快照链路持续收敛，为 v44 的旁白 clamp 与全局兜底移除做准备）',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.42',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】状态栏"未更新"字样根因修复：输出指令让模型"按模板原样输出"导致 {{match}} 与"状态栏未更新"前缀被原样带进面板——显示层统一清洗（去前缀 + 去 {{match}} + 剥 details/summary）',
+                  ],
+                ),
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.41',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】状态不更新真正根因修复：变量表为空时不再拦截状态注入（用 initialState 兜底），新会话也会给模型输出面板指令；各卡状态栏显示各自字段（不再顶着"状态栏未更新"怪文案）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.14',
                   date: '2026-08-08',
                   changes: [

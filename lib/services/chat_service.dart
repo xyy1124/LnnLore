@@ -121,8 +121,11 @@ class ChatService {
     // （黑丝状态=破损）等）——发送时立即应用并持久化，状态栏即时
     // 更新，不依赖模型是否输出状态协议。
     final narrationConfig = TrackerConfig.fromCardJson(character.cardJson);
+    // 旁白字段本轮去重：这些字段已确定性落地，模型再输出同字段 patch
+    // 会被过滤（防止 20→旁白+10→模型add+10→40 的重复叠加）
+    var narrationChanges = <String, (String, bool)>{};
     if (narrationConfig.isEnabled && input.trim().isNotEmpty) {
-      final narrationChanges =
+      narrationChanges =
           TrackerRuntime.parseNarrationStateChanges(input, narrationConfig);
       if (narrationChanges.isNotEmpty) {
         final narrationVariables = Map<String, String>.from(localVariables);
@@ -234,6 +237,8 @@ class ChatService {
         activeSession.id,
         completion.text,
         cardJson: character.cardJson,
+        // 旁白字段本轮去重：模型对这些字段的 set/add 一律忽略
+        protectedStateKeys: narrationChanges.keys.toSet(),
       );
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
@@ -245,12 +250,14 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
-      // 特别版：本条消息提取的状态面板按消息关联持久化
-      // （key 带消息 id，气泡内跟随消息渲染）
+      // 特别版：本条消息的规范状态快照按消息关联持久化——始终用该
+      // 消息处理后的最终变量表 + 角色卡模板生成（JSON-only 回复也
+      // 有快照；数值=消息时刻状态，不被后续轮次污染）
       await _persistMessageStatusHtml(
         activeSession.id,
         assistantNode.id,
-        processed.specialStatusHtml,
+        character.cardJson,
+        processed.finalVariables ?? localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -417,11 +424,13 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
-      // 特别版：本条消息提取的状态面板按消息关联持久化
+      // 特别版：本条消息的规范状态快照按消息关联持久化
+      // （JSON-only 回复也有快照；数值=消息时刻最终状态）
       await _persistMessageStatusHtml(
         activeSession.id,
         assistantNode.id,
-        processed.specialStatusHtml,
+        character.cardJson,
+        processed.finalVariables ?? localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -502,6 +511,19 @@ class ChatService {
         ? userMessage.modelText!
         : userMessage.text;
 
+    // 特别版：重生成旁白去重——原用户消息里的旁白（（烙印值+10）等）
+    // 已在首次发送时确定性落地，重生成把原文重新发给模型时，模型若
+    // 再次输出同字段 patch 会重复叠加。这里**只解析 keys 不应用**，
+    // 用于阻止模型对已落地字段重复更新。
+    final regenerateNarrationConfig =
+        TrackerConfig.fromCardJson(character.cardJson);
+    final regenerateProtectedKeys = regenerateNarrationConfig.isEnabled
+        ? TrackerRuntime.parseNarrationStateChanges(
+                userTextForModel, regenerateNarrationConfig)
+            .keys
+            .toSet()
+        : <String>{};
+
     final promptAssembly = PromptAssembler.build(
       PromptAssemblyContext(
         characterName: character.name,
@@ -539,6 +561,8 @@ class ChatService {
         session.id,
         completion.text,
         cardJson: character.cardJson,
+        // 原用户消息旁白字段本轮去重（只阻止模型重复更新，不重新应用）
+        protectedStateKeys: regenerateProtectedKeys,
       );
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
@@ -549,11 +573,13 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
-      // 特别版：本条消息提取的状态面板按消息关联持久化
+      // 特别版：本条消息的规范状态快照按消息关联持久化
+      // （JSON-only 回复也有快照；数值=消息时刻最终状态）
       await _persistMessageStatusHtml(
         session.id,
         assistantNode.id,
-        processed.specialStatusHtml,
+        character.cardJson,
+        processed.finalVariables ?? localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -743,11 +769,13 @@ class ChatService {
         thinkingChain: completion.thinkingChain,
       );
 
-      // 特别版：本条消息提取的状态面板按消息关联持久化
+      // 特别版：本条消息的规范状态快照按消息关联持久化
+      // （JSON-only 回复也有快照；数值=消息时刻最终状态）
       await _persistMessageStatusHtml(
         session.id,
         assistantNode.id,
-        processed.specialStatusHtml,
+        character.cardJson,
+        processed.finalVariables ?? localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -866,15 +894,25 @@ class ChatService {
   /// （JSON patch / <STATE> 块），持久化到会话变量表；返回剥离了
   /// setvar 宏与状态块的显示文本（副作用内容不入库、不显示）。
   /// 重构版：返回 [ProcessedAssistantOutput]（正文 + patch + choices
-  /// + 特殊状态栏 HTML）。
+  /// + 特殊状态栏 HTML + 最终变量表）。
+  ///
+  /// [protectedStateKeys]：本轮已由旁白确定性修改的字段（用户输入
+  /// （烙印值+10）等已落地）。模型若再对同一字段输出 patch 会被过滤，
+  /// 防止"旁白 +10 后又叠加模型 +10"（20→30→40）。
   Future<ProcessedAssistantOutput> _processAssistantOutput(
     String sessionId,
     String text, {
     Map<String, dynamic>? cardJson,
+    Set<String> protectedStateKeys = const {},
   }) async {
     final calls = ChatVariableService.parseSetVarCalls(text);
     final config = TrackerConfig.fromCardJson(cardJson);
-    final patch = TrackerRuntime.extractPatch(text);
+    var patch = TrackerRuntime.extractPatch(text);
+    // 旁白字段本轮去重：模型对已落地旁白字段的 set/add 一律忽略
+    // （其余字段照常应用）。
+    if (protectedStateKeys.isNotEmpty) {
+      patch = TrackerRuntime.filterProtectedPatch(patch, protectedStateKeys);
+    }
     final choices = TrackerRuntime.extractChoices(text);
 
     // raw 与 reply 都扫：模型输出 {reply, patch} 时状态面板可能在
@@ -982,6 +1020,15 @@ class ChatService {
         sessionId,
         variables,
       );
+      return ProcessedAssistantOutput(
+        displayText: displayText,
+        patch: patch,
+        choices: choices,
+        specialStatusHtml: specialStatusHtml,
+        // 本轮处理后的最终变量表（含 setvar/patch 应用后的状态），
+        // 供调用方生成该消息的规范状态快照（快照值=消息时最终状态）。
+        finalVariables: variables,
+      );
     }
     return ProcessedAssistantOutput(
       displayText: displayText,
@@ -1001,16 +1048,32 @@ class ChatService {
   }
 
   /// 消息级状态面板的变量表 key（按消息 id 关联，气泡内跟随渲染）。
+  /// v2：规范快照——由 App 用最终变量表 + 卡 StatusFallback 模板生成
+  /// （getvar 已填充为当时的具体值），不再保存模型原始 HTML。
+  /// v1（`__msg_status_html__:<id>`）是模型 HTML 快照，含写死的旧值，
+  /// 会压过正确状态，v45 起不再写入、显示层不再读取（旧数据忽略）。
   static String messageStatusHtmlKey(String messageId) =>
-      '__msg_status_html__:$messageId';
+      '__msg_status_html_v2__:$messageId';
 
-  /// 把本条消息提取的状态面板 HTML 持久化到会话变量表
-  /// （key 带消息 id，不覆盖全局最新面板 key）。
+  /// 把本条消息的**规范状态快照**持久化到会话变量表：
+  /// 始终用该消息处理后的最终变量表 + 角色卡模板生成 HTML——
+  /// - 模型只输出 JSON patch（无 HTML）时也会生成快照（不再缺失）；
+  /// - 快照数值 = 消息当时的最终状态，历史消息不会被后续轮次的最新
+  ///   状态污染（显示与消息时刻一致）。
+  /// 卡未启用/无字段可显示时不写入。
   Future<void> _persistMessageStatusHtml(
     String sessionId,
     String messageId,
-    String? html,
+    Map<String, dynamic>? cardJson,
+    Map<String, String>? finalVariables,
   ) async {
+    if (finalVariables == null) {
+      return;
+    }
+    final html = TrackerRuntime.renderStatusPanelHtml(
+      cardJson: cardJson,
+      variables: finalVariables,
+    );
     final value = html?.trim();
     if (value == null || value.isEmpty) {
       return;
@@ -1024,7 +1087,7 @@ class ChatService {
   /// 追加"回复末尾必须输出结构化状态协议"的指令——模型输出 patch 后，
   /// App 解析应用、再按角色卡模板渲染面板，状态更新才能闭环。
   /// ⚠️ 只读取 stateSchema/initialState 声明的 key，彻底排除 `__` 开头
-  ///    的内部变量（__special_status_html__ / __msg_status_html__:* 等）——
+  ///    的内部变量（__special_status_html__ / __msg_status_html_v2__:* 等）——
   ///    否则历史 HTML 面板会被当成"当前状态"重新注入模型。
   String? _trackerStateText(
     Map<String, dynamic>? cardJson,

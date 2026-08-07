@@ -274,6 +274,134 @@ class TrackerRuntime {
     return next;
   }
 
+  /// 过滤 patch 中受保护字段：这些字段本轮已由旁白确定性修改（用户输入
+  /// （烙印值+10）等）落地，模型若再次对同一字段输出 set/add 会重复叠加
+  /// （20→30→40）。过滤后模型对本轮旁白字段的更新被忽略，其余字段照常。
+  static StatePatch filterProtectedPatch(
+    StatePatch patch,
+    Set<String> protectedKeys,
+  ) {
+    if (protectedKeys.isEmpty) {
+      return patch;
+    }
+    return StatePatch(
+      setValues: {
+        for (final e in patch.setValues.entries)
+          if (!protectedKeys.contains(e.key)) e.key: e.value,
+      },
+      addValues: {
+        for (final e in patch.addValues.entries)
+          if (!protectedKeys.contains(e.key)) e.key: e.value,
+      },
+      reply: patch.reply,
+    );
+  }
+
+  /// 用卡 StatusFallback 模板 + 变量表生成规范状态面板 HTML（service 层
+  /// 保存消息快照与 UI 层运行时渲染共用同一套逻辑）。
+  ///
+  /// 值来源：会话变量优先，缺失回退卡 initialState；`{{getvar::key}}`
+  /// 占位在生成时即替换为当时的具体值（快照不保留占位符，显示不依赖
+  /// 当前全局变量——历史消息不会被最新状态污染）。
+  ///
+  /// 渲染策略（尊重卡样式）：
+  /// - 模板是富 HTML（含标签）→ 直接返回清洗后的模板，不套 App 默认容器；
+  /// - 模板是纯文本 → 套 App 默认容器（深色卡片）；
+  /// - 卡无模板 → 内置字段 chips 卡片兜底。
+  /// 返回 null 表示卡未启用/无任何可显示字段。
+  static String? renderStatusPanelHtml({
+    required Map<String, dynamic>? cardJson,
+    required Map<String, String> variables,
+  }) {
+    final config = TrackerConfig.fromCardJson(cardJson);
+    if (!config.isEnabled) {
+      return null;
+    }
+    String? valueOf(String key) {
+      final v = variables[key];
+      if (v != null && v.isNotEmpty) {
+        return v;
+      }
+      final init = config.initialState[key];
+      return init == null ? null : '$init';
+    }
+
+    // ① 卡 StatusFallback 模板（卡内定义的状态栏样子）。getvar 检测
+    // 大小写不敏感（与解析正则一致，模板写 {{GETVAR::k}} 也能命中）。
+    final template = statusFallbackTemplate(cardJson);
+    if (template != null &&
+        RegExp(r'getvar', caseSensitive: false).hasMatch(template)) {
+      var rendered = template
+          .replaceAll('{{match}}', '')
+          .replaceAll(r'\n', '\n');
+      rendered = rendered.replaceAllMapped(
+        RegExp(r'\{\{\s*getvar::([^}]+)\}\}', caseSensitive: false),
+        (m) => valueOf(m.group(1)!.trim()) ?? '',
+      );
+      rendered = _cleanStatusPanelText(rendered);
+      if (rendered.trim().isNotEmpty) {
+        // 富 HTML 模板直接渲染（尊重卡定义样式）；纯文本套默认容器
+        if (RegExp(r'<[a-zA-Z][^>]*>').hasMatch(rendered)) {
+          return rendered.trim();
+        }
+        return '<div class="status-panel" style="display:flex;'
+            'flex-wrap:wrap;gap:6px 8px;align-items:center;padding:8px 10px;'
+            'border-radius:10px;background:rgba(120,80,220,0.08);'
+            'border:1px solid rgba(120,80,220,0.25);'
+            'font-size:12px;">$rendered</div>';
+      }
+    }
+
+    // ② 内置深色卡片（卡无模板/无 getvar 时兜底）
+    final chips = <String>[];
+    for (final key in config.displayOrder) {
+      final schema = config.stateSchema[key];
+      if (schema == null || schema.hidden) {
+        continue;
+      }
+      final value = valueOf(key);
+      if (value == null) {
+        continue;
+      }
+      final label = schema.label.isNotEmpty ? schema.label : key;
+      // number 字段带 max → 显示 值/max（进度感）
+      final display = (schema.type == 'number' && schema.max != null)
+          ? '$value/${schema.max}'
+          : value;
+      chips.add(
+        '<span style="background:rgba(255,255,255,0.07);'
+        'border:1px solid rgba(255,255,255,0.10);'
+        'border-radius:999px;padding:2px 10px;font-size:12px;'
+        'white-space:nowrap;">$label：$display</span>',
+      );
+    }
+    if (chips.isEmpty) {
+      return null;
+    }
+    return '<div class="status-panel" style="display:flex;flex-wrap:wrap;'
+        'gap:6px 8px;align-items:center;padding:8px 10px;'
+        'border-radius:10px;'
+        'background:rgba(120,80,220,0.08);'
+        'border:1px solid rgba(120,80,220,0.25);">'
+        '<span style="font-size:12px;font-weight:600;color:#b388ff;">'
+        '📊 状态</span>${chips.join('')}</div>';
+  }
+
+  /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`、剥
+  /// `<details>/<summary>` 折叠标签（HtmlWidget 对 details 折叠渲染
+  /// 不可靠，面板内容直接展开显示）。
+  static String _cleanStatusPanelText(String html) {
+    return html
+        .replaceAll('{{match}}', '')
+        .replaceAll('状态栏未更新，当前：', '')
+        .replaceAll('状态栏未更新，当前:', '')
+        .replaceAll('状态栏未更新', '')
+        .replaceAll(RegExp(r'<details[^>]*>', caseSensitive: false), '')
+        .replaceAll(RegExp(r'</details>', caseSensitive: false), '')
+        .replaceAll(RegExp(r'<summary[^>]*>', caseSensitive: false), '')
+        .replaceAll(RegExp(r'</summary>', caseSensitive: false), '');
+  }
+
   /// 从卡 `data.extensions.regex_scripts` 取 StatusFallback 的 replaceString
   /// 模板（各卡"状态栏样子"定义；含 `{{getvar::key}}` 占位）。
   static String? statusFallbackTemplate(Map<String, dynamic>? cardJson) {

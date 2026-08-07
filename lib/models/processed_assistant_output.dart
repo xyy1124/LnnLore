@@ -8,18 +8,23 @@ import 'package:pocket_inn/services/tracker_runtime.dart';
 /// - [choices]：模型动态给出的可选动作（挂到消息下渲染按钮）
 /// - [specialStatusHtml]：提取到的特殊状态栏 HTML（ST 三件套面板，
 ///   由 TrackerStatusBar 优先渲染；无则 null）
+/// - [finalVariables]：本轮处理后持久化的完整会话变量表（含 setvar/
+///   patch 应用后的最终状态；无副作用时为 null）——用于生成规范消息
+///   快照（快照数值 = 该消息时的最终状态，不随后续轮次漂移）。
 class ProcessedAssistantOutput {
   const ProcessedAssistantOutput({
     required this.displayText,
     required this.patch,
     this.choices = const [],
     this.specialStatusHtml,
+    this.finalVariables,
   });
 
   final String displayText;
   final StatePatch patch;
   final List<DecisionChoice> choices;
   final String? specialStatusHtml;
+  final Map<String, String>? finalVariables;
 
   bool get hasChoices => choices.isNotEmpty;
 }

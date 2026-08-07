@@ -390,6 +390,14 @@ class _MessageBubbleState extends State<MessageBubble> {
     );
   }
 
+  /// 特别版：本条消息对应的角色卡（群聊按消息发言人解析，而非全局
+  /// activeCharacter——否则轮到角色 B 后，角色 A 的历史消息也会套用
+  /// B 的状态模板/正则）。单聊消息 characterId 为空，回退全局角色。
+  ResolvedChatCharacter? get _messageCharacter => widget.message.characterId !=
+          null
+      ? widget.resolvedSpeaker
+      : widget.character;
+
   /// 特别版：对 AI 输出应用角色卡自带正则脚本（显示阶段）。
   /// 仅角色消息生效；总开关关闭或卡无脚本时原样返回。
   /// 两次串联：先应用普通脚本，再应用 markdownOnly 脚本
@@ -399,7 +407,7 @@ class _MessageBubbleState extends State<MessageBubble> {
       return text;
     }
     final scripts = RegexScriptService.scriptsFromCharacterCard(
-      widget.character?.cardJson,
+      _messageCharacter?.cardJson,
     );
     if (scripts.isEmpty) {
       return text;
@@ -497,15 +505,15 @@ class _MessageBubbleState extends State<MessageBubble> {
   }
 
   /// 本条消息的状态面板：两路兜底——
-  /// ①消息级 HTML 面板（`__msg_status_html__:<id>`，该消息时的快照）
-  /// ②运行时生成面板（卡的 tracker 声明 + 变量表 + **initialState 兜底**，
-  /// 新会话/开场/变量表为空也能显示）
+  /// ①消息级规范快照（`__msg_status_html_v2__:<id>`，App 在该消息处理
+  /// 完成后用最终变量表 + 角色卡模板生成的规范 HTML；数值=消息时刻
+  /// 状态，不随后续轮次漂移）
+  /// ②运行时生成面板（卡的 tracker 声明 + 当前变量表 + **initialState
+  /// 兜底**，新会话/开场/旧会话无快照消息也能显示）
   ///
-  /// 注意：不再用全局旧 HTML（`__special_status_html__`）兜底——模型已
-  /// 改为输出 JSON patch（不再产新 HTML），旧全局面板里写死的数值会被
-  /// 一直显示在每轮消息上（变量表已变但面板数字不变），导致"状态更新
-  /// 了却不显示"。无消息级快照时直接走运行时生成，保证显示与当前状态
-  /// 一致。
+  /// 注意：不再用全局旧 HTML（`__special_status_html__`）兜底，也不再
+  /// 读取 v1 模型 HTML 快照（`__msg_status_html__:<id>`，模型原始 HTML，
+  /// 写死的旧值会压过正确状态）——旧 v1 快照一律忽略，走运行时生成。
   Widget? _buildMessageStatusPanel(BuildContext context) {
     if (widget.message.isMe) {
       return null;
@@ -559,89 +567,18 @@ class _MessageBubbleState extends State<MessageBubble> {
   /// 作为"卡里设置的状态栏样子"（含 `{{getvar::key}}` 占位）。
   /// ⚠️ 卡 JSON 的 extensions 在 `data.extensions` 下（顶层没有）——
   ///    必须走深层路径，否则所有卡都读不到模板、统一回退内置样式。
+  /// 群聊按消息发言人角色取模板（非全局 activeCharacter）。
   String? _statusFallbackTemplate() =>
-      TrackerRuntime.statusFallbackTemplate(widget.character?.cardJson);
+      TrackerRuntime.statusFallbackTemplate(_messageCharacter?.cardJson);
 
-  /// 运行时生成状态面板：无模型输出面板时，优先按**卡内 StatusFallback
-  /// 模板**渲染（`{{getvar::key}}` 用变量表值/initialState 填充）——
-  /// 样子与角色卡预期一致；卡无模板时回退内置深色卡片。
-  String? _generateStatusPanelHtml() {
-    final config = TrackerConfig.fromCardJson(widget.character?.cardJson);
-    if (!config.isEnabled) {
-      return null;
-    }
-    // 值来源：会话变量优先，缺失回退卡 initialState
-    String? valueOf(String key) {
-      final v = widget.sessionVariables[key];
-      if (v != null && v.isNotEmpty) {
-        return v;
-      }
-      final init = config.initialState[key];
-      return init == null ? null : '$init';
-    }
-
-    // ① 卡 StatusFallback 模板（卡内定义的状态栏样子）。
-    // 去掉"状态栏未更新，当前："前缀——那是 ST 正则兜底的文案，
-    // 在 PocketInn 里模板用作默认面板，顶着"未更新"三个字很怪；
-    // 去掉后直接显示状态（各卡字段不同），与模型输出面板观感一致。
-    final template = _statusFallbackTemplate();
-    if (template != null && template.contains('getvar')) {
-      var rendered = template
-          .replaceAll('{{match}}', '')
-          .replaceAll(r'\n', '\n');
-      rendered = rendered.replaceAllMapped(
-        RegExp(r'\{\{\s*getvar::([^}]+)\}\}', caseSensitive: false),
-        (m) => valueOf(m.group(1)!.trim()) ?? '',
+  /// 运行时生成状态面板：无消息级快照时，按卡内 StatusFallback 模板
+  /// 渲染（`{{getvar::key}}` 用当前变量表值/initialState 填充）——与
+  /// 快照生成共用 [TrackerRuntime.renderStatusPanelHtml]（同一套逻辑）；
+  /// 卡无模板时回退内置深色卡片。
+  String? _generateStatusPanelHtml() => TrackerRuntime.renderStatusPanelHtml(
+        cardJson: _messageCharacter?.cardJson,
+        variables: widget.sessionVariables,
       );
-      rendered = rendered
-          .replaceAll('状态栏未更新，当前：', '')
-          .replaceAll('状态栏未更新，当前:', '')
-          .replaceAll('状态栏未更新', '');
-      if (rendered.trim().isNotEmpty) {
-        return '<div class="status-panel" style="display:flex;'
-            'flex-wrap:wrap;gap:6px 8px;align-items:center;padding:8px 10px;'
-            'border-radius:10px;background:rgba(120,80,220,0.08);'
-            'border:1px solid rgba(120,80,220,0.25);'
-            'font-size:12px;">$rendered</div>';
-      }
-    }
-
-    // ② 内置深色卡片（卡无模板/无 getvar 时兜底）
-    final chips = <String>[];
-    for (final key in config.displayOrder) {
-      final schema = config.stateSchema[key];
-      if (schema == null || schema.hidden) {
-        continue;
-      }
-      final value = valueOf(key);
-      if (value == null) {
-        continue;
-      }
-      final label = schema.label.isNotEmpty ? schema.label : key;
-      // number 字段带 max → 显示 值/max（进度感）
-      final display = (schema.type == 'number' && schema.max != null)
-          ? '$value/${schema.max}'
-          : value;
-      chips.add(
-        '<span style="background:rgba(255,255,255,0.07);'
-        'border:1px solid rgba(255,255,255,0.10);'
-        'border-radius:999px;padding:2px 10px;font-size:12px;'
-        'white-space:nowrap;">$label：$display</span>',
-      );
-    }
-    if (chips.isEmpty) {
-      return null;
-    }
-
-    // 深色主题卡片 + 字段 chips（外观接近模型输出的 HTML 面板）
-    return '<div class="status-panel" style="display:flex;flex-wrap:wrap;'
-        'gap:6px 8px;align-items:center;padding:8px 10px;'
-        'border-radius:10px;'
-        'background:rgba(120,80,220,0.08);'
-        'border:1px solid rgba(120,80,220,0.25);">'
-        '<span style="font-size:12px;font-weight:600;color:#b388ff;">'
-        '📊 状态</span>${chips.join('')}</div>';
-  }
 
   Widget _buildThinkingChain(BuildContext context, ColorScheme colorScheme) {
     return ThinkingChainWidget(

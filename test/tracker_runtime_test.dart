@@ -452,4 +452,241 @@ void main() {
       expect(result['energy'], '100');
     });
   });
+
+  group('filterProtectedPatch（旁白字段本轮去重）', () {
+    test('模型对旁白已落地字段的 add 被过滤（20→30 而非 40）', () {
+      // 发送链路：旁白（烙印值+10）确定性落地 → 模型又输出 add +10
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {
+                  'type': 'number',
+                  'label': '烙印值',
+                  'min': 0,
+                  'max': 100,
+                },
+              },
+              'initialState': {'yw_brand': 20},
+            },
+          },
+        },
+      });
+      // 1) 旁白落地：20 → 30
+      final narrationChanges =
+          TrackerRuntime.parseNarrationStateChanges('（烙印值+10）', config);
+      var vars = Map<String, String>.from({'yw_brand': '20'});
+      for (final entry in narrationChanges.entries) {
+        final (value, isAdd) = entry.value;
+        final next = TrackerRuntime.reduce(
+          current: TrackerRuntime.initState(
+            config: config,
+            existing: vars,
+          ),
+          patch: StatePatch(
+            addValues: isAdd ? {entry.key: num.tryParse(value) ?? 0} : {},
+            setValues: isAdd ? {} : {entry.key: num.tryParse(value) ?? 0},
+          ),
+          config: config,
+        );
+        vars[entry.key] = '${next[entry.key]}';
+      }
+      expect(vars['yw_brand'], '30');
+
+      // 2) 模型再输出 add +10 → protectedKeys 过滤 → 仍为 30
+      final modelPatch = StatePatch(addValues: {'yw_brand': 10});
+      final filtered = TrackerRuntime.filterProtectedPatch(
+        modelPatch,
+        narrationChanges.keys.toSet(),
+      );
+      expect(filtered.addValues, isEmpty);
+      final next = TrackerRuntime.reduce(
+        current: TrackerRuntime.initState(config: config, existing: vars),
+        patch: filtered,
+        config: config,
+      );
+      expect('${next['yw_brand']}', '30');
+    });
+
+    test('模型对旁白已落地字段的 set 也被过滤', () {
+      final patch = StatePatch(setValues: {'energy': 10, 'mood': '愤怒'});
+      final filtered = TrackerRuntime.filterProtectedPatch(
+        patch,
+        {'energy'},
+      );
+      expect(filtered.setValues, {'mood': '愤怒'});
+    });
+
+    test('未受保护字段照常应用', () {
+      final patch = StatePatch(addValues: {'energy': 5}, setValues: {'time': '深夜'});
+      final filtered = TrackerRuntime.filterProtectedPatch(patch, {'mood'});
+      expect(filtered.addValues, {'energy': 5});
+      expect(filtered.setValues, {'time': '深夜'});
+    });
+
+    test('空保护集合原样返回（不产生新 patch 对象语义差异）', () {
+      final patch = StatePatch(addValues: {'energy': 5});
+      final filtered = TrackerRuntime.filterProtectedPatch(patch, {});
+      expect(filtered.addValues, {'energy': 5});
+    });
+
+    test('重生成：只解析 keys 不应用，模型 add 被过滤（状态不重复增加）', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'yw_brand': {
+                  'type': 'number',
+                  'label': '烙印值',
+                  'min': 0,
+                  'max': 100,
+                },
+              },
+              'initialState': {'yw_brand': 20},
+            },
+          },
+        },
+      });
+      // 重生成链路：原用户消息含旁白，变量表已含首次应用后的值（30）
+      const userTextForModel = '你继续（烙印值+10）';
+      final protectedKeys = TrackerRuntime.parseNarrationStateChanges(
+        userTextForModel,
+        config,
+      ).keys.toSet();
+      expect(protectedKeys, {'yw_brand'});
+      // 重生成时**不应用**旁白，只用于保护：模型 add +10 被过滤
+      final filtered = TrackerRuntime.filterProtectedPatch(
+        StatePatch(addValues: {'yw_brand': 10}),
+        protectedKeys,
+      );
+      final next = TrackerRuntime.reduce(
+        current: TrackerRuntime.initState(
+          config: config,
+          existing: {'yw_brand': '30'},
+        ),
+        patch: filtered,
+        config: config,
+      );
+      expect('${next['yw_brand']}', '30');
+    });
+  });
+
+  group('renderStatusPanelHtml（规范快照生成）', () {
+    Map<String, dynamic> cardWithTemplate(String template) => {
+          'data': {
+            'extensions': {
+              'regex_scripts': [
+                {
+                  'scriptName': 'StatusFallback',
+                  'replaceString': template,
+                },
+              ],
+              'tracker': {
+                'stateSchema': {
+                  'yw_brand': {
+                    'type': 'number',
+                    'label': '烙印值',
+                    'min': 0,
+                    'max': 100,
+                  },
+                },
+                'initialState': {'yw_brand': 20},
+              },
+            },
+          },
+        };
+
+    test('JSON-only 回复也能生成规范快照（变量表+模板）', () {
+      // 模型只输出 patch（无 HTML）——最终变量表已含新值 30
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: cardWithTemplate('<div>烙印值：{{getvar::yw_brand}}/100</div>'),
+        variables: {'yw_brand': '30'},
+      );
+      expect(html, isNotNull);
+      expect(html, contains('烙印值：30/100'));
+    });
+
+    test('快照数值=最终状态，patch 新值压过模型旧 HTML（30 而非 20）', () {
+      // 模型旧 HTML 面板写死 20，但 patch 已更新变量表为 30——
+      // 规范快照必须显示 30（快照来源是变量表，不是模型 HTML）
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: cardWithTemplate('<div>烙印值：{{getvar::yw_brand}}/100</div>'),
+        variables: {'yw_brand': '30'},
+      );
+      expect(html, contains('烙印值：30/100'));
+      expect(html, isNot(contains('烙印值：20/100')));
+    });
+
+    test('缺失字段回退 initialState', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: cardWithTemplate('<div>烙印值：{{getvar::yw_brand}}/100</div>'),
+        variables: {},
+      );
+      expect(html, contains('烙印值：20/100'));
+    });
+
+    test('富 HTML 模板直接渲染（不套 App 默认容器）', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: cardWithTemplate(
+          '<table><tr><td>烙印值</td><td>{{getvar::yw_brand}}/100</td></tr></table>',
+        ),
+        variables: {'yw_brand': '30'},
+      );
+      expect(html, contains('<table>'));
+      // 富 HTML 不包 status-panel 容器（尊重卡定义样式）
+      expect(html, isNot(contains('class="status-panel"')));
+    });
+
+    test('纯文本模板套默认容器', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: cardWithTemplate('烙印值：{{getvar::yw_brand}}/100'),
+        variables: {'yw_brand': '30'},
+      );
+      expect(html, contains('class="status-panel"'));
+      expect(html, contains('烙印值：30/100'));
+    });
+
+    test('getvar 大小写不敏感（{{GETVAR::key}} 也能填充）', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: cardWithTemplate('<div>烙印值：{{GETVAR::yw_brand}}/100</div>'),
+        variables: {'yw_brand': '30'},
+      );
+      expect(html, contains('烙印值：30/100'));
+    });
+
+    test('卡无模板时回退内置 chips 卡片', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: {
+          'data': {
+            'extensions': {
+              'tracker': {
+                'stateSchema': {
+                  'yw_brand': {
+                    'type': 'number',
+                    'label': '烙印值',
+                    'min': 0,
+                    'max': 100,
+                  },
+                },
+                'initialState': {'yw_brand': 20},
+              },
+            },
+          },
+        },
+        variables: {'yw_brand': '30'},
+      );
+      expect(html, contains('class="status-panel"'));
+      expect(html, contains('烙印值：30/100'));
+    });
+
+    test('卡未启用返回 null', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: {'data': {'extensions': {}}},
+        variables: {'yw_brand': '30'},
+      );
+      expect(html, isNull);
+    });
+  });
 }
