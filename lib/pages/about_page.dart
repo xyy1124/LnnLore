@@ -15,7 +15,7 @@ class AboutPage extends StatefulWidget {
 class _AboutPageState extends State<AboutPage> {
   // v56：源码提交与构建日期——每次发版同步更新（对应 github_upload.js
   // 的提交 hash），方便确认手机安装包对应的源码版本。
-  static const String _kSourceCommit = '02bcbe08';
+  static const String _kSourceCommit = 'e9eed763';
   static const String _kBuildDate = '2026-08-07';
 
   static final Uri _githubUri = Uri.parse(
