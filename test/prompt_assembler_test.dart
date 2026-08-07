@@ -167,6 +167,87 @@ void main() {
       expect(result.mergedText, isNot(contains('<!--panel-->')));
     });
 
+    test('v48: 真实默认预设 identifier=jailbreak 也注入角色卡 post-history 规则', () {
+      final result = PromptAssembler.build(
+        PromptAssemblyContext(
+          characterName: '艾琳',
+          characterCardData: _cardData(
+            postHistoryInstructions:
+                '每次回复末尾输出状态更新\n'
+                '<!--panel-->\n'
+                '<details><summary>面板</summary><div>烙印值：'
+                '{{getvar::yw_brand}}/100</div></details>\n'
+                '<!--/panel-->',
+          ),
+          userName: '林澈',
+          userSettingPrompt: '',
+          preset: Preset(
+            id: 'preset-1',
+            name: '测试预设',
+            updatedAt: DateTime(2026),
+            prompts: [
+              // 与 assets/Default.json 一致：Post-History 用 jailbreak
+              PresetPrompt(
+                identifier: 'jailbreak',
+                name: 'Post-History Instructions',
+                content: '预设 jailbreak 内容',
+              ),
+            ],
+          ),
+          selectedWorldBooks: const [],
+          chatMessages: const [],
+          currentInput: '',
+        ),
+      );
+
+      // 默认预设走 jailbreak：必须注入角色卡 post-history 规则（剥掉
+      // panel HTML 块），否则模型收不到状态变化指令
+      expect(result.mergedText, contains('预设 jailbreak 内容'));
+      expect(result.mergedText, contains('每次回复末尾输出状态更新'));
+      expect(result.mergedText, isNot(contains('<details>')));
+      expect(result.mergedText, isNot(contains('<!--panel-->')));
+    });
+
+    test('v48: 说明句含字面 <!--panel--> 时注入剥离不被误伤', () {
+      final result = PromptAssembler.build(
+        PromptAssemblyContext(
+          characterName: '艾琳',
+          characterCardData: _cardData(
+            postHistoryInstructions:
+                '必须保留 <!--panel--> 标记；数值用 {{getvar}} 引用，不得编造：\n'
+                '<!--panel-->\n'
+                '<details><summary>面板</summary><div>烙印值：'
+                '{{getvar::yw_brand}}/100</div></details>\n'
+                '<!--/panel-->\n'
+                '其余规则',
+          ),
+          userName: '林澈',
+          userSettingPrompt: '',
+          preset: Preset(
+            id: 'preset-1',
+            name: '测试预设',
+            updatedAt: DateTime(2026),
+            prompts: [
+              PresetPrompt(
+                identifier: 'jailbreak',
+                name: 'Post-History Instructions',
+                content: '',
+              ),
+            ],
+          ),
+          selectedWorldBooks: const [],
+          chatMessages: const [],
+          currentInput: '',
+        ),
+      );
+
+      // 说明句里的字面 <!--panel--> 不是独占整行 → 不应被当作边界删除；
+      // 真正的面板块（独占整行）被剥离
+      expect(result.mergedText, contains('必须保留 <!--panel--> 标记'));
+      expect(result.mergedText, contains('其余规则'));
+      expect(result.mergedText, isNot(contains('<details>')));
+    });
+
     test('resolves setvar getvar comment and trim macros in prompt order', () {
       final result = PromptAssembler.build(
         PromptAssemblyContext(

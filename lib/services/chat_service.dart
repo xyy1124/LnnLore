@@ -759,18 +759,10 @@ class ChatService {
 
     // 特别版：继续推进同样注入 tracker 状态指令（与普通发送一致），
     // 否则"继续"生成时模型收不到当前状态、也不会输出状态 patch。
+    // v48：独立最后一条 system 消息追加（避免被角色卡/预设内容冲淡）。
     final trackerState = _trackerStateText(character.cardJson, localVariables);
     if (trackerState != null && trackerState.trim().isNotEmpty) {
-      final systemIdx = requestMessages.indexWhere((m) => m['role'] == 'system');
-      if (systemIdx >= 0) {
-        requestMessages[systemIdx] = {
-          ...requestMessages[systemIdx],
-          'content':
-              '${requestMessages[systemIdx]['content']}\n\n$trackerState',
-        };
-      } else {
-        requestMessages.insert(0, {'role': 'system', 'content': trackerState});
-      }
+      requestMessages.add({'role': 'system', 'content': trackerState});
     }
 
     try {
@@ -1166,11 +1158,15 @@ class ChatService {
       return null;
     }
     // 输出指令：要求模型只输出结构化 patch（不再复制面板模板——模板
-    // 由 App 自己渲染，避免"状态栏未更新"等文案被模型带进面板）
+    // 由 App 自己渲染，避免"状态栏未更新"等文案被模型带进面板）。
+    // v48：要求**每轮都输出** patch——即使无状态变化也输出空 patch
+    // （{"patch":{"set":{},"add":{}}}），便于日志区分"模型判断没有
+    // 变化"和"模型完全没遵守协议"。
     return '$text\n\n'
-        '（状态变化时，请在本条回复末尾用 JSON 代码块输出结构化状态更新，'
-        '格式：\n```json\n{"patch":{"set":{},"add":{"字段key":数值变化}}}\n```\n'
-        'set 为直接赋值，add 为增减量；没有状态变化则不要输出。'
+        '（本条回复末尾必须用 JSON 代码块输出结构化状态更新，格式：\n'
+        '```json\n{"patch":{"set":{},"add":{"字段key":数值变化}}}\n```\n'
+        'set 为直接赋值，add 为增减量。状态有变化就如实输出；'
+        '没有变化也必须输出空 patch（{"patch":{"set":{},"add":{}}}）。'
         '不要输出状态面板模板本身，面板由系统自动渲染。）';
   }
 
@@ -1238,22 +1234,15 @@ class ChatService {
         {'role': message.role, 'content': message.content},
     ];
 
-    // 特别版：状态注入——把当前状态追加到 system 段末尾
+    // 特别版：状态注入——作为**独立的最后一条 system 消息**追加到
+    // 请求末尾（v48 修复：之前追加到第一条 system，后面大量角色卡/
+    // 预设内容会冲淡状态指令，模型容易漏输出 patch）。
+    // 状态指令紧跟用户消息/对话之后，模型生成时最先看到。
     if (trackerStateText != null && trackerStateText.trim().isNotEmpty) {
-      final systemIdx = requestMessages.indexWhere(
-        (m) => m['role'] == 'system',
-      );
-      if (systemIdx >= 0) {
-        requestMessages[systemIdx] = {
-          ...requestMessages[systemIdx],
-          'content': '${requestMessages[systemIdx]['content']}\n\n$trackerStateText',
-        };
-      } else {
-        requestMessages.insert(
-          0,
-          {'role': 'system', 'content': trackerStateText},
-        );
-      }
+      requestMessages.add({
+        'role': 'system',
+        'content': trackerStateText,
+      });
     }
 
     return _createCompletionFromMessages(

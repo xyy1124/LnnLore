@@ -81,6 +81,16 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.48',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】角色卡状态指令真正送达模型：默认预设（assets/Default.json）里 Post-History 的 identifier 是 `jailbreak` 而非 `post_history_instructions`——v47 只改了后者、默认路径下角色卡规则仍然没发出去（"状态不更新"主因）。v48 两个 case 都合并注入角色卡 post_history_instructions（预设文本在前、卡规则在后）',
+                    '【特别版】状态指令改为独立最后一条 system 消息：不再追加到第一条 system（后面大量角色卡/预设内容会冲淡指令）；并要求模型**每轮都输出 patch**（无变化也输出空 patch {"patch":{"set":{},"add":{}}}），日志可区分"模型判断无变化"与"模型没遵守协议"',
+                    '【特别版】面板提取边界修复：`<!--panel-->` 标记必须**独占整行**才算面板边界（原非贪婪正则把说明句里提到的字面 `<!--panel-->` 当起点，把"标记；数值用…"说明尾巴截进模板）；提取与提示词剥离共用同一解析器',
+                    '【特别版】面板 summary 清洗修复：删除整个 `<summary>…</summary>` 元素（含标题文字）——原只删标签导致"🧡 母猪教·教廷状态面板"等标题变成普通正文显示在面板外',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.47',
                   date: '2026-08-07',
                   changes: [

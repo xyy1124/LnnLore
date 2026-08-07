@@ -754,6 +754,32 @@ void main() {
       expect(template, contains('{{getvar::yw_brand}}'));
     });
 
+    test('v48: 说明句含字面 <!--panel--> 时不误当面板起点', () {
+      // 真实卡结构：说明句"提到" <!--panel--> 标记（嵌在句中，非独占
+      // 整行），随后才是真正的面板块——提取必须跳过假标记
+      final phi = '必须保留 <!--panel--> 标记；数值用 {{getvar}} 引用，'
+          '不得编造）：\n'
+          '<!--panel-->\n$panelHtml\n<!--/panel-->';
+      final template = TrackerRuntime.postHistoryPanelTemplate(
+        cardWithPostHistory(phi),
+      );
+      expect(template, isNotNull);
+      // 模板只能是从真面板开始的 HTML，不能包含说明句尾巴
+      expect(template, isNot(contains('不得编造')));
+      expect(template, contains('{{getvar::yw_brand}}'));
+    });
+
+    test('v48: stripPanelTemplates 与提取共用独占整行边界', () {
+      final phi = '必须保留 <!--panel--> 标记；数值用 {{getvar}} 引用）：\n'
+          '<!--panel-->\n$panelHtml\n<!--/panel-->\n'
+          '其余规则';
+      final stripped = TrackerRuntime.stripPanelTemplates(phi);
+      // 说明句里的字面标记保留（非独占整行），真面板块被删
+      expect(stripped, contains('必须保留 <!--panel--> 标记'));
+      expect(stripped, isNot(contains('<details>')));
+      expect(stripped, contains('其余规则'));
+    });
+
     test('renderStatusPanelHtml 优先用 post_history_instructions 的 HTML 模板', () {
       final card = cardWithPostHistory(
         '【状态栏三件套】\n'

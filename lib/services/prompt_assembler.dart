@@ -7,6 +7,7 @@ import '../models/preset.dart';
 import '../models/world_book.dart';
 import 'chat_memory_service.dart';
 import 'chat_variable_service.dart';
+import 'tracker_runtime.dart';
 
 class PromptAssembler {
   const PromptAssembler._();
@@ -282,24 +283,30 @@ class PromptAssembler {
       case 'longTermMemory':
         return ChatMemoryService.formatMemoryContext(context.memoryContext);
       case 'main':
-      case 'jailbreak':
         return prompt.content;
+      case 'jailbreak':
       case 'post_history_instructions':
         // 特别版：角色卡 post_history_instructions 必须真正注入模型——
         // 否则卡里的状态面板指令/字段变化规则模型完全收不到（"状态
-        // 永远不更新"根因之一）。预设内容与角色卡内容合并：
+        // 永远不更新"根因之一）。
+        // ⚠️ 真实默认预设（assets/Default.json）里 Post-History 的
+        //    identifier 是 `jailbreak` 而不是 `post_history_instructions`，
+        //    所以两个 case 都必须合并角色卡内容，否则默认预设下
+        //    角色卡规则仍然发不出去。
         // 预设文本在前（用户自定义的 jailbreak 风格指令），角色卡内容
-        // 在后（卡的强制输出规则）。注意：<!--panel--> HTML 模板块在
-        // 注入前由 [stripPanelTemplates] 移除——App 按最终状态自己渲染
-        // 面板，模型只负责输出 JSON patch（避免"输出 HTML 面板"与
-        // "只输出 JSON patch"两条指令冲突）。
+        // 在后（卡的强制输出规则）。<!--panel--> HTML 模板块在注入前
+        // 剥离——App 按最终状态自己渲染面板，模型只负责输出 JSON
+        // patch（避免"输出 HTML 面板"与"只输出 JSON patch"两条指令
+        // 冲突）。剥离与模板提取共用同一解析器（独占整行标记）。
         final presetText = prompt.content.trim();
         final cardText =
             (cardData['post_history_instructions'] as String? ?? '').trim();
         return [
           if (presetText.isNotEmpty) presetText,
           if (cardText.isNotEmpty)
-            stripPanelTemplates(_replaceVariables(cardText, context)),
+            TrackerRuntime.stripPanelTemplates(
+              _replaceVariables(cardText, context),
+            ),
         ].join('\n\n');
       default:
         return prompt.content;
@@ -324,24 +331,11 @@ class PromptAssembler {
     ].join('\n');
   }
 
-  /// 特别版：从 post_history_instructions 文本中移除 `<!--panel-->` 之间的
-  /// HTML 模板块（连同标记本身）。
-  ///
-  /// 角色卡的 post_history_instructions 里通常包含"必须输出 HTML 状态面板"
-  /// 的指令与模板——但 App 已改为"模型只输出 JSON patch、面板由 App 按
-  /// 最终状态渲染"，若把 HTML 模板原样发给模型，模型会同时收到
-  /// "输出 HTML 面板"与"只输出 JSON patch"两条冲突指令，服从不稳定。
-  /// 注入模型前剥掉模板块（保留 setvar/字段变化等文字规则），模板本身
-  /// 由 App 侧 [TrackerRuntime.postHistoryPanelTemplate] 读取用于渲染。
-  static String stripPanelTemplates(String text) {
-    return text.replaceAll(
-      RegExp(
-        r'<!--\s*panel\s*-->[\s\S]*?<!--\s*/panel\s*-->',
-        caseSensitive: false,
-      ),
-      '',
-    );
-  }
+  /// 特别版：从文本中剥离 `<!--panel-->...<!--/panel-->` 面板块。
+  /// 公共实现见 [TrackerRuntime.stripPanelTemplates]（与模板提取共用
+  /// 独占整行标记解析器）。
+  static String stripPanelTemplates(String text) =>
+      TrackerRuntime.stripPanelTemplates(text);
 
   static String _formatChatHistory(
     PromptAssemblyContext context,

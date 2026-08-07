@@ -545,17 +545,25 @@ class _MessageBubbleState extends State<MessageBubble> {
     // 统一清洗：模型可能按卡模板"原样输出"（输出指令要求），把
     // {{match}} 与"状态栏未更新"前缀也带进面板——显示层必须剥掉，
     // 否则所有卡都顶着"状态栏未更新"+{{match}} 原文，渲染很奇怪。
-    // 同时剥掉 details/summary 折叠标签（HtmlWidget 对 details 折叠
-    // 渲染不可靠），面板内容直接展开显示。
+    // summary 整个元素（含标题文字）删除——只删标签会把标题变成
+    // 普通正文显示在面板外（v47 截图问题）；details 标签剥掉让面板
+    // 内容直接展开显示。
     html = html
         .replaceAll('{{match}}', '')
         .replaceAll('状态栏未更新，当前：', '')
         .replaceAll('状态栏未更新，当前:', '')
         .replaceAll('状态栏未更新', '')
-        .replaceAll(RegExp(r'<details[^>]*>', caseSensitive: false), '')
-        .replaceAll(RegExp(r'</details>', caseSensitive: false), '')
-        .replaceAll(RegExp(r'<summary[^>]*>', caseSensitive: false), '')
-        .replaceAll(RegExp(r'</summary>', caseSensitive: false), '')
+        .replaceAll(
+          RegExp(
+            r'<summary\b[^>]*>[\s\S]*?</summary>',
+            caseSensitive: false,
+          ),
+          '',
+        )
+        .replaceAll(
+          RegExp(r'</?details\b[^>]*>', caseSensitive: false),
+          '',
+        )
         .trim();
     if (html.isEmpty) {
       return null;

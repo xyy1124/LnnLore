@@ -399,19 +399,30 @@ class TrackerRuntime {
         '📊 状态</span>${chips.join('')}</div>';
   }
 
-  /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`、剥
-  /// `<details>/<summary>` 折叠标签（HtmlWidget 对 details 折叠渲染
-  /// 不可靠，面板内容直接展开显示）。
+  /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`。
+  ///
+  /// `<details>/<summary>` 折叠处理：只删标签会留下 summary 标题文字
+  /// 变成普通正文显示在面板外（v47 截图问题）——这里**删除整个
+  /// summary 元素（含标题内容）**，并把 details 标签剥掉让面板内容
+  /// 直接展开。若后续要支持真实折叠，可保留 details/summary 让
+  /// HtmlWidget 原生渲染（0.17.2 支持），但需在显示层同步调整。
   static String _cleanStatusPanelText(String html) {
     return html
         .replaceAll('{{match}}', '')
         .replaceAll('状态栏未更新，当前：', '')
         .replaceAll('状态栏未更新，当前:', '')
         .replaceAll('状态栏未更新', '')
-        .replaceAll(RegExp(r'<details[^>]*>', caseSensitive: false), '')
-        .replaceAll(RegExp(r'</details>', caseSensitive: false), '')
-        .replaceAll(RegExp(r'<summary[^>]*>', caseSensitive: false), '')
-        .replaceAll(RegExp(r'</summary>', caseSensitive: false), '');
+        .replaceAll(
+          RegExp(
+            r'<summary\b[^>]*>[\s\S]*?</summary>',
+            caseSensitive: false,
+          ),
+          '',
+        )
+        .replaceAll(
+          RegExp(r'</?details\b[^>]*>', caseSensitive: false),
+          '',
+        );
   }
 
   /// 从卡 `data.extensions.regex_scripts` 取 StatusFallback 的 replaceString
@@ -452,12 +463,27 @@ class TrackerRuntime {
     return null;
   }
 
+  /// 状态面板块解析：匹配 `<!--panel-->` 与 `<!--/panel-->` **独占整行**
+  /// 的块（multiLine + 行首行尾锚点）。
+  ///
+  /// 角色卡说明句里可能"提到"字面 `<!--panel-->`（如"必须保留
+  /// <!--panel--> 标记；数值用 {{getvar}} 引用…"）——若用非独占行的
+  /// 非贪婪正则，会把这个假标记当面板起点，把说明尾巴一起截进模板。
+  /// 独占整行要求让假标记（嵌在句中）不会被匹配为边界。
+  static final RegExp _panelBlockPattern = RegExp(
+    r'^[ \t]*<!--\s*panel\s*-->[ \t]*\r?\n'
+    r'([\s\S]*?)'
+    r'^[ \t]*<!--\s*/panel\s*-->[ \t]*$',
+    caseSensitive: false,
+    multiLine: true,
+  );
+
   /// 从角色卡 `data.post_history_instructions` 提取 `<!--panel-->` 之间的
   /// **HTML 状态面板模板**（各卡真正定义的外观：`<details>/<summary>` +
   /// 深色 `<div style=...>` 卡片 + `{{getvar::key}}` 引用）。
   ///
   /// 只接受同时满足以下条件的块：
-  /// - 有 `<!--panel-->...<!--/panel-->` 标记；
+  /// - `<!--panel-->` 与 `<!--/panel-->` 各独占一整行；
   /// - 含 HTML 标签（div/span/details/summary）；
   /// - 含 `{{getvar::key}}` 占位。
   /// 不满足则返回 null（避免把 post_history_instructions 里的其他说明
@@ -466,12 +492,7 @@ class TrackerRuntime {
     final data = CharacterCardExtensionsReader.cardData(cardJson);
     final source = data?['post_history_instructions']?.toString() ?? '';
 
-    final matches = RegExp(
-      r'<!--\s*panel\s*-->([\s\S]*?)<!--\s*/panel\s*-->',
-      caseSensitive: false,
-    ).allMatches(source);
-
-    for (final match in matches) {
+    for (final match in _panelBlockPattern.allMatches(source)) {
       final candidate = match.group(1)?.trim() ?? '';
       final hasGetVar = RegExp(
         r'\{\{\s*getvar::[^}]+\}\}',
@@ -486,6 +507,14 @@ class TrackerRuntime {
       }
     }
     return null;
+  }
+
+  /// 从文本中剥离 `<!--panel-->...<!--/panel-->` 面板块（连同标记）。
+  /// 与 [postHistoryPanelTemplate] 共用 [_panelBlockPattern]（独占整行
+  /// 标记），保证提取与清理对面板边界的判定一致——说明句里嵌着的
+  /// 字面 `<!--panel-->` 不会被误删。
+  static String stripPanelTemplates(String text) {
+    return text.replaceAll(_panelBlockPattern, '');
   }
 
   /// 用卡的 initialState 初始化状态（仅补缺失字段，不覆盖已有值）。
