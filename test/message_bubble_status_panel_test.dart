@@ -25,11 +25,16 @@ void main() {
 
   Map<String, dynamic> cardWithTemplate(String template, String schemaKey) => {
         'data': {
+          'name': '测试角色',
+          // v47：HTML 面板模板定义在 post_history_instructions 的
+          // <!--panel--> 段（renderStatusPanelHtml 优先读取它）
+          'post_history_instructions':
+              '必须输出状态面板：\n<!--panel-->\n$template\n<!--/panel-->',
           'extensions': {
             'regex_scripts': [
               {
                 'scriptName': 'StatusFallback',
-                'replaceString': template,
+                'replaceString': '文本兜底：{{getvar::$schemaKey}}',
               },
             ],
             'tracker': {
@@ -77,7 +82,7 @@ void main() {
     );
   }
 
-  testWidgets('v2 规范快照优先，v1 旧模型 HTML 被忽略', (tester) async {
+  testWidgets('v3 结构化状态快照优先，v2/v1 旧 HTML 快照被忽略', (tester) async {
     final card = character(
       id: 'A',
       name: '角色A',
@@ -89,10 +94,12 @@ void main() {
         message: ChatMessage(id: 'm1', text: '角色回复正文', isMe: false),
         character: card,
         sessionVariables: {
-          // v1 旧模型 HTML 快照（写死旧值 20）——v45 起必须被忽略
+          // v1/v2 旧 HTML 快照（写死旧值 20/25）——v47 起必须被忽略
           '__msg_status_html__:m1': '<div>烙印值：20/100</div>',
-          // v2 规范快照（patch 应用后的最终值 35）——应优先显示
-          '__msg_status_html_v2__:m1': '<div>烙印值：35/100</div>',
+          '__msg_status_html_v2__:m1': '<div>烙印值：25/100</div>',
+          // v3 结构化状态（patch 应用后的最终值 35）——应优先显示，
+          // 由气泡用角色卡模板动态渲染
+          '__msg_tracker_state_v3__:m1': '{"yw_brand":"35"}',
         },
       ),
     );
@@ -105,6 +112,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('20/100', findRichText: true), findsNothing);
+    expect(find.textContaining('25/100', findRichText: true), findsNothing);
   });
 
   testWidgets('无快照时运行时生成面板用 resolvedSpeaker 模板（群聊）', (tester) async {

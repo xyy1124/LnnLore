@@ -81,6 +81,16 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.47',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】状态面板真正按角色卡 HTML 模板渲染：每张卡的深色 HTML 面板（`<details><summary>…</summary><div style=…>` 卡片）定义在 `post_history_instructions` 的 `<!--panel-->` 段——v47 新增提取（优先级 tracker.template → post_history_instructions 的 panel HTML → StatusFallback 纯文本 → 内置），各卡显示各自的面板样式（不再统一套紫色文字容器"每张卡样式都一样"）',
+                    '【特别版】角色卡 post_history_instructions 真正注入模型：之前该字段被列为 unused、模型完全收不到卡的状态面板/字段变化指令（"状态永远不更新"根因）——v47 预设与角色卡内容合并注入；`<!--panel-->` HTML 模板块注入前剥离（App 按最终状态自己渲染面板，模型只输出 JSON patch，避免"输出 HTML 面板"与"只输出 JSON patch"指令冲突）',
+                    '【特别版】消息快照改为 v3 结构化状态 JSON（`__msg_tracker_state_v3__:<id>`）：只保存该消息时刻的 tracker 状态值，不再保存预渲染 HTML——显示时用消息对应角色卡 + 当前 HTML 模板动态渲染（样式永远与卡一致、改模板无需迁移历史数据）；旧 v2/v1 HTML 快照与全局 `__special_status_html__` 全部忽略',
+                    '【特别版】TRACKER_FLOW 排查日志：旁白（烙印值+10）应用链路每步打印（tracker 是否解析/正则是否匹配/写入前后值），装日志包后 adb logcat 过滤 [TRACKER_FLOW] 即可定位"数值不更新"断在哪一环',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.46',
                   date: '2026-08-07',
                   changes: [

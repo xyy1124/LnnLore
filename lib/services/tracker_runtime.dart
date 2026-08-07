@@ -325,12 +325,17 @@ class TrackerRuntime {
       return init == null ? null : '$init';
     }
 
-    // ① 卡 StatusFallback 模板（卡内定义的状态栏样子）。getvar 检测
-    // 大小写不敏感（与解析正则一致，模板写 {{GETVAR::k}} 也能命中）。
-    // 注意：模板渲染不依赖 tracker 是否解析成功——即使 tracker 声明
-    // 缺失/畸形，只要卡有 StatusFallback 模板也按模板渲染（避免所有
-    // 卡静默降级成同一个内置面板"每张卡样式都一样"）。
-    final template = statusFallbackTemplate(cardJson);
+    // ① 状态面板模板（卡内定义的状态栏样子），优先级：
+    //    tracker.template → post_history_instructions 的 <!--panel--> HTML
+    //    → StatusFallback.replaceString（纯文本兜底）。
+    // 7 张卡的 HTML 面板都定义在 post_history_instructions 里
+    // （<details><summary>…</summary><div style=…> 深色卡片），
+    // StatusFallback 只是纯文本行——若只读 StatusFallback，所有卡
+    // 都会退化成同一个紫色文字容器（"每张卡样式都一样"根因）。
+    // getvar 检测大小写不敏感；模板渲染不依赖 tracker 是否解析成功。
+    final template = config.template ??
+        postHistoryPanelTemplate(cardJson) ??
+        statusFallbackTemplate(cardJson);
     if (template != null &&
         RegExp(r'getvar', caseSensitive: false).hasMatch(template)) {
       var rendered = template
@@ -442,6 +447,42 @@ class TrackerRuntime {
           .toString();
       if (replacement.trim().isNotEmpty) {
         return replacement;
+      }
+    }
+    return null;
+  }
+
+  /// 从角色卡 `data.post_history_instructions` 提取 `<!--panel-->` 之间的
+  /// **HTML 状态面板模板**（各卡真正定义的外观：`<details>/<summary>` +
+  /// 深色 `<div style=...>` 卡片 + `{{getvar::key}}` 引用）。
+  ///
+  /// 只接受同时满足以下条件的块：
+  /// - 有 `<!--panel-->...<!--/panel-->` 标记；
+  /// - 含 HTML 标签（div/span/details/summary）；
+  /// - 含 `{{getvar::key}}` 占位。
+  /// 不满足则返回 null（避免把 post_history_instructions 里的其他说明
+  /// 文本当模板）。找不到时回退 StatusFallback 纯文本模板。
+  static String? postHistoryPanelTemplate(Map<String, dynamic>? cardJson) {
+    final data = CharacterCardExtensionsReader.cardData(cardJson);
+    final source = data?['post_history_instructions']?.toString() ?? '';
+
+    final matches = RegExp(
+      r'<!--\s*panel\s*-->([\s\S]*?)<!--\s*/panel\s*-->',
+      caseSensitive: false,
+    ).allMatches(source);
+
+    for (final match in matches) {
+      final candidate = match.group(1)?.trim() ?? '';
+      final hasGetVar = RegExp(
+        r'\{\{\s*getvar::[^}]+\}\}',
+        caseSensitive: false,
+      ).hasMatch(candidate);
+      final hasHtml = RegExp(
+        r'<(?:div|span|details|summary)\b',
+        caseSensitive: false,
+      ).hasMatch(candidate);
+      if (candidate.isNotEmpty && hasGetVar && hasHtml) {
+        return candidate;
       }
     }
     return null;

@@ -95,6 +95,11 @@ void main() {
                   name: 'Jailbreak',
                   content: '预设 jailbreak',
                 ),
+                PresetPrompt(
+                  identifier: 'post_history_instructions',
+                  name: 'Post History',
+                  content: '预设 history',
+                ),
               ],
             ),
             selectedWorldBooks: const [],
@@ -106,13 +111,61 @@ void main() {
         expect(result.mergedText, contains('预设 main'));
         expect(result.mergedText, contains('预设 jailbreak'));
         expect(result.mergedText, isNot(contains('角色卡 main')));
-        expect(result.mergedText, isNot(contains('角色卡 history')));
+        // v47：post_history_instructions 真正注入——预设与角色卡内容合并
+        expect(result.mergedText, contains('预设 history'));
+        expect(result.mergedText, contains('角色卡 history'));
+        // system_prompt 仍保留为 unused override；post_history 不再列入
         expect(
           result.unusedCharacterOverrides.map((item) => item.field),
-          containsAll(['system_prompt', 'post_history_instructions']),
+          contains('system_prompt'),
+        );
+        expect(
+          result.unusedCharacterOverrides.map((item) => item.field),
+          isNot(contains('post_history_instructions')),
         );
       },
     );
+
+    test('v47: post_history_instructions 注入时剥离 <!--panel--> HTML 模板', () {
+      final result = PromptAssembler.build(
+        PromptAssemblyContext(
+          characterName: '艾琳',
+          characterCardData: _cardData(
+            postHistoryInstructions:
+                '每次回复末尾输出状态面板\n'
+                '<!--panel-->\n'
+                '<details><summary>面板</summary><div>烙印值：'
+                '{{getvar::yw_brand}}/100</div></details>\n'
+                '<!--/panel-->\n'
+                '数值必须与剧情一致',
+          ),
+          userName: '林澈',
+          userSettingPrompt: '',
+          preset: Preset(
+            id: 'preset-1',
+            name: '测试预设',
+            updatedAt: DateTime(2026),
+            prompts: [
+              PresetPrompt(
+                identifier: 'post_history_instructions',
+                name: 'Post History',
+                content: '',
+              ),
+            ],
+          ),
+          selectedWorldBooks: const [],
+          chatMessages: const [],
+          currentInput: '',
+        ),
+      );
+
+      // 面板 HTML 模板被剥离（避免"输出 HTML 面板"与"只输出 JSON patch"
+      // 冲突），文字规则保留
+      expect(result.mergedText, contains('每次回复末尾输出状态面板'));
+      expect(result.mergedText, contains('数值必须与剧情一致'));
+      expect(result.mergedText, isNot(contains('<details>')));
+      expect(result.mergedText, isNot(contains('<!--panel-->')));
+    });
 
     test('resolves setvar getvar comment and trim macros in prompt order', () {
       final result = PromptAssembler.build(

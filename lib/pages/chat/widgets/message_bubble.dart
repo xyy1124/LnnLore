@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -505,34 +506,36 @@ class _MessageBubbleState extends State<MessageBubble> {
   }
 
   /// 本条消息的状态面板：两路兜底——
-  /// ①消息级规范快照（`__msg_status_html_v2__:<id>`，App 在该消息处理
-  /// 完成后用最终变量表 + 角色卡模板生成的规范 HTML；数值=消息时刻
-  /// 状态，不随后续轮次漂移）
+  /// ①消息级结构化状态快照（`__msg_tracker_state_v3__:<id>`，该消息
+  /// 处理完成时的 tracker 状态 JSON）→ 用**当前角色卡模板**动态渲染
+  /// （模板来自 post_history_instructions 的 <!--panel--> HTML，样式
+  /// 始终与卡一致；数值=消息时刻状态，不随后续轮次漂移）
   /// ②运行时生成面板（卡的 tracker 声明 + 当前变量表 + **initialState
   /// 兜底**，新会话/开场/旧会话无快照消息也能显示）
   ///
-  /// 注意：不再用全局旧 HTML（`__special_status_html__`）兜底，也不再
-  /// 读取 v1 模型 HTML 快照（`__msg_status_html__:<id>`，模型原始 HTML，
-  /// 写死的旧值会压过正确状态）——旧 v1 快照一律忽略，走运行时生成。
+  /// 注意：不再读取任何预渲染 HTML 快照——v3 只存状态值不存 HTML，
+  /// 旧版 v2（`__msg_status_html_v2__:<id>`）/v1（`__msg_status_html__:<id>`）
+  /// /全局（`__special_status_html__`）快照一律忽略（v2 含错误纯文本模板
+  /// 生成的统一面板，会掩盖新实现）。
   Widget? _buildMessageStatusPanel(BuildContext context) {
     if (widget.message.isMe) {
       return null;
     }
     // 注意：draft/未落库消息 id 可能为 null——不能因此拦截（否则
     // 新会话开场消息下无状态栏），id 缺失时跳过消息级快照即可。
-    String? rawHtml;
+    String? html;
     if (widget.message.id != null) {
-      rawHtml =
-          widget.sessionVariables[ChatService.messageStatusHtmlKey(
-            widget.message.id!,
-          )];
+      final rawState = widget.sessionVariables[
+          ChatService.messageStatusHtmlKey(widget.message.id!)];
+      final decoded = rawState == null ? null : _decodeStatusState(rawState);
+      if (decoded != null && decoded.isNotEmpty) {
+        // v3 结构化状态：用消息时刻的状态值 + 当前角色卡模板动态渲染
+        html = TrackerRuntime.renderStatusPanelHtml(
+          cardJson: _messageCharacter?.cardJson,
+          variables: decoded,
+        );
+      }
     }
-    var html = rawHtml == null
-        ? null
-        : ChatVariableService.resolveGetVars(
-            rawHtml,
-            widget.sessionVariables,
-          );
     if (html == null || html.trim().isEmpty) {
       html = _generateStatusPanelHtml();
     }
@@ -561,6 +564,23 @@ class _MessageBubbleState extends State<MessageBubble> {
       padding: const EdgeInsets.only(top: 4),
       child: SpecialStatusPanel(html: html),
     );
+  }
+
+  /// 解析 v3 结构化状态快照 JSON（`{"yw_brand":"30",...}`）。
+  /// 解析失败返回 null（走运行时生成兜底）。
+  static Map<String, String>? _decodeStatusState(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        return null;
+      }
+      return decoded.map((key, value) => MapEntry(
+            key.toString(),
+            value.toString(),
+          ));
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 从卡 `data.extensions.regex_scripts` 取 StatusFallback 的 replaceString

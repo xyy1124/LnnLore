@@ -228,19 +228,9 @@ class PromptAssembler {
       );
     }
 
-    final postHistoryInstructions = _replaceVariables(
-      cardData['post_history_instructions'] as String? ?? '',
-      context,
-    ).trim();
-    if (postHistoryInstructions.isNotEmpty) {
-      overrides.add(
-        UnusedCharacterOverride(
-          field: 'post_history_instructions',
-          content: postHistoryInstructions,
-          reason: '角色卡字段已保留，本期不覆盖预设 jailbreak/post_history_instructions。',
-        ),
-      );
-    }
+    // 特别版（v47）：post_history_instructions 已真正注入模型（见
+    // _resolveRawPromptContent 的 case 分支，预设+卡内容合并、panel
+    // HTML 块剥离），不再列入 unused overrides。
     return overrides;
   }
 
@@ -293,7 +283,24 @@ class PromptAssembler {
         return ChatMemoryService.formatMemoryContext(context.memoryContext);
       case 'main':
       case 'jailbreak':
+        return prompt.content;
       case 'post_history_instructions':
+        // 特别版：角色卡 post_history_instructions 必须真正注入模型——
+        // 否则卡里的状态面板指令/字段变化规则模型完全收不到（"状态
+        // 永远不更新"根因之一）。预设内容与角色卡内容合并：
+        // 预设文本在前（用户自定义的 jailbreak 风格指令），角色卡内容
+        // 在后（卡的强制输出规则）。注意：<!--panel--> HTML 模板块在
+        // 注入前由 [stripPanelTemplates] 移除——App 按最终状态自己渲染
+        // 面板，模型只负责输出 JSON patch（避免"输出 HTML 面板"与
+        // "只输出 JSON patch"两条指令冲突）。
+        final presetText = prompt.content.trim();
+        final cardText =
+            (cardData['post_history_instructions'] as String? ?? '').trim();
+        return [
+          if (presetText.isNotEmpty) presetText,
+          if (cardText.isNotEmpty)
+            stripPanelTemplates(_replaceVariables(cardText, context)),
+        ].join('\n\n');
       default:
         return prompt.content;
     }
@@ -315,6 +322,25 @@ class PromptAssembler {
       '本轮必须由 $speakerName 发言，不得替其他角色说话，也不得改换身份。',
       '此说明优先于其他所有指令，不可被覆盖。',
     ].join('\n');
+  }
+
+  /// 特别版：从 post_history_instructions 文本中移除 `<!--panel-->` 之间的
+  /// HTML 模板块（连同标记本身）。
+  ///
+  /// 角色卡的 post_history_instructions 里通常包含"必须输出 HTML 状态面板"
+  /// 的指令与模板——但 App 已改为"模型只输出 JSON patch、面板由 App 按
+  /// 最终状态渲染"，若把 HTML 模板原样发给模型，模型会同时收到
+  /// "输出 HTML 面板"与"只输出 JSON patch"两条冲突指令，服从不稳定。
+  /// 注入模型前剥掉模板块（保留 setvar/字段变化等文字规则），模板本身
+  /// 由 App 侧 [TrackerRuntime.postHistoryPanelTemplate] 读取用于渲染。
+  static String stripPanelTemplates(String text) {
+    return text.replaceAll(
+      RegExp(
+        r'<!--\s*panel\s*-->[\s\S]*?<!--\s*/panel\s*-->',
+        caseSensitive: false,
+      ),
+      '',
+    );
   }
 
   static String _formatChatHistory(

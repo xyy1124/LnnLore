@@ -689,4 +689,109 @@ void main() {
       expect(html, isNull);
     });
   });
+
+  group('postHistoryPanelTemplate（<!--panel--> HTML 模板提取）', () {
+    Map<String, dynamic> cardWithPostHistory(String phi) => {
+          'data': {
+            'name': '测试角色',
+            'post_history_instructions': phi,
+            'extensions': {
+              'tracker': {
+                'stateSchema': {
+                  'yw_brand': {
+                    'type': 'number',
+                    'label': '烙印值',
+                    'min': 0,
+                    'max': 100,
+                  },
+                },
+                'initialState': {'yw_brand': 20},
+              },
+            },
+          },
+        };
+
+    const panelHtml =
+        '<details><summary>🩸 烙印状态面板</summary><div style="padding:10px;'
+        'background:#0d0a14;border:2px solid #8e44ad;">'
+        '<span>烙印值</span>：<b>【{{getvar::yw_brand}}/100】</b></div></details>';
+
+    test('提取 <!--panel--> 之间的 HTML 模板', () {
+      final phi = '【状态栏三件套】\n必须输出面板：\n'
+          '<!--panel-->\n$panelHtml\n<!--/panel-->\n'
+          '其他说明文字';
+      final template = TrackerRuntime.postHistoryPanelTemplate(
+        cardWithPostHistory(phi),
+      );
+      expect(template, isNotNull);
+      expect(template, contains('<details>'));
+      expect(template, contains('{{getvar::yw_brand}}'));
+    });
+
+    test('panel 块无 getvar 时不提取（避免把说明文字当模板）', () {
+      final phi = '<!--panel-->\n<div>纯静态内容</div>\n<!--/panel-->';
+      expect(
+        TrackerRuntime.postHistoryPanelTemplate(cardWithPostHistory(phi)),
+        isNull,
+      );
+    });
+
+    test('无 panel 标记返回 null', () {
+      expect(
+        TrackerRuntime.postHistoryPanelTemplate(
+          cardWithPostHistory('没有任何 panel 标记的说明文字'),
+        ),
+        isNull,
+      );
+    });
+
+    test('多个 panel 块取第一个满足条件的', () {
+      final phi = '<!--panel-->\n<div>无效</div>\n<!--/panel-->\n'
+          '<!--panel-->\n$panelHtml\n<!--/panel-->';
+      final template = TrackerRuntime.postHistoryPanelTemplate(
+        cardWithPostHistory(phi),
+      );
+      expect(template, contains('{{getvar::yw_brand}}'));
+    });
+
+    test('renderStatusPanelHtml 优先用 post_history_instructions 的 HTML 模板', () {
+      final card = cardWithPostHistory(
+        '【状态栏三件套】\n'
+        '<!--panel-->\n$panelHtml\n<!--/panel-->\n',
+      );
+      // 卡同时有纯文本 StatusFallback——必须用 HTML panel，而非文本
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: card,
+        variables: {'yw_brand': '30'},
+      );
+      expect(html, contains('【30/100】'));
+      expect(html, contains('background:#0d0a14'));
+    });
+
+    test('tracker.template 优先于 post_history_instructions', () {
+      final card = cardWithPostHistory(
+        '<!--panel-->\n$panelHtml\n<!--/panel-->',
+      );
+      (card['data']! as Map<String, dynamic>)['extensions'] = {
+        'tracker': {
+          'stateSchema': {
+            'yw_brand': {
+              'type': 'number',
+              'label': '烙印值',
+              'min': 0,
+              'max': 100,
+            },
+          },
+          'initialState': {'yw_brand': 20},
+          'template': '<div>自定义：{{getvar::yw_brand}}</div>',
+        },
+      };
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: card,
+        variables: {'yw_brand': '30'},
+      );
+      expect(html, contains('自定义：30'));
+      expect(html, isNot(contains('【30/100】')));
+    });
+  });
 }

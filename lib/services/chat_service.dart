@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -132,10 +133,23 @@ class ChatService {
     // 旁白字段本轮去重：这些字段已确定性落地，模型再输出同字段 patch
     // 会被过滤（防止 20→旁白+10→模型add+10→40 的重复叠加）
     var narrationChanges = <String, (String, bool)>{};
+    // v47：TRACKER_FLOW 排查日志——一次确认旁白链路到底断在哪一环
+    // （tracker 未解析 / 正则没匹配 / SQLite 没写入 / 变量刷新没拿到 /
+    // 快照仍用旧值）。装带日志的包后 adb logcat 过滤 [TRACKER_FLOW]。
+    debugPrint(
+      '[TRACKER_FLOW] session=${activeSession.id} '
+      'card=${character.name} '
+      'trackerEnabled=${narrationConfig.isEnabled} '
+      'schemaKeys=${narrationConfig.stateSchema.keys} '
+      'input=${input.length > 40 ? input.substring(0, 40) : input}',
+    );
     if (narrationConfig.isEnabled && input.trim().isNotEmpty) {
       narrationChanges =
           TrackerRuntime.parseNarrationStateChanges(input, narrationConfig);
       if (narrationChanges.isNotEmpty) {
+        // before：应用前快照（供 TRACKER_FLOW 对比）
+        final beforeVariables = Map<String, String>.from(localVariables)
+          ..removeWhere((k, _) => k.startsWith('__'));
         final narrationVariables = Map<String, String>.from(localVariables);
         for (final entry in narrationChanges.entries) {
           final key = entry.key;
@@ -177,7 +191,19 @@ class ChatService {
         );
         localVariables = narrationVariables;
         debugPrint('[旁白] 应用状态修改: $narrationChanges');
+        debugPrint(
+          '[TRACKER_FLOW] narrationApplied=$narrationChanges '
+          'before=$beforeVariables '
+          'after=${Map<String, String>.from(narrationVariables)..removeWhere((k, _) => k.startsWith('__'))}',
+        );
+      } else {
+        debugPrint('[TRACKER_FLOW] 旁白正则未匹配（输入无（字段+/-/=/值）格式）');
       }
+    } else {
+      debugPrint(
+        '[TRACKER_FLOW] 旁白跳过: trackerEnabled=${narrationConfig.isEnabled} '
+        'inputEmpty=${input.trim().isEmpty}',
+      );
     }
 
     final normalizedModelText = modelText?.trim().isNotEmpty == true
@@ -1051,20 +1077,25 @@ class ChatService {
     return text;
   }
 
-  /// 消息级状态面板的变量表 key（按消息 id 关联，气泡内跟随渲染）。
-  /// v2：规范快照——由 App 用最终变量表 + 卡 StatusFallback 模板生成
-  /// （getvar 已填充为当时的具体值），不再保存模型原始 HTML。
-  /// v1（`__msg_status_html__:<id>`）是模型 HTML 快照，含写死的旧值，
-  /// 会压过正确状态，v45 起不再写入、显示层不再读取（旧数据忽略）。
+  /// 消息级状态快照的变量表 key（按消息 id 关联，气泡内跟随渲染）。
+  /// v3：结构化状态 JSON（`{"yw_brand":30,"yw_cloth":"完好",...}`）——
+  /// 只保存该消息时刻的**状态值**，不保存预渲染 HTML。显示时由气泡用
+  /// 消息对应角色卡 + post_history_instructions 的 HTML 模板动态渲染，
+  /// 好处：
+  /// - 样式始终来自当前角色卡模板（改模板提取规则无需迁移历史数据）；
+  /// - 数值保持消息当时的状态（历史消息不被最新状态污染）。
+  /// v2（`__msg_status_html_v2__:<id>`）与 v1（`__msg_status_html__:<id>`）
+  /// 是预渲染 HTML 快照（含错误纯文本模板生成的面板），v47 起不再写入、
+  /// 显示层不再读取（旧数据忽略）。
   static String messageStatusHtmlKey(String messageId) =>
-      '__msg_status_html_v2__:$messageId';
+      '__msg_tracker_state_v3__:$messageId';
 
-  /// 把本条消息的**规范状态快照**持久化到会话变量表：
-  /// 始终用该消息处理后的最终变量表 + 角色卡模板生成 HTML——
+  /// 把本条消息的**结构化状态快照**（v3）持久化到会话变量表：
+  /// 保存该消息处理后的最终 tracker 状态值（JSON），不保存 HTML——
   /// - 模型只输出 JSON patch（无 HTML）时也会生成快照（不再缺失）；
   /// - 快照数值 = 消息当时的最终状态，历史消息不会被后续轮次的最新
-  ///   状态污染（显示与消息时刻一致）。
-  /// 卡未启用/无字段可显示时不写入。
+  ///   状态污染；面板样式由显示层按当前卡模板动态生成。
+  /// 卡未启用/无 tracker 字段时不写入。
   Future<void> _persistMessageStatusHtml(
     String sessionId,
     String messageId,
@@ -1074,16 +1105,28 @@ class ChatService {
     if (finalVariables == null) {
       return;
     }
-    final html = TrackerRuntime.renderStatusPanelHtml(
-      cardJson: cardJson,
-      variables: finalVariables,
-    );
-    final value = html?.trim();
-    if (value == null || value.isEmpty) {
+    final config = TrackerConfig.fromCardJson(cardJson);
+    if (!config.isEnabled) {
+      return;
+    }
+    // 只保存 tracker 声明的字段（排除 __ 内部变量与无关变量）
+    final trackerKeys = <String>{
+      ...config.stateSchema.keys,
+      ...config.initialState.keys,
+    };
+    if (trackerKeys.isEmpty) {
+      return;
+    }
+    final state = <String, dynamic>{
+      for (final key in trackerKeys)
+        if (finalVariables[key]?.trim().isNotEmpty == true)
+          key: finalVariables[key]!,
+    };
+    if (state.isEmpty) {
       return;
     }
     await ChatDatabaseService.instance.upsertSessionVariables(sessionId, {
-      messageStatusHtmlKey(messageId): value,
+      messageStatusHtmlKey(messageId): jsonEncode(state),
     });
   }
 
@@ -1091,8 +1134,8 @@ class ChatService {
   /// 追加"回复末尾必须输出结构化状态协议"的指令——模型输出 patch 后，
   /// App 解析应用、再按角色卡模板渲染面板，状态更新才能闭环。
   /// ⚠️ 只读取 stateSchema/initialState 声明的 key，彻底排除 `__` 开头
-  ///    的内部变量（__special_status_html__ / __msg_status_html_v2__:* 等）——
-  ///    否则历史 HTML 面板会被当成"当前状态"重新注入模型。
+  ///    的内部变量（__special_status_html__ / __msg_tracker_state_v3__:* 等）——
+  ///    否则历史状态快照会被当成"当前状态"重新注入模型。
   String? _trackerStateText(
     Map<String, dynamic>? cardJson,
     Map<String, String> variables,
