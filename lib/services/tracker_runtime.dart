@@ -519,16 +519,37 @@ class TrackerRuntime {
           ? '$value/${schema.max}'
           : value;
       final stage = stageInfo(key, value, config);
-      if (stage != null &&
-          (stage.title.isNotEmpty || stage.text.isNotEmpty)) {
+      final hasStage =
+          stage != null && (stage.title.isNotEmpty || stage.text.isNotEmpty);
+      // v54：number 字段带 min/max → 渲染为块 + 进度条（无需 stage 声明）；
+      // 进度条颜色跟随阶段色（无阶段声明用默认紫）
+      final isProgress =
+          schema.isNumber && schema.max != null && schema.min != null;
+      if (hasStage || isProgress) {
+        final numValue = num.tryParse('$value');
+        final pct =
+            (numValue != null && schema.max != null && schema.min != null)
+                ? (((numValue - schema.min!) /
+                                (schema.max! - schema.min!)) *
+                            100)
+                        .clamp(0, 100)
+                : null;
+        final accent =
+            (stage != null && stage.color.isNotEmpty) ? stage.color : '#b388ff';
         parts.add(
           '<div style="background:rgba(255,255,255,0.05);'
           'border-radius:8px;padding:6px 10px;margin:2px 0;width:100%;'
           'box-sizing:border-box;">'
-          '<span style="font-size:12px;color:${_htmlEscape(stage.color)};'
+          '<span style="font-size:12px;color:${_htmlEscape(accent)};'
           'font-weight:600;">$label：$display'
-          '${stage.title.isNotEmpty ? ' · ${_htmlEscape(stage.title)}' : ''}</span>'
-          '${stage.text.isNotEmpty
+          '${stage != null && stage.title.isNotEmpty ? ' · ${_htmlEscape(stage.title)}' : ''}</span>'
+          '${pct != null
+              ? '<div style="height:4px;background:rgba(255,255,255,0.10);'
+                  'border-radius:2px;margin-top:4px;overflow:hidden;">'
+                  '<div style="height:100%;width:${pct}%;'
+                  'background:${_htmlEscape(accent)};border-radius:2px;"></div></div>'
+              : ''}'
+          '${stage != null && stage.text.isNotEmpty
               ? '<div style="font-size:11px;color:rgba(255,255,255,0.55);'
                   'margin-top:2px;">${_htmlEscape(stage.text)}</div>'
               : ''}'

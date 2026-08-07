@@ -14,10 +14,16 @@ import '../services/character_card_extensions_reader.dart';
 ///   },
 ///   "initialState": {"location": "旅馆", "energy": 80},
 ///   "actions": [{"id": "rest", "label": "休息", "prompt": "……"}],
-///   "uiHints": {"order": ["location", "energy"], "template": "<div>…</div>"}
+///   "uiHints": {"order": ["location", "energy"]},
+///   "template": "<div>…</div>",
+///   "defaultExpanded": false
 /// }
 /// ```
 /// 卡只负责声明；解析/校验/reducer/渲染全部由 App 运行时执行。
+///
+/// v54：`template` 放在 tracker 顶层（推荐）；兼容读取 `uiHints.template`
+/// （早期注释示例曾把 template 写在 uiHints 里——两个位置都读，照旧
+/// 写法写的卡也能生效）。`defaultExpanded` 控制状态面板初始是否展开。
 
 /// v52：数值字段的分段描述（presentation.ranges）——按当前值所在区间
 /// 确定性渲染阶段标题/颜色/长描述，不依赖模型临时生成。
@@ -186,6 +192,7 @@ class TrackerConfig {
     this.actions = const [],
     this.uiOrder = const [],
     this.template,
+    this.defaultExpanded = false,
   });
 
   final int schemaVersion;
@@ -194,6 +201,9 @@ class TrackerConfig {
   final List<TrackerAction> actions;
   final List<String> uiOrder;
   final String? template;
+
+  /// v54：状态面板初始是否展开（卡声明；默认收起）。
+  final bool defaultExpanded;
 
   bool get isEnabled =>
       stateSchema.isNotEmpty || initialState.isNotEmpty || actions.isNotEmpty;
@@ -289,9 +299,17 @@ class TrackerConfig {
       initialState: initialState,
       actions: actions,
       uiOrder: uiOrder,
+      // v54：template 兼容两个位置——tracker 顶层（推荐）优先，
+      // uiHints.template（早期注释示例写法）兜底
       template: tracker['template'] is String
           ? tracker['template'] as String
-          : null,
+          : (rawUiHints != null && rawUiHints['template'] is String
+              ? rawUiHints['template'] as String
+              : null),
+      defaultExpanded:
+          tracker['defaultExpanded'] is bool
+              ? tracker['defaultExpanded'] as bool
+              : false,
     );
   }
 }

@@ -1083,8 +1083,39 @@ class ChatService {
       // 读当前变量 → 应用 setvar 覆盖 + tracker reducer → 写回
       final variables = await ChatDatabaseService.instance
           .getSessionVariables(sessionId);
-      for (final (k, v) in calls) {
-        variables[k] = v;
+      // v54：setvar 统一经过 tracker 保护与校验——受保护字段（旁白已
+      // 落地）过滤；tracker 声明字段走 reducer（类型校验 + clamp）；
+      // 其余字段直接写入。之前 setvar 直接覆盖变量表，模型同一轮输出
+      // {{setvar::yw_brand::5}} 会把旁白（烙印值+10）已落地的值盖掉。
+      final setVarPatch = StatePatch(setValues: {
+        for (final (k, v) in calls)
+          if (!protectedStateKeys.contains(k)) k: v,
+      });
+      if (!setVarPatch.isEmpty) {
+        if (config.isEnabled) {
+          final initialized = TrackerRuntime.initState(
+            config: config,
+            existing: variables,
+          );
+          final next = TrackerRuntime.reduce(
+            current: initialized,
+            patch: setVarPatch,
+            config: config,
+          );
+          variables
+            ..clear()
+            ..addAll(next.map((k, v) => MapEntry(k, '$v')));
+        } else {
+          for (final entry in setVarPatch.setValues.entries) {
+            variables[entry.key] = '${entry.value}';
+          }
+        }
+      }
+      if (calls.length > setVarPatch.setValues.length) {
+        debugPrint(
+          '[TRACKER_RESPONSE] setvar 受保护字段被过滤: '
+          '${calls.map((e) => e.$1).where((k) => protectedStateKeys.contains(k)).join(',')}',
+        );
       }
       if (config.isEnabled && !patch.isEmpty) {
         // 先补 initialState（缺失字段），再应用 patch

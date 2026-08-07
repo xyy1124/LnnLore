@@ -919,6 +919,159 @@ void main() {
     });
   });
 
+  group('v54: uiHints.template 兼容 + defaultExpanded', () {
+    test('uiHints.template 兜底读取（早期注释示例写法）', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'a': {'type': 'number', 'label': 'A'},
+              },
+              'initialState': {'a': 1},
+              'uiHints': {'order': ['a'], 'template': '<div>uiHints模板</div>'},
+            },
+          },
+        },
+      });
+      expect(config.template, '<div>uiHints模板</div>');
+    });
+
+    test('tracker.template 优先于 uiHints.template', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'a': {'type': 'number', 'label': 'A'},
+              },
+              'initialState': {'a': 1},
+              'template': '<div>顶层模板</div>',
+              'uiHints': {'template': '<div>uiHints模板</div>'},
+            },
+          },
+        },
+      });
+      expect(config.template, '<div>顶层模板</div>');
+    });
+
+    test('defaultExpanded 读取（默认收起）', () {
+      final enabled = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'a': {'type': 'number', 'label': 'A'},
+              },
+              'initialState': {'a': 1},
+              'defaultExpanded': true,
+            },
+          },
+        },
+      });
+      expect(enabled.defaultExpanded, isTrue);
+      final defaulted = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'a': {'type': 'number', 'label': 'A'},
+              },
+              'initialState': {'a': 1},
+            },
+          },
+        },
+      });
+      expect(defaulted.defaultExpanded, isFalse);
+    });
+  });
+
+  group('v54: 内置 fallback 进度条', () {
+    Map<String, dynamic> cardWithoutTemplate() => {
+          'data': {
+            'extensions': {
+              'tracker': {
+                'stateSchema': {
+                  'yw_brand': {
+                    'type': 'number',
+                    'label': '烙印值',
+                    'min': 0,
+                    'max': 100,
+                  },
+                },
+                'initialState': {'yw_brand': 0},
+              },
+            },
+          },
+        };
+
+    test('number 字段带 min/max 渲染进度条（width=45%）', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: cardWithoutTemplate(),
+        variables: {'yw_brand': '45'},
+      );
+      expect(html, contains('45/100'));
+      // Dart double 插值会输出 45.0——宽松匹配
+      expect(html, contains('width:45'));
+      expect(html, contains('height:4px'));
+    });
+
+    test('带 stage 的字段进度条颜色跟随阶段色', () {
+      final card = cardWithoutTemplate();
+      (card['data']! as Map<String, dynamic>)['extensions'] = {
+        'tracker': {
+          'stateSchema': {
+            'yw_brand': {
+              'type': 'number',
+              'label': '烙印值',
+              'min': 0,
+              'max': 100,
+              'presentation': {
+                'ranges': [
+                  {
+                    'gte': 40,
+                    'lt': 60,
+                    'title': '刻印显现',
+                    'color': '#8e44ad',
+                    'text': '纹路清晰可见。',
+                  },
+                ],
+              },
+            },
+          },
+          'initialState': {'yw_brand': 0},
+        },
+      };
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: card,
+        variables: {'yw_brand': '45'},
+      );
+      expect(html, contains('width:45'));
+      expect(html, contains('background:#8e44ad'));
+      expect(html, contains('· 刻印显现'));
+    });
+
+    test('无 min/max 的 number 字段保持 chip（无进度条）', () {
+      final html = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: {
+          'data': {
+            'extensions': {
+              'tracker': {
+                'stateSchema': {
+                  'cnt': {'type': 'number', 'label': '计数'},
+                },
+                'initialState': {'cnt': 3},
+              },
+            },
+          },
+        },
+        variables: {'cnt': '3'},
+      );
+      expect(html, contains('计数：3'));
+      expect(html, isNot(contains('height:4px')));
+    });
+  });
+
   group('filterProtectedPatch（旁白字段本轮去重）', () {
     test('模型对旁白已落地字段的 add 被过滤（20→30 而非 40）', () {
       // 发送链路：旁白（烙印值+10）确定性落地 → 模型又输出 add +10

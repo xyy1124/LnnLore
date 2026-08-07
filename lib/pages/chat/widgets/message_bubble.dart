@@ -601,16 +601,20 @@ class _MessageBubbleState extends State<MessageBubble> {
     }
     // v50：面板默认收起——标题栏兜底"状态面板"（无 summary 的面板
     // 也必须有可点击标题栏，否则无法展开），点击展开/收起。
+    // v54：初始展开状态跟随卡声明 tracker.defaultExpanded（默认收起）。
     final effectiveTitle =
         panelTitle != null && panelTitle.trim().isNotEmpty
             ? panelTitle.trim()
             : '状态面板';
+    final trackerConfig = TrackerConfig.fromCardJson(
+      _messageCharacter?.cardJson ?? widget.character?.cardJson,
+    );
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: SpecialStatusPanel(
         html: html,
         title: effectiveTitle,
-        expanded: false,
+        expanded: trackerConfig.defaultExpanded,
       ),
     );
   }

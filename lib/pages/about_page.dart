@@ -81,6 +81,16 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.54',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】setvar 统一经过 tracker 保护与校验：模型同一轮输出 `{{setvar::yw_brand::5}}` 之前会直接覆盖旁白（烙印值+10）已落地的值——现在受保护字段（旁白已落地）过滤、tracker 声明字段走 reducer（类型校验 + min/max clamp）、其余字段直接写入，所有状态来源不再绕过统一入口',
+                    '【特别版】`uiHints.template` 兼容读取：早期注释示例把 template 写在 uiHints 里、实际解析只读 tracker 顶层——现在两个位置都读（tracker.template 优先），照旧注释写法做的卡也能生效；注释示例已修正',
+                    '【特别版】内置状态面板进度条：number 字段（带 min/max）自动渲染进度条（百分比宽度 + 阶段色/默认紫）——即使卡没写模板也能看到"值/max + 进度 + 阶段"',
+                    '【特别版】状态面板初始展开跟随卡声明 `tracker.defaultExpanded`（默认收起）——卡作者可控制面板默认状态',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.53',
                   date: '2026-08-07',
                   changes: [
