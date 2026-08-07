@@ -1247,6 +1247,147 @@ void main() {
     });
   });
 
+  group('v60: updatePolicy 程度词 + aliases（剧情自主判断）', () {
+    TrackerConfig configWithPolicy() {
+      return TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'like': {
+                  'type': 'number',
+                  'label': '好感度',
+                  'aliases': ['好感', '亲密感'],
+                  'min': 0,
+                  'max': 100,
+                  'updatePolicy': {
+                    'mode': 'conservative',
+                    'qualitativeDeltas': {
+                      '一点': 1,
+                      '少许': 1,
+                      '稍微': 2,
+                      '明显': 5,
+                      '大幅': 10,
+                    },
+                    'maxAutoDeltaPerTurn': 10,
+                  },
+                },
+              },
+              'initialState': {'like': 20},
+            },
+          },
+        },
+      });
+    }
+
+    test('aliases 解析（好感/亲密感）', () {
+      final config = configWithPolicy();
+      expect(config.stateSchema['like']!.aliases, contains('好感'));
+      expect(config.stateSchema['like']!.aliases, contains('亲密感'));
+    });
+
+    test('updatePolicy 解析（mode/程度词/上限）', () {
+      final config = configWithPolicy();
+      final policy = config.stateSchema['like']!.updatePolicy!;
+      expect(policy.mode, 'conservative');
+      expect(policy.qualitativeDeltas['明显'], 5);
+      expect(policy.maxAutoDeltaPerTurn, 10);
+    });
+
+    test('好感提升一点 → add +1（程度词确定性量化）', () {
+      final config = configWithPolicy();
+      final changes = TrackerRuntime.parseNarrationStateChanges(
+        '好感提升一点',
+        config,
+      );
+      expect(changes['like'], ('1', true));
+    });
+
+    test('好感明显提高 → add +5', () {
+      final config = configWithPolicy();
+      final changes = TrackerRuntime.parseNarrationStateChanges(
+        '好感明显提高',
+        config,
+      );
+      expect(changes['like'], ('5', true));
+    });
+
+    test('好感稍微下降 → add -2', () {
+      final config = configWithPolicy();
+      final changes = TrackerRuntime.parseNarrationStateChanges(
+        '好感稍微下降',
+        config,
+      );
+      expect(changes['like'], ('-2', true));
+    });
+
+    test('亲密感大幅增加 → add +10（aliases 匹配）', () {
+      final config = configWithPolicy();
+      final changes = TrackerRuntime.parseNarrationStateChanges(
+        '亲密感大幅增加',
+        config,
+      );
+      expect(changes['like'], ('10', true));
+    });
+
+    test('无 updatePolicy 时程度词不猜（保持无匹配）', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'like': {
+                  'type': 'number',
+                  'label': '好感度',
+                  'min': 0,
+                  'max': 100,
+                },
+              },
+              'initialState': {'like': 20},
+            },
+          },
+        },
+      });
+      expect(
+        TrackerRuntime.parseNarrationStateChanges('好感提升一点', config),
+        isEmpty,
+      );
+    });
+
+    test('格式注入 qualitative 规则与防膨胀约束', () {
+      final config = configWithPolicy();
+      final text = TrackerRuntime.formatTrackerInstruction(
+        state: {'like': '20'},
+        config: config,
+      );
+      expect(text, contains('qualitative: 一点=1，少许=1，稍微=2，明显=5，大幅=10'));
+      expect(text, contains('maxAutoDeltaPerTurn=10'));
+      expect(text, contains('mode=conservative'));
+      expect(text, contains('不得因为用户没有提供精确数字而返回'));
+      expect(text, contains('同一事件每轮最多更新一次'));
+    });
+
+    test('applyPatchToVariables：canonicalize + reduce + clamp', () {
+      final config = configWithPolicy();
+      final result = TrackerRuntime.applyPatchToVariables(
+        variables: {'like': '20'},
+        patch: StatePatch(addValues: {'好感度': 5}),
+        config: config,
+      );
+      expect(result['like'], '25');
+    });
+
+    test('applyPatchToVariables：clamp 到 max', () {
+      final config = configWithPolicy();
+      final result = TrackerRuntime.applyPatchToVariables(
+        variables: {'like': '97'},
+        patch: StatePatch(addValues: {'like': 5}),
+        config: config,
+      );
+      expect(result['like'], '100');
+    });
+  });
+
   group('filterProtectedPatch（旁白字段本轮去重）', () {
     test('模型对旁白已落地字段的 add 被过滤（20→30 而非 40）', () {
       // 发送链路：旁白（烙印值+10）确定性落地 → 模型又输出 add +10

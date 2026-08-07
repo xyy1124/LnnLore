@@ -104,6 +104,17 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.60',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】剧情自主状态判断（状态裁判·双阶段）：剧情生成后**独立调用一次状态判断请求**（只输出 JSON patch）——剧情模型专心写剧情，状态由裁判按规则确定性判断；裁判 patch 优先（在旁白基线上应用，忽略主模型 patch 防同 key 叠加），普通发送/重生成/继续/群聊四入口统一接入',
+                    '【特别版】字段协议扩展：`updatePolicy`（mode: explicit/conservative/active + qualitativeDeltas 程度词→增量 + maxAutoDeltaPerTurn 每轮上限）与 `aliases`（字段别名：好感/亲密感等口语说法）——角色卡可声明"一点=1、明显=5、大幅=10"等量化规则',
+                    '【特别版】本地模糊解析："好感提升一点" / "好感明显提高" / "好感稍微下降"（无数字）按卡 updatePolicy 确定性量化（支持"程度词+动词"与"动词+程度词"两种语序）；**无卡声明不猜数字**',
+                    '【特别版】状态指令注入定性规则：模型/裁判收到 qualitative 程度词映射 + mode + 每轮上限，并明确要求"剧情明确表示上升/下降时即使无数字也必须输出 patch，不得因无数字返回空 patch；同一事件每轮最多更新一次"',
+                    '【特别版】设置页新增"状态更新"入口：状态裁判开关（默认开）+ 三档模式（仅明确指令/保守剧情判断-默认/积极剧情判断）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.59',
                   date: '2026-08-07',
                   changes: [

@@ -21,6 +21,7 @@ import 'chat_database_service.dart';
 import 'chat_display_sanitizer.dart';
 import 'chat_memory_service.dart';
 import 'chat_variable_service.dart';
+import 'storage_service.dart';
 import 'tracker_runtime.dart';
 import 'deepseek_balance_service.dart';
 import 'i_openai_api_service.dart';
@@ -286,6 +287,20 @@ class ChatService {
         // 与 patch/setvar 一起提交；取消/失败则状态保持原样
         baseVariables: localVariables,
       );
+      // v60：状态裁判——剧情生成后独立判断状态变化（只输出 patch）
+      StatePatch? judgePatch;
+      try {
+        judgePatch = await _judgeTrackerState(
+          config: config,
+          cardJson: character.cardJson,
+          variables: processed.finalVariables ?? localVariables,
+          userText: normalizedModelText ?? normalizedInput,
+          assistantText: processed.displayText,
+          cancellationToken: cancellationToken,
+        );
+      } on Object {
+        judgePatch = null;
+      }
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: activeSession.id,
@@ -296,13 +311,18 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
-      // v58：状态事务提交点——assistant 消息保存成功后才写库。
-      // ① _processAssistantOutput 计算出了最终变量（有 setvar/patch/
-      // 面板）→ 提交；② 模型回复成功但未输出任何状态协议时，提交
-      // 内存中的旁白状态（用户确定性指令不依赖模型输出）；③ 取消/
-      // 失败路径不提交（状态保持原样）。
-      final finalVars = processed.finalVariables ?? localVariables;
-      if (processed.finalVariables != null || narrationChanges.isNotEmpty) {
+      // v58/v60：状态事务提交点——assistant 消息保存成功后才写库。
+      // 裁判启用时裁判 patch 优先（在旁白基线上应用，忽略主模型 patch
+      // 避免同 key 叠加）；模型回复成功但无任何状态来源时，提交内存
+      // 中的旁白状态（用户确定性指令不依赖模型输出）。
+      final (finalVars, needCommit) = _applyJudgePatch(
+        judgePatch: judgePatch,
+        processed: processed,
+        localVariables: localVariables,
+        cardJson: character.cardJson,
+        protectedKeys: narrationChanges.keys.toSet(),
+      );
+      if (needCommit || narrationChanges.isNotEmpty) {
         await ChatDatabaseService.instance.upsertSessionVariables(
           activeSession.id,
           finalVars,
@@ -469,6 +489,20 @@ class ChatService {
         completion.text,
         cardJson: character.cardJson,
       );
+      // v60：状态裁判——群聊剧情后独立判断状态变化
+      StatePatch? judgePatch;
+      try {
+        judgePatch = await _judgeTrackerState(
+          config: config,
+          cardJson: character.cardJson,
+          variables: processed.finalVariables ?? localVariables,
+          userText: '',
+          assistantText: processed.displayText,
+          cancellationToken: cancellationToken,
+        );
+      } on Object {
+        judgePatch = null;
+      }
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: activeSession.id,
@@ -485,10 +519,16 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
-      // v58：状态事务提交点——assistant 消息保存成功后才写库
-      // （_processAssistantOutput 已改为纯计算，不写库）
-      final groupFinalVars = processed.finalVariables;
-      if (groupFinalVars != null) {
+      // v58/v60：状态事务提交点——assistant 消息保存成功后才写库；
+      // 裁判启用时裁判 patch 优先（旁白基线上应用，忽略主模型 patch）
+      final (groupFinalVars, groupNeedCommit) = _applyJudgePatch(
+        judgePatch: judgePatch,
+        processed: processed,
+        localVariables: localVariables,
+        cardJson: character.cardJson,
+        protectedKeys: const {},
+      );
+      if (groupNeedCommit) {
         await ChatDatabaseService.instance.upsertSessionVariables(
           activeSession.id,
           groupFinalVars,
@@ -650,6 +690,20 @@ class ChatService {
         // 原用户消息旁白字段本轮去重（只阻止模型重复更新，不重新应用）
         protectedStateKeys: regenerateProtectedKeys,
       );
+      // v60：状态裁判——重生成剧情后独立判断状态变化
+      StatePatch? judgePatch;
+      try {
+        judgePatch = await _judgeTrackerState(
+          config: config,
+          cardJson: character.cardJson,
+          variables: processed.finalVariables ?? localVariables,
+          userText: userTextForModel,
+          assistantText: processed.displayText,
+          cancellationToken: cancellationToken,
+        );
+      } on Object {
+        judgePatch = null;
+      }
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: session.id,
@@ -659,10 +713,16 @@ class ChatService {
             thinkingChain: completion.thinkingChain,
           );
 
-      // v58：状态事务提交点——assistant 消息保存成功后才写库
-      // （_processAssistantOutput 已改为纯计算，不写库）
-      final branchFinalVars = processed.finalVariables;
-      if (branchFinalVars != null) {
+      // v58/v60：状态事务提交点——assistant 消息保存成功后才写库；
+      // 裁判启用时裁判 patch 优先（旁白基线上应用，忽略主模型 patch）
+      final (branchFinalVars, branchNeedCommit) = _applyJudgePatch(
+        judgePatch: judgePatch,
+        processed: processed,
+        localVariables: localVariables,
+        cardJson: character.cardJson,
+        protectedKeys: regenerateProtectedKeys,
+      );
+      if (branchNeedCommit) {
         await ChatDatabaseService.instance.upsertSessionVariables(
           session.id,
           branchFinalVars,
@@ -873,6 +933,20 @@ class ChatService {
         completion.text,
         cardJson: character.cardJson,
       );
+      // v60：状态裁判——继续推进剧情后独立判断状态变化
+      StatePatch? judgePatch;
+      try {
+        judgePatch = await _judgeTrackerState(
+          config: config,
+          cardJson: character.cardJson,
+          variables: processed.finalVariables ?? localVariables,
+          userText: '',
+          assistantText: processed.displayText,
+          cancellationToken: cancellationToken,
+        );
+      } on Object {
+        judgePatch = null;
+      }
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
         sessionId: session.id,
@@ -882,10 +956,16 @@ class ChatService {
         thinkingChain: completion.thinkingChain,
       );
 
-      // v58：状态事务提交点——assistant 消息保存成功后才写库
-      // （_processAssistantOutput 已改为纯计算，不写库）
-      final branchFinalVars = processed.finalVariables;
-      if (branchFinalVars != null) {
+      // v58/v60：状态事务提交点——assistant 消息保存成功后才写库；
+      // 裁判启用时裁判 patch 优先（旁白基线上应用，忽略主模型 patch）
+      final (branchFinalVars, branchNeedCommit) = _applyJudgePatch(
+        judgePatch: judgePatch,
+        processed: processed,
+        localVariables: localVariables,
+        cardJson: character.cardJson,
+        protectedKeys: const {},
+      );
+      if (branchNeedCommit) {
         await ChatDatabaseService.instance.upsertSessionVariables(
           session.id,
           branchFinalVars,
@@ -1457,6 +1537,141 @@ class ChatService {
       'narration=$narrationChanges -> ${startingState}',
     );
     return refreshed;
+  }
+
+  // ---- v60：状态裁判（双阶段剧情自主判断）----
+
+  /// 裁判开关设置键（默认开启）。
+  static const String kJudgeEnabledKey = 'tracker_judge_enabled';
+  /// 裁判模式设置键：explicit | conservative | active（默认 conservative）。
+  static const String kJudgeModeKey = 'tracker_judge_mode';
+
+  static Future<bool> isTrackerJudgeEnabled() async {
+    final saved = StorageService.instance.getBool(kJudgeEnabledKey);
+    return saved ?? true;
+  }
+
+  static Future<String> getTrackerJudgeMode() async {
+    final saved = StorageService.instance.getString(kJudgeModeKey);
+    if (saved != null && (saved == 'explicit' || saved == 'active')) {
+      return saved;
+    }
+    return 'conservative';
+  }
+
+  /// 状态裁判：剧情生成后**独立调用一次**，只输出 JSON patch。
+  /// 返回 null 表示未启用 / 卡无 tracker / 请求失败（不影响主流程——
+  /// 状态保持主模型 patch 结果）。
+  Future<StatePatch?> _judgeTrackerState({
+    required ResolvedApiConfig config,
+    required Map<String, dynamic>? cardJson,
+    required Map<String, String> variables,
+    required String userText,
+    required String assistantText,
+    ChatCompletionCancelToken? cancellationToken,
+  }) async {
+    if (!await isTrackerJudgeEnabled()) {
+      return null;
+    }
+    final trackerConfig = TrackerConfig.fromCardJson(cardJson);
+    if (!trackerConfig.isEnabled) {
+      return null;
+    }
+    final trackerKeys = <String>{
+      ...trackerConfig.stateSchema.keys,
+      ...trackerConfig.initialState.keys,
+    };
+    final state = <String, dynamic>{
+      for (final key in trackerKeys)
+        if (variables[key]?.trim().isNotEmpty == true) key: variables[key]!,
+    };
+    final stateText = TrackerRuntime.formatTrackerInstruction(
+      state: state.isEmpty
+          ? trackerConfig.initialState.map((k, v) => MapEntry(k, '$v'))
+          : state,
+      config: trackerConfig,
+    );
+    if (stateText.isEmpty) {
+      return null;
+    }
+    final mode = await getTrackerJudgeMode();
+    final modeDesc = switch (mode) {
+      'explicit' => '只处理明确状态描述；不因剧情自行推断',
+      'active' => '允许根据整体剧情主动调整状态',
+      _ => '只从非常明确的剧情结果推断小幅变化；普通对话/心理描写/重复描述不更新',
+    };
+    final prompt = '$stateText\n\n'
+        '（你是状态裁判，只负责根据剧情判断状态变化。\n'
+        '本轮用户消息：\n$userText\n\n'
+        '本轮角色回复：\n$assistantText\n\n'
+        '判断规则（mode=$mode）：$modeDesc。\n'
+        '剧情明确表示某字段上升或下降时，即使没有具体数字，也必须按 '
+        'qualitative 中最匹配的程度词输出增量（下降用负数）；'
+        '每轮增量不超过 maxAutoDeltaPerTurn（未声明则不限制）；'
+        '同一事件每轮最多更新一次，只有本轮新发生的事件才能触发变化。\n'
+        '输出格式（只输出 JSON 代码块，不要任何解释文字）：\n'
+        '```json\n{"patch":{"set":{},"add":{"字段key":数值变化}}}\n```\n'
+        '没有实质变化时输出空 patch {"patch":{"set":{},"add":{}}}。）';
+    try {
+      final preset = await _resolvePreset(null);
+      final completion = await _createCompletionFromMessages(
+        config,
+        messages: [
+          {'role': 'system', 'content': prompt},
+          {'role': 'user', 'content': '根据以上规则输出状态 patch。'},
+        ],
+        preset: preset,
+        useStreaming: false,
+        cancellationToken: cancellationToken,
+        enforceThinkingChain: false,
+      );
+      if (completion.isPartial) {
+        return null;
+      }
+      final patch = TrackerRuntime.extractPatch(completion.text);
+      debugPrint('[TRACKER_JUDGE] mode=$mode patch=$patch');
+      return patch;
+    } on Object catch (error) {
+      // 裁判失败不影响主流程（状态保持主模型 patch 结果）
+      debugPrint('[TRACKER_JUDGE] 裁判请求失败（忽略）: $error');
+      return null;
+    }
+  }
+
+  /// v60：应用裁判 patch（裁判优先于主模型 patch——在**旁白基线**上
+  /// 应用裁判 patch，避免主模型 patch 与裁判 patch 同 key 叠加；
+  /// 裁判 patch 同样过滤旁白受保护字段）。
+  /// 返回 (最终变量表, 是否需要提交)。
+  (Map<String, String>, bool) _applyJudgePatch({
+    required StatePatch? judgePatch,
+    required ProcessedAssistantOutput processed,
+    required Map<String, String> localVariables,
+    required Map<String, dynamic>? cardJson,
+    required Set<String> protectedKeys,
+  }) {
+    var finalVars = processed.finalVariables ?? localVariables;
+    var needCommit = processed.finalVariables != null;
+    if (judgePatch == null || judgePatch.isEmpty) {
+      return (finalVars, needCommit);
+    }
+    final judgeConfig = TrackerConfig.fromCardJson(cardJson);
+    if (!judgeConfig.isEnabled) {
+      return (finalVars, needCommit);
+    }
+    final judgeFiltered = TrackerRuntime.filterProtectedPatch(
+      judgePatch,
+      protectedKeys,
+    );
+    final base = processed.finalVariables != null
+        ? Map<String, String>.from(localVariables)
+        : finalVars;
+    finalVars = TrackerRuntime.applyPatchToVariables(
+      variables: base,
+      patch: judgeFiltered,
+      config: judgeConfig,
+    );
+    needCommit = true;
+    return (finalVars, needCommit);
   }
 
   Future<Preset> _resolvePreset(String? presetId) async {

@@ -2,7 +2,7 @@
 description: "PocketInn - A Flutter application."
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
-version: 1.4.0-special.59+114
+version: 1.4.0-special.60+115
 
 environment:
   sdk: ^3.11.5

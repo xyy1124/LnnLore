@@ -785,7 +785,9 @@ class TrackerRuntime {
   /// 解析旁白/用户消息里的确定性状态修改：
   /// `（烙印值+10）`、`（烙印值-5）`、`（烙印值=35）`、`（黑丝状态=破损）`、
   /// `(体力 +10)`、`（称呼阶段=本尊）`、自然语言 `烙印值提高40%` /
-  /// `烙印值增加10` / `烙印值减少5`——label 或字段 key 均匹配。
+  /// `烙印值增加10` / `烙印值减少5`——label、字段 key 或卡声明 aliases
+  /// 均匹配。v60：支持程度词（"好感提升一点"→ 按卡 updatePolicy 的
+  /// qualitativeDeltas 确定性量化；**无卡声明不猜数字**）。
   /// 返回 key → (值, isAdd)；number 字段 +/- 视为增减，= 为赋值；
   /// string 字段仅 = 赋值（自然语言增减只支持 number 字段）。
   /// 括号格式优先：字段同时出现括号与自然语言时以括号为准。
@@ -798,7 +800,8 @@ class TrackerRuntime {
       final key = entry.key;
       final schema = entry.value;
       final label = schema.label.isNotEmpty ? schema.label : key;
-      for (final name in {label, key}) {
+      final names = <String>{label, key, ...schema.aliases};
+      for (final name in names) {
         final escaped = RegExp.escape(name);
         final m = RegExp(
           '[（(]\\s*$escaped\\s*([+\\-]?=?|=)\\s*([^)）]+?)\\s*[）)]',
@@ -849,6 +852,40 @@ class TrackerRuntime {
           if (decrease != null) {
             out[key] = ('-${decrease.group(1)!}', true);
             break;
+          }
+          // v60：程度词量化——"好感提升一点"（无数字）按卡声明的
+          // updatePolicy.qualitativeDeltas 确定性转换；无卡声明不猜。
+          // 支持两种语序："好感明显提高"（程度词在前）与
+          // "好感提高明显"（程度词在后）。
+          final policy = schema.updatePolicy;
+          if (policy != null && policy.qualitativeDeltas.isNotEmpty) {
+            final words = policy.qualitativeDeltas.keys.toList()
+              ..sort((a, b) => b.length.compareTo(a.length));
+            final wordPattern = words.map(RegExp.escape).join('|');
+            final increaseWord = RegExp(
+              '$escaped\\s*(?:提高|提升|增加|上升|加)\\s*($wordPattern)',
+            ).firstMatch(text);
+            final increaseWord2 = RegExp(
+              '$escaped\\s*($wordPattern)\\s*(?:提高|提升|增加|上升)',
+            ).firstMatch(text);
+            final wordMatch = increaseWord ?? increaseWord2;
+            if (wordMatch != null) {
+              final delta = policy.qualitativeDeltas[wordMatch.group(1)!]!;
+              out[key] = ('${delta >= 0 ? delta : delta.abs()}', true);
+              break;
+            }
+            final decreaseWord = RegExp(
+              '$escaped\\s*(?:降低|减少|下降|减)\\s*($wordPattern)',
+            ).firstMatch(text);
+            final decreaseWord2 = RegExp(
+              '$escaped\\s*($wordPattern)\\s*(?:降低|减少|下降)',
+            ).firstMatch(text);
+            final wordMatchDec = decreaseWord ?? decreaseWord2;
+            if (wordMatchDec != null) {
+              final delta = policy.qualitativeDeltas[wordMatchDec.group(1)!]!;
+              out[key] = ('-${delta.abs()}', true);
+              break;
+            }
           }
         }
       }
@@ -914,6 +951,24 @@ class TrackerRuntime {
     return result;
   }
 
+  /// v60：把 patch 应用到变量表（canonicalize + initState + reduce），
+  /// 返回字符串化后的完整变量表——状态裁判（双阶段）合并 patch 用。
+  static Map<String, String> applyPatchToVariables({
+    required Map<String, String> variables,
+    required StatePatch patch,
+    required TrackerConfig config,
+  }) {
+    if (patch.isEmpty || !config.isEnabled) {
+      return Map<String, String>.from(variables);
+    }
+    final (canonical, _) = canonicalizePatch(patch, config);
+    final initialized = initState(config: config, existing: variables);
+    final next = reduce(current: initialized, patch: canonical, config: config);
+    return {
+      for (final e in next.entries) e.key: '${e.value}',
+    };
+  }
+
   /// 把状态格式化为注入 prompt 的自然文本。
   static String formatStateText({
     required Map<String, dynamic> state,
@@ -968,6 +1023,10 @@ class TrackerRuntime {
   /// （"剧情推进不更新"根因）。这里每行给出
   /// `key=yw_brand | label=烙印值 | type=number | range=0..100 | current=0`，
   /// 并强制模型在 patch 里只能使用 key。
+  ///
+  /// v60：追加 updatePolicy 定性规则（程度词 → 增量 / mode / 每轮上限）
+  /// 与防膨胀约束——剧情明确表示上升/下降即使无数字也必须输出 patch，
+  /// 不得因用户未给数字而返回空 patch。
   static String formatTrackerInstruction({
     required Map<String, dynamic> state,
     required TrackerConfig config,
@@ -992,9 +1051,23 @@ class TrackerRuntime {
           ? ' | range=${schema.min ?? '-inf'}..${schema.max ?? '+inf'}'
           : '';
       final type = schema?.type ?? 'string';
-      fields.add(
-        '- key=$key | label=$label | type=$type$range | current=$value',
-      );
+      var line = '- key=$key | label=$label | type=$type$range | current=$value';
+      // v60：注入定性规则（程度词量化 + 每轮上限）——"好感提升一点"
+      // 模型据此确定性输出增量
+      final policy = schema?.updatePolicy;
+      if (policy != null && policy.qualitativeDeltas.isNotEmpty) {
+        final deltas = policy.qualitativeDeltas.entries
+            .map((e) => '${e.key}=${e.value}')
+            .join('，');
+        line += '\n  qualitative: $deltas';
+      }
+      if (policy != null && policy.maxAutoDeltaPerTurn != null) {
+        line += '\n  maxAutoDeltaPerTurn=${policy.maxAutoDeltaPerTurn}';
+      }
+      if (policy != null) {
+        line += '\n  mode=${policy.mode}';
+      }
+      fields.add(line);
     }
 
     for (final key in order) {
@@ -1010,7 +1083,15 @@ class TrackerRuntime {
     }
     return '【当前状态】（以下 key 是状态字段的唯一标识，'
         'JSON patch 中只能使用 key，禁止使用中文 label）\n'
-        '${fields.join('\n')}';
+        '${fields.join('\n')}\n'
+        '（v60 状态判断规则：当剧情明确表示某字段上升或下降时，'
+        '即使没有给出具体数字，也必须按 qualitative 中最匹配的程度词'
+        '输出增量（下降用负数）；**不得因为用户没有提供精确数字而返回'
+        '空 patch**。mode=explicit 时只处理明确状态描述；'
+        'mode=conservative 时只从非常明确的剧情结果推断小幅变化，'
+        '普通对话/心理描写/重复描述不更新；mode=active 时可根据整体'
+        '剧情主动调整。同一事件每轮最多更新一次，每轮增量不超过'
+        'maxAutoDeltaPerTurn（未声明则不限制）。）';
   }
 
   /// v50：patch 字段名规范化——模型可能输出中文 label（`烙印值`）而不是

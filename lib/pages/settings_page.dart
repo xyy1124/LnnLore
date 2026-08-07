@@ -7,6 +7,7 @@ import 'companion_tools_page.dart';
 import 'data_management_page.dart';
 import 'general_settings_page.dart';
 import 'memory_settings_page.dart';
+import 'tracker_settings_page.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -42,6 +43,10 @@ class SettingsPage extends StatelessWidget {
         await navigator.push(
           MaterialPageRoute(builder: (_) => const CompanionToolsPage()),
         );
+      case _SettingsItemType.tracker:
+        await navigator.push(
+          MaterialPageRoute(builder: (_) => const TrackerSettingsPage()),
+        );
     }
   }
 
@@ -72,6 +77,12 @@ class SettingsPage extends StatelessWidget {
         subtitle: 'Prompt 版本管理、角色卡生成器等',
         icon: Icons.extension_outlined,
         type: _SettingsItemType.companionTools,
+      ),
+      const _SettingsItem(
+        title: '状态更新',
+        subtitle: '剧情自主状态判断（状态裁判）与更新模式',
+        icon: Icons.auto_awesome_outlined,
+        type: _SettingsItemType.tracker,
       ),
       const _SettingsItem(
         title: 'API 配置',
@@ -159,4 +170,5 @@ enum _SettingsItemType {
   api,
   data,
   about,
+  tracker,
 }

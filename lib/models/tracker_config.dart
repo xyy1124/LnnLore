@@ -124,6 +124,56 @@ class TrackerFieldPresentation {
   }
 }
 
+/// v60：字段自主更新策略（updatePolicy）——把"模糊程度词 → 数值增量"
+/// 定义为协议，模型/裁判据此确定性量化剧情变化，不再因没有数字而
+/// 输出空 patch。
+///
+/// mode：
+/// - `explicit`：只处理明确数值指令（（好感度+2）/好感度提高5），
+///   不因剧情自行推断；
+/// - `conservative`（推荐默认）：允许从非常明确的剧情结果推断小幅
+///   变化（她接受了道歉、戒备明显放松 → +1），普通对话/心理描写/
+///   重复描述不更新；
+/// - `active`：允许根据整体剧情主动调整（共同战斗/赠送礼物/冲突等
+///   都可能触发变化）。
+class TrackerUpdatePolicy {
+  const TrackerUpdatePolicy({
+    this.mode = 'conservative',
+    this.qualitativeDeltas = const {},
+    this.maxAutoDeltaPerTurn,
+  });
+
+  /// explicit | conservative | active
+  final String mode;
+
+  /// 程度词 → 增量（如 {"一点": 1, "稍微": 2, "明显": 5, "大幅": 10}）
+  final Map<String, num> qualitativeDeltas;
+
+  /// 每轮自动增减上限（防膨胀；null 不限制）
+  final num? maxAutoDeltaPerTurn;
+
+  factory TrackerUpdatePolicy.fromJson(Map<String, dynamic> json) {
+    final deltas = <String, num>{};
+    final rawDeltas = CharacterCardExtensionsReader.asMap(
+      json['qualitativeDeltas'],
+    );
+    if (rawDeltas != null) {
+      rawDeltas.forEach((k, v) {
+        if (k is String && v is num) {
+          deltas[k] = v;
+        }
+      });
+    }
+    return TrackerUpdatePolicy(
+      mode: json['mode'] is String ? json['mode'] as String : 'conservative',
+      qualitativeDeltas: deltas,
+      maxAutoDeltaPerTurn: json['maxAutoDeltaPerTurn'] is num
+          ? json['maxAutoDeltaPerTurn'] as num
+          : null,
+    );
+  }
+}
+
 class TrackerFieldSchema {
   const TrackerFieldSchema({
     required this.type,
@@ -132,6 +182,8 @@ class TrackerFieldSchema {
     this.max,
     this.hidden = false,
     this.presentation,
+    this.aliases = const [],
+    this.updatePolicy,
   });
 
   /// 'string' | 'number'
@@ -145,12 +197,31 @@ class TrackerFieldSchema {
   /// 渲染回退到纯数值/纯文本（旧卡完全不受影响）。
   final TrackerFieldPresentation? presentation;
 
+  /// v60：字段别名（"好感"/"亲密感"/"信任" 等口语说法）——本地解析
+  /// 与裁判判断时与 label/key 同等匹配。
+  final List<String> aliases;
+
+  /// v60：自主更新策略（程度词量化规则）。
+  final TrackerUpdatePolicy? updatePolicy;
+
   bool get isNumber => type == 'number';
 
   factory TrackerFieldSchema.fromJson(Map<String, dynamic> json) {
     final rawPresentation = CharacterCardExtensionsReader.asMap(
       json['presentation'],
     );
+    final rawPolicy = CharacterCardExtensionsReader.asMap(
+      json['updatePolicy'],
+    );
+    final rawAliases = json['aliases'];
+    final aliases = <String>[];
+    if (rawAliases is List) {
+      for (final item in rawAliases) {
+        if (item is String && item.trim().isNotEmpty) {
+          aliases.add(item.trim());
+        }
+      }
+    }
     return TrackerFieldSchema(
       type: json['type'] is String ? json['type'] as String : 'string',
       label: json['label'] is String ? json['label'] as String : '',
@@ -160,6 +231,10 @@ class TrackerFieldSchema {
       presentation: rawPresentation == null
           ? null
           : TrackerFieldPresentation.fromJson(rawPresentation),
+      aliases: aliases,
+      updatePolicy: rawPolicy == null
+          ? null
+          : TrackerUpdatePolicy.fromJson(rawPolicy),
     );
   }
 }
