@@ -6,8 +6,8 @@ import 'storage_service.dart';
 /// 特别版：GitHub 新版本检查服务。
 ///
 /// 通过 GitHub API 查询指定仓库的最新 release tag，与本地版本比较。
-/// 发布仓库（owner/repo）可在设置中配置（默认上游 adoretes/PocketInn，
-/// 差异化发布时可改为自己的仓库）。
+/// 发布仓库（owner/repo）可在设置中配置（默认本分支发布仓库
+/// xyy1124/LnnLore，可改回上游 adoretes/PocketInn）。
 class VersionCheckService {
   VersionCheckService._();
 
@@ -19,18 +19,24 @@ class VersionCheckService {
   static const String _keyRepo = 'version_check_repo';
   static const String _keyLastChecked = 'version_check_last_checked';
 
-  /// 默认发布仓库。
-  static const String defaultOwner = 'adoretes';
-  static const String defaultRepo = 'PocketInn';
+  /// 默认发布仓库（v57：默认本分支仓库而非上游）。
+  static const String defaultOwner = 'xyy1124';
+  static const String defaultRepo = 'LnnLore';
 
   /// 上游锚点版本：本项目 fork 时的上游版本（特别版基于该版本改版）。
-  /// 上游发布的新版本只要高于此锚点即提示更新（不比较本地特别版号，
-  /// 因为特别版号与上游版本号体系独立）。
+  /// 仅当发布仓库配置回上游时用于提示（上游发布的新版本只要高于此
+  /// 锚点即提示更新）。
   static const String baselineUpstreamVersion = '1.3.2';
 
   /// 判断上游最新 release 是否为可提示的新版本（> 锚点版本）。
   static bool isUpstreamUpdateAvailable(String latestTag) {
     return compareVersions(baselineUpstreamVersion, latestTag) > 0;
+  }
+
+  /// v57：与当前安装版本比较——最新 release tag 高于当前版本时提示
+  /// （默认发布仓库为自己的仓库时使用）。
+  static bool isNewerThan(String latestTag, String currentVersion) {
+    return compareVersions(currentVersion, latestTag) > 0;
   }
 
   Future<bool> isEnabled() async {

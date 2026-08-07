@@ -1099,25 +1099,36 @@ class ChatService {
       // 落地）过滤；tracker 声明字段走 reducer（类型校验 + clamp）；
       // 其余字段直接写入。之前 setvar 直接覆盖变量表，模型同一轮输出
       // {{setvar::yw_brand::5}} 会把旁白（烙印值+10）已落地的值盖掉。
+      // v57：setvar 顺序修正——**先 canonicalize（中文 label → 真实 key）
+      // 再过滤受保护字段**。之前先按 protectedStateKeys（真实 key 如
+      // yw_brand）过滤，`{{setvar::烙印值::5}}` 里的中文 label 匹配不上
+      // 保护集，canonicalize 后仍会覆盖旁白（（烙印值+10））的结果。
+      final (canonicalSetVar, _) = config.isEnabled
+          ? TrackerRuntime.canonicalizePatch(
+              StatePatch(setValues: {
+                for (final (k, v) in calls) k: v,
+              }),
+              config,
+            )
+          : (
+              StatePatch(setValues: {
+                for (final (k, v) in calls) k: v,
+              }),
+              const <String>[],
+            );
       final setVarPatch = StatePatch(setValues: {
-        for (final (k, v) in calls)
-          if (!protectedStateKeys.contains(k)) k: v,
+        for (final e in canonicalSetVar.setValues.entries)
+          if (!protectedStateKeys.contains(e.key)) e.key: e.value,
       });
       if (!setVarPatch.isEmpty) {
         if (config.isEnabled) {
-          // v56：setvar 与 JSON patch 一样先 canonicalize（中文 label
-          // 映射回真实 key，未知字段丢弃）——{{setvar::烙印值::30}} 与
-          // {{setvar::yw_brand::30}} 结果一致（v55 之前只 patch 走了
-          // canonicalize，setvar 直接进 reducer）。
-          final (canonicalSetVar, _) =
-              TrackerRuntime.canonicalizePatch(setVarPatch, config);
           final initialized = TrackerRuntime.initState(
             config: config,
             existing: variables,
           );
           final next = TrackerRuntime.reduce(
             current: initialized,
-            patch: canonicalSetVar,
+            patch: setVarPatch,
             config: config,
           );
           variables

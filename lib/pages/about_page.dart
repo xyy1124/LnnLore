@@ -13,10 +13,17 @@ class AboutPage extends StatefulWidget {
 }
 
 class _AboutPageState extends State<AboutPage> {
-  // v56：源码提交与构建日期——每次发版同步更新（对应 github_upload.js
-  // 的提交 hash），方便确认手机安装包对应的源码版本。
-  static const String _kSourceCommit = 'e9eed763';
-  static const String _kBuildDate = '2026-08-07';
+  // v57：源码提交与构建日期改为构建时注入（--dart-define），不再硬编码——
+  // 构建命令：flutter build apk --release \
+  //   --dart-define=SOURCE_COMMIT=<git hash> --dart-define=BUILD_DATE=<日期>
+  static const String _kSourceCommit = String.fromEnvironment(
+    'SOURCE_COMMIT',
+    defaultValue: 'unknown',
+  );
+  static const String _kBuildDate = String.fromEnvironment(
+    'BUILD_DATE',
+    defaultValue: 'unknown',
+  );
 
   static final Uri _githubUri = Uri.parse(
     'https://github.com/adoretes/PocketInn',
@@ -96,6 +103,16 @@ class _AboutPageState extends State<AboutPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                _UpdateLogItem(
+                  version: 'v1.4.0',
+                  date: '2026-08-07',
+                  changes: [
+                    '【正式版】首个稳定版本（自 special.56 收口发布）：setvar 保护顺序修正——先 canonicalize（中文 label → 真实 key）再过滤受保护字段，`{{setvar::烙印值::5}}` 不再覆盖旁白（（烙印值+10））已落地的结果',
+                    '【正式版】关于页源码提交/构建日期改为构建时注入（--dart-define=SOURCE_COMMIT / BUILD_DATE），不再硬编码',
+                    '【正式版】更新检查默认指向本分支发布仓库 xyy1124/LnnLore，并与本地安装版本比较（可配置回上游 adoretes/PocketInn）',
+                    '【正式版】版本号体系切换：1.4.0+112（不再使用 special.XX 开发命名）——后续 1.4.1 修复、1.5.0 新功能、2.0.0 协议变更',
+                  ],
+                ),
                 _UpdateLogItem(
                   version: 'v1.4.0-special.56',
                   date: '2026-08-07',
@@ -706,9 +723,13 @@ class _VersionCheckCardState extends State<_VersionCheckCard> {
   bool _checking = false;
   String? _resultText;
 
+  // v57：检查更新需要与本地安装版本比较
+  late final Future<PackageInfo> _packageInfoFuture;
+
   @override
   void initState() {
     super.initState();
+    _packageInfoFuture = PackageInfo.fromPlatform();
     _load();
   }
 
@@ -752,10 +773,16 @@ class _VersionCheckCardState extends State<_VersionCheckCard> {
         });
         return;
       }
-      // 上游锚点比较：上游发布的新版本高于 fork 时的版本即提示
-      final hasUpdate = VersionCheckService.isUpstreamUpdateAvailable(
-        latestTag,
-      );
+      // v57：默认仓库为自己的发布仓库——比较本地安装版本与最新 tag；
+      // 仅当发布仓库配置回上游时走上游锚点比较。
+      final packageInfo = await _packageInfoFuture;
+      final hasUpdate = (VersionCheckService.defaultOwner == 'xyy1124' &&
+              VersionCheckService.defaultRepo == 'LnnLore')
+          ? VersionCheckService.isNewerThan(
+              latestTag,
+              packageInfo.version,
+            )
+          : VersionCheckService.isUpstreamUpdateAvailable(latestTag);
       await _load(); // 刷新上次检查时间显示
       if (!mounted) {
         return;
@@ -763,12 +790,11 @@ class _VersionCheckCardState extends State<_VersionCheckCard> {
       setState(() {
         _checking = false;
         if (!hasUpdate) {
-          _resultText = '上游暂无新版本（最新 $latestTag，特别版基于 '
-              '${VersionCheckService.baselineUpstreamVersion}）';
+          _resultText = '已是最新版本（最新 $latestTag，当前 '
+              '${packageInfo.version}）';
         } else {
-          _resultText = '上游已发布新版本：$latestTag'
-              '（当前特别版基于 ${VersionCheckService.baselineUpstreamVersion}），'
-              '可前往 GitHub 查看更新说明并获取新版本';
+          _resultText = '发现新版本：$latestTag（当前 '
+              '${packageInfo.version}），可前往 GitHub 查看更新说明并获取新版本';
         }
       });
     } catch (error) {
