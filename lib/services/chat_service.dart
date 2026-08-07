@@ -112,10 +112,45 @@ class ChatService {
     );
 
     // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
-    final localVariables = await ChatDatabaseService.instance
+    var localVariables = await ChatDatabaseService.instance
         .getSessionVariables(session.id);
 
     final truncatedChatMessages = _truncateChatMessages(chatMessages);
+
+    // 特别版：旁白确定性状态修改（（烙印值+10）（烙印值=35）
+    // （黑丝状态=破损）等）——发送时立即应用并持久化，状态栏即时
+    // 更新，不依赖模型是否输出状态协议。
+    final narrationConfig = TrackerConfig.fromCardJson(character.cardJson);
+    if (narrationConfig.isEnabled && input.trim().isNotEmpty) {
+      final narrationChanges =
+          TrackerRuntime.parseNarrationStateChanges(input, narrationConfig);
+      if (narrationChanges.isNotEmpty) {
+        final narrationVariables = Map<String, String>.from(localVariables);
+        for (final entry in narrationChanges.entries) {
+          final key = entry.key;
+          final (value, isAdd) = entry.value;
+          if (isAdd) {
+            final next = TrackerRuntime.reduce(
+              current: TrackerRuntime.initState(
+                config: narrationConfig,
+                existing: narrationVariables,
+              ),
+              patch: StatePatch(addValues: {key: num.tryParse(value) ?? 0}),
+              config: narrationConfig,
+            );
+            narrationVariables[key] = '${next[key]}';
+          } else {
+            narrationVariables[key] = value;
+          }
+        }
+        await ChatDatabaseService.instance.upsertSessionVariables(
+          session.id,
+          narrationVariables,
+        );
+        localVariables = narrationVariables;
+        debugPrint('[旁白] 应用状态修改: $narrationChanges');
+      }
+    }
 
     final normalizedModelText = modelText?.trim().isNotEmpty == true
         ? modelText!.trim()
@@ -649,6 +684,22 @@ class ChatService {
         {'role': fixedRole, 'content': continueNudge},
     ];
 
+    // 特别版：继续推进同样注入 tracker 状态指令（与普通发送一致），
+    // 否则"继续"生成时模型收不到当前状态、也不会输出状态 patch。
+    final trackerState = _trackerStateText(character.cardJson, localVariables);
+    if (trackerState != null && trackerState.trim().isNotEmpty) {
+      final systemIdx = requestMessages.indexWhere((m) => m['role'] == 'system');
+      if (systemIdx >= 0) {
+        requestMessages[systemIdx] = {
+          ...requestMessages[systemIdx],
+          'content':
+              '${requestMessages[systemIdx]['content']}\n\n$trackerState',
+        };
+      } else {
+        requestMessages.insert(0, {'role': 'system', 'content': trackerState});
+      }
+    }
+
     try {
       final completion = await _createCompletionFromMessages(
         config,
@@ -890,13 +941,22 @@ class ChatService {
       if (specialStatusHtml != null) {
         variables[kSpecialStatusHtmlKey] = specialStatusHtml;
         // 模型输出的是面板文本（而非 patch 协议）时，从面板解析
-        // `label：值` 回写状态变量——保证状态栏随模型输出更新。
+        // `label：值` 回写状态变量——但 **不得覆盖** patch/setvar
+        // 已经修改过的字段（否则旧面板会把新 patch 值盖回去）。
         if (config.isEnabled) {
+          final protectedKeys = <String>{
+            for (final (k, _) in calls) k,
+            ...patch.setValues.keys,
+            ...patch.addValues.keys,
+          };
           final parsed = TrackerRuntime.extractValuesFromPanelText(
             specialStatusHtml,
             config,
           );
           for (final e in parsed.entries) {
+            if (protectedKeys.contains(e.key)) {
+              continue;
+            }
             variables[e.key] = e.value;
           }
         }
@@ -944,10 +1004,11 @@ class ChatService {
   }
 
   /// 特别版：生成 Tracker 状态自然文本（无卡声明时返回 null）。
-  /// 追加"回复末尾必须按卡面板模板输出状态"的指令——模型照模板输出后，
-  /// App 从面板解析 label:值 回写变量表，状态更新才能闭环。
-  /// ⚠️ 变量表为空（新会话）时必须用 initialState 兜底继续注入——
-  ///    否则第一轮就没有输出指令，模型不知道要输出面板，旁白永不更新。
+  /// 追加"回复末尾必须输出结构化状态协议"的指令——模型输出 patch 后，
+  /// App 解析应用、再按角色卡模板渲染面板，状态更新才能闭环。
+  /// ⚠️ 只读取 stateSchema/initialState 声明的 key，彻底排除 `__` 开头
+  ///    的内部变量（__special_status_html__ / __msg_status_html__:* 等）——
+  ///    否则历史 HTML 面板会被当成"当前状态"重新注入模型。
   String? _trackerStateText(
     Map<String, dynamic>? cardJson,
     Map<String, String> variables,
@@ -956,12 +1017,20 @@ class ChatService {
     if (!config.isEnabled) {
       return null;
     }
-    final state = variables.isEmpty
-        ? config.initialState.map((k, v) => MapEntry(k, '$v'))
-        : variables;
-    if (state.isEmpty) {
+    final trackerKeys = <String>{
+      ...config.stateSchema.keys,
+      ...config.initialState.keys,
+    };
+    if (trackerKeys.isEmpty) {
       return null;
     }
+    final existingState = <String, String>{
+      for (final key in trackerKeys)
+        if (variables[key]?.trim().isNotEmpty == true) key: variables[key]!,
+    };
+    final state = existingState.isEmpty
+        ? config.initialState.map((k, v) => MapEntry(k, '$v'))
+        : existingState;
     final text = TrackerRuntime.formatStateText(
       state: Map<String, dynamic>.from(state),
       config: config,
@@ -969,37 +1038,13 @@ class ChatService {
     if (text.isEmpty) {
       return null;
     }
-    final panelTemplate =
-        TrackerRuntime.statusFallbackTemplate(cardJson) ?? _schemaTemplate(config);
-    if (panelTemplate == null) {
-      return text;
-    }
-    // 输出指令：要求模型按模板输出面板（{{getvar::key}} 提示用当前值替换）
+    // 输出指令：要求模型只输出结构化 patch（不再复制面板模板——模板
+    // 由 App 自己渲染，避免"状态栏未更新"等文案被模型带进面板）
     return '$text\n\n'
-        '（请在本条回复末尾，用以下状态面板模板输出当前状态：\n'
-        '$panelTemplate\n'
-        '把其中的 {{getvar::xxx}} 替换为当前实际值后原样输出即可。'
-        '状态若因剧情发生改变，必须在面板中体现新数值。）';
-  }
-
-  /// 卡无 StatusFallback 模板时，用 schema 生成简易面板模板。
-  static String? _schemaTemplate(TrackerConfig config) {
-    if (config.displayOrder.isEmpty) {
-      return null;
-    }
-    final parts = <String>[];
-    for (final key in config.displayOrder) {
-      final schema = config.stateSchema[key];
-      if (schema == null || schema.hidden) {
-        continue;
-      }
-      final label = schema.label.isNotEmpty ? schema.label : key;
-      parts.add('$label：{{getvar::$key}}');
-    }
-    if (parts.isEmpty) {
-      return null;
-    }
-    return '<details><summary>📊 状态栏</summary>${parts.join(' · ')}</details>';
+        '（状态变化时，请在本条回复末尾用 JSON 代码块输出结构化状态更新，'
+        '格式：\n```json\n{"patch":{"set":{},"add":{"字段key":数值变化}}}\n```\n'
+        'set 为直接赋值，add 为增减量；没有状态变化则不要输出。'
+        '不要输出状态面板模板本身，面板由系统自动渲染。）';
   }
 
   Future<Preset> _resolvePreset(String? presetId) async {

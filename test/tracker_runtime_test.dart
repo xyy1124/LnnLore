@@ -338,5 +338,44 @@ void main() {
       expect(result['energy'], '35');
       expect(result['location'], '木屋');
     });
+    test('复杂 HTML 结构（span 分离 label 与值）也能解析', () {
+      const panel =
+          '<div><span>体力：</span><b>42</b></div><div><span>地点</span><b>雪山</b></div>';
+      final result = TrackerRuntime.extractValuesFromPanelText(panel, _config());
+      expect(result['energy'], '42');
+      expect(result['location'], '雪山');
+    });
+    test('label 首次出现无效、后续出现有效时取后续值', () {
+      const panel = '<div>体力：N/A</div><div>体力：66</div>';
+      final result = TrackerRuntime.extractValuesFromPanelText(panel, _config());
+      expect(result['energy'], '66');
+    });
+  });
+
+  group('TrackerRuntime.parseNarrationStateChanges', () {
+    test('旁白（体力+10）解析为 add', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('（体力+10）', _config());
+      expect(changes['energy'], ('10', true));
+    });
+    test('旁白（体力=35）解析为 set', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('（体力=35）', _config());
+      expect(changes['energy'], ('35', false));
+    });
+    test('旁白（地点=雪山）字符串赋值', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('（地点=雪山）', _config());
+      expect(changes['location'], ('雪山', false));
+    });
+    test('旁白（黑丝状态=破损）无 schema 字段不解析', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('（黑丝状态=破损）', _config());
+      expect(changes, isEmpty);
+    });
+    test('无旁白文本返回空', () {
+      expect(TrackerRuntime.parseNarrationStateChanges('正常聊天', _config()),
+          isEmpty);
+    });
   });
 }

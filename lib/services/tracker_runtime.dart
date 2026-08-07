@@ -317,12 +317,16 @@ class TrackerRuntime {
 
   /// 从模型输出的状态面板 HTML/文本解析 `label：值` 回写状态。
   /// 卡要求模型"输出面板"（而非 patch 协议）时，变量表也能随之更新。
-  /// 容错：冒号可省略（`烙印值 35/100`）、label 前可有 emoji（`❤️ 烙印值`）、
-  /// number 字段取数字部分、清洗尾部标点。
+  /// 容错：先转纯文本（`<br>`/块级标签→换行、剥标签、解 HTML 实体），
+  /// 冒号可省略（`烙印值 35/100`）、label 前可有 emoji（`❤️ 烙印值`）、
+  /// number 字段取数字部分、清洗尾部标点；
+  /// 遍历 label 的**所有**出现位置，取第一个能解析出合法值的（避免
+  /// `<span>烙印值：</span><b>35</b>` 这类结构因首次匹配失败而漏掉）。
   static Map<String, String> extractValuesFromPanelText(
     String panelHtml,
     TrackerConfig config,
   ) {
+    final text = _htmlToPlainText(panelHtml);
     final out = <String, String>{};
     for (final entry in config.stateSchema.entries) {
       final key = entry.key;
@@ -330,27 +334,98 @@ class TrackerRuntime {
       final label = schema.label.isNotEmpty ? schema.label : key;
       final escaped = RegExp.escape(label);
       // 冒号可选；值到分隔符（· < | ， ； 换行）为止
-      final m = RegExp('$escaped\\s*[:：]?\\s*([^·<|,，;；\\n]+)')
-          .firstMatch(panelHtml);
-      if (m == null) {
-        continue;
-      }
-      var value = m.group(1)!.trim();
-      // 去尾部标点（。！？！\u3001 等）与单位后缀前的斜杠
-      value = value.replaceAll(RegExp(r'[。！？!？,，、\s]+$'), '');
-      if (schema.type == 'number') {
-        final num = RegExp(r'-?\d+(\.\d+)?').firstMatch(value);
-        if (num == null) {
+      final re = RegExp('$escaped\\s*[:：]?\\s*([^·<|,，;；\\n]+)');
+      String? resolved;
+      for (final m in re.allMatches(text)) {
+        var value = m.group(1)!.trim();
+        // 去尾部标点（。！？！\u3001 等）与单位后缀前的斜杠
+        value = value.replaceAll(RegExp(r'[。！？!？,，、\s]+$'), '');
+        if (schema.type == 'number') {
+          final num = RegExp(r'-?\d+(\.\d+)?').firstMatch(value);
+          if (num == null) {
+            continue;
+          }
+          value = num.group(0)!;
+        }
+        if (value.isEmpty) {
           continue;
         }
-        value = num.group(0)!;
+        resolved = value;
+        break;
       }
-      if (value.isEmpty) {
-        continue;
+      if (resolved != null) {
+        out[key] = resolved;
       }
-      out[key] = value;
     }
     return out;
+  }
+
+  /// 解析旁白/用户消息里的确定性状态修改：
+  /// `（烙印值+10）`、`（烙印值-5）`、`（烙印值=35）`、`（黑丝状态=破损）`、
+  /// `(体力 +10)`、`（称呼阶段=本尊）`——label 或字段 key 均匹配。
+  /// 返回 key → (值, isAdd)；number 字段 +/- 视为增减，= 为赋值；
+  /// string 字段仅 = 赋值。
+  static Map<String, (String, bool)> parseNarrationStateChanges(
+    String text,
+    TrackerConfig config,
+  ) {
+    final out = <String, (String, bool)>{};
+    for (final entry in config.stateSchema.entries) {
+      final key = entry.key;
+      final schema = entry.value;
+      final label = schema.label.isNotEmpty ? schema.label : key;
+      for (final name in {label, key}) {
+        final escaped = RegExp.escape(name);
+        final m = RegExp(
+          '[（(]\\s*$escaped\\s*([+\\-]?=?|=)\\s*([^)）]+?)\\s*[）)]',
+        ).firstMatch(text);
+        if (m == null) {
+          continue;
+        }
+        final op = m.group(1)!.trim();
+        final rawValue = m.group(2)!.trim();
+        if (rawValue.isEmpty) {
+          continue;
+        }
+        if (schema.type == 'number') {
+          final num = RegExp(r'-?\d+(\.\d+)?').firstMatch(rawValue);
+          if (num == null) {
+            continue;
+          }
+          if (op == '=') {
+            out[key] = (num.group(0)!, false);
+          } else {
+            // +10 / -5 / 10（无符号视为增减）
+            out[key] = (num.group(0)!, true);
+          }
+        } else {
+          if (op != '=') {
+            continue; // 字符串字段只接受赋值
+          }
+          out[key] = (rawValue, false);
+        }
+        break;
+      }
+    }
+    return out;
+  }
+
+  /// HTML → 纯文本：`<br>`/块级结束标签转换行、剥标签、解常用实体。
+  static String _htmlToPlainText(String html) {
+    return html
+        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+        .replaceAll(
+          RegExp(r'</(?:div|p|tr|li|summary|details|h[1-6])>',
+              caseSensitive: false),
+          '\n',
+        )
+        .replaceAll(RegExp(r'<[^>]+>', multiLine: true), '')
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&quot;', '"');
   }
 
   /// 把状态格式化为注入 prompt 的自然文本。
