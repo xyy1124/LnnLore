@@ -401,28 +401,17 @@ class TrackerRuntime {
 
   /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`。
   ///
-  /// `<details>/<summary>` 折叠处理：只删标签会留下 summary 标题文字
-  /// 变成普通正文显示在面板外（v47 截图问题）——这里**删除整个
-  /// summary 元素（含标题内容）**，并把 details 标签剥掉让面板内容
-  /// 直接展开。若后续要支持真实折叠，可保留 details/summary 让
-  /// HtmlWidget 原生渲染（0.17.2 支持），但需在显示层同步调整。
+  /// v49：`<summary>/<details>` **不再在此删除**——折叠标题（summary）与
+  /// 折叠状态由显示层（message_bubble → SpecialStatusPanel）原生控制：
+  /// 显示层先提取标题，再剥掉标签；服务层保留标签，保证标题信息不丢。
+  /// HtmlWidget 对 details 渲染不可靠（v47 截图问题），因此折叠不用
+  /// HTML 标签实现，而是 Flutter Stateful 折叠。
   static String _cleanStatusPanelText(String html) {
     return html
         .replaceAll('{{match}}', '')
         .replaceAll('状态栏未更新，当前：', '')
         .replaceAll('状态栏未更新，当前:', '')
-        .replaceAll('状态栏未更新', '')
-        .replaceAll(
-          RegExp(
-            r'<summary\b[^>]*>[\s\S]*?</summary>',
-            caseSensitive: false,
-          ),
-          '',
-        )
-        .replaceAll(
-          RegExp(r'</?details\b[^>]*>', caseSensitive: false),
-          '',
-        );
+        .replaceAll('状态栏未更新', '');
   }
 
   /// 从卡 `data.extensions.regex_scripts` 取 StatusFallback 的 replaceString
@@ -576,9 +565,11 @@ class TrackerRuntime {
 
   /// 解析旁白/用户消息里的确定性状态修改：
   /// `（烙印值+10）`、`（烙印值-5）`、`（烙印值=35）`、`（黑丝状态=破损）`、
-  /// `(体力 +10)`、`（称呼阶段=本尊）`——label 或字段 key 均匹配。
+  /// `(体力 +10)`、`（称呼阶段=本尊）`、自然语言 `烙印值提高40%` /
+  /// `烙印值增加10` / `烙印值减少5`——label 或字段 key 均匹配。
   /// 返回 key → (值, isAdd)；number 字段 +/- 视为增减，= 为赋值；
-  /// string 字段仅 = 赋值。
+  /// string 字段仅 = 赋值（自然语言增减只支持 number 字段）。
+  /// 括号格式优先：字段同时出现括号与自然语言时以括号为准。
   static Map<String, (String, bool)> parseNarrationStateChanges(
     String text,
     TrackerConfig config,
@@ -593,32 +584,54 @@ class TrackerRuntime {
         final m = RegExp(
           '[（(]\\s*$escaped\\s*([+\\-]?=?|=)\\s*([^)）]+?)\\s*[）)]',
         ).firstMatch(text);
-        if (m == null) {
-          continue;
+        if (m != null) {
+          final op = m.group(1)!.trim();
+          final rawValue = m.group(2)!.trim();
+          if (rawValue.isNotEmpty) {
+            if (schema.type == 'number') {
+              final num = RegExp(r'-?\d+(\.\d+)?').firstMatch(rawValue);
+              if (num != null) {
+                if (op == '=') {
+                  out[key] = (num.group(0)!, false);
+                } else {
+                  // +10 / -5 / 10（无符号视为增减）。负号可能被正则
+                  // 捕获在 op 里而 rawValue 不含负号——必须合并，否则
+                  // （烙印值-5）会被当成"增加 5"（v49 确认的 bug）。
+                  final rawNum = num.group(0)!;
+                  final signed = op == '-' && !rawNum.startsWith('-')
+                      ? '-$rawNum'
+                      : rawNum;
+                  out[key] = (signed, true);
+                }
+                break;
+              }
+            } else {
+              if (op == '=') {
+                out[key] = (rawValue, false);
+                break; // 字符串字段只接受赋值
+              }
+            }
+          }
         }
-        final op = m.group(1)!.trim();
-        final rawValue = m.group(2)!.trim();
-        if (rawValue.isEmpty) {
-          continue;
-        }
+        // 自然语言格式：仅 number 字段。语义——提高/增加/上升/加 = 增加，
+        // 降低/减少/下降/减 = 减少；尾随 % 忽略（数值直接作为增量，
+        // 与卡 schema 的 0-100 百分制一致）。
         if (schema.type == 'number') {
-          final num = RegExp(r'-?\d+(\.\d+)?').firstMatch(rawValue);
-          if (num == null) {
-            continue;
+          final increase = RegExp(
+            '$escaped\\s*(?:提高|增加|上升|加)\\s*([+-]?\\d+(?:\\.\\d+)?)\\s*%?',
+          ).firstMatch(text);
+          if (increase != null) {
+            out[key] = (increase.group(1)!, true);
+            break;
           }
-          if (op == '=') {
-            out[key] = (num.group(0)!, false);
-          } else {
-            // +10 / -5 / 10（无符号视为增减）
-            out[key] = (num.group(0)!, true);
+          final decrease = RegExp(
+            '$escaped\\s*(?:降低|减少|下降|减)\\s*(\\d+(?:\\.\\d+)?)\\s*%?',
+          ).firstMatch(text);
+          if (decrease != null) {
+            out[key] = ('-${decrease.group(1)!}', true);
+            break;
           }
-        } else {
-          if (op != '=') {
-            continue; // 字符串字段只接受赋值
-          }
-          out[key] = (rawValue, false);
         }
-        break;
       }
     }
     return out;

@@ -545,9 +545,17 @@ class _MessageBubbleState extends State<MessageBubble> {
     // 统一清洗：模型可能按卡模板"原样输出"（输出指令要求），把
     // {{match}} 与"状态栏未更新"前缀也带进面板——显示层必须剥掉，
     // 否则所有卡都顶着"状态栏未更新"+{{match}} 原文，渲染很奇怪。
-    // summary 整个元素（含标题文字）删除——只删标签会把标题变成
-    // 普通正文显示在面板外（v47 截图问题）；details 标签剥掉让面板
-    // 内容直接展开显示。
+    // v49：summary 标题不再丢弃——提取为折叠标题（SpecialStatusPanel
+    // 原生渲染标题栏，点击折叠/展开）；details 标签剥掉让面板内容
+    // 直接展开显示（折叠由 Flutter 控制，HtmlWidget 对 details 不可靠）。
+    String? panelTitle;
+    final summaryMatch = RegExp(
+      r'<summary\b[^>]*>([\s\S]*?)</summary>',
+      caseSensitive: false,
+    ).firstMatch(html);
+    if (summaryMatch != null) {
+      panelTitle = summaryMatch.group(1)?.trim();
+    }
     html = html
         .replaceAll('{{match}}', '')
         .replaceAll('状态栏未更新，当前：', '')
@@ -570,7 +578,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     }
     return Padding(
       padding: const EdgeInsets.only(top: 4),
-      child: SpecialStatusPanel(html: html),
+      child: SpecialStatusPanel(html: html, title: panelTitle),
     );
   }
 

@@ -173,4 +173,68 @@ void main() {
     // 需 findRichText: true 才能匹配
     expect(find.textContaining('单聊状态：55/100', findRichText: true), findsOneWidget);
   });
+
+  testWidgets('v49: 面板 summary 标题提取为折叠标题栏（可点击收起）', (tester) async {
+    final card = character(
+      id: 'A',
+      name: '角色A',
+      cardJson: cardWithTemplate(
+        '<details><summary>🩸 烙印状态面板</summary>'
+        '<div>烙印值：{{getvar::yw_brand}}/100</div></details>',
+        'yw_brand',
+      ),
+    );
+    await tester.pumpWidget(
+      buildBubble(
+        message: ChatMessage(id: 'm1', text: '角色回复正文', isMe: false),
+        character: card,
+        sessionVariables: {
+          '__msg_tracker_state_v3__:m1': '{"yw_brand":"30"}',
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 标题提取为 Flutter Text（SpecialStatusPanel 原生标题栏，非 HtmlWidget）
+    // 注：含 emoji（🩸）的文本 Text 内部走 RichText，需 findRichText: true
+    expect(
+      find.text('🩸 烙印状态面板', findRichText: true),
+      findsOneWidget,
+    );
+    // 初始展开：正文可见
+    expect(
+      find.textContaining('烙印值：30/100', findRichText: true),
+      findsOneWidget,
+    );
+    // 点击标题 → 收起：正文隐藏
+    await tester.tap(find.text('🩸 烙印状态面板', findRichText: true));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('烙印值：30/100', findRichText: true),
+      findsNothing,
+    );
+    // 再点击 → 展开
+    await tester.tap(find.text('🩸 烙印状态面板', findRichText: true));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('烙印值：30/100', findRichText: true),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('v49: SpecialStatusPanel 无标题时行为与旧版一致（无折叠栏）', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SpecialStatusPanel(html: '<div>烙印值：30/100</div>'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 无折叠标题栏；正文直接渲染
+    expect(
+      find.textContaining('烙印值：30/100', findRichText: true),
+      findsOneWidget,
+    );
+  });
 }

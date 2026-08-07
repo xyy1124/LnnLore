@@ -1262,6 +1262,11 @@ class ChatViewModel extends ChangeNotifier {
         character: character,
         chatMessages: _messages,
         input: name,
+        // 特别版：状态解析文本 = 用户补充内容。快捷指令的 [input] 只是
+        // 指令名（如"旁白"），补充（如"烙印值提高40%"）只在 modelText 里，
+        // 必须单独传 trackerText，否则本地状态解析看不到补充、状态不落地
+        // （v49 确认的"快捷指令下状态不更新"根因）。
+        trackerText: extra,
         selectedPresetId: _selectedPresetId,
         selectedUserSettingId: _selectedUserSettingId,
         selectedWorldBookIds: _resolvedWorldBookIds(character),

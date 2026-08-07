@@ -81,6 +81,16 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.49',
+                  date: '2026-08-07',
+                  changes: [
+                    '【特别版】快捷指令状态更新修复：快捷指令的界面输入只是指令名（如"旁白"），用户补充内容（如"烙印值提高40%"）之前只送给了模型、本地状态解析看不到——v49 新增 trackerText 参数，快捷指令把补充文本单独交给旁白解析器，状态本地确定性落地（"快捷指令下状态不更新"根因）',
+                    '【特别版】旁白解析支持自然语言：`烙印值提高40%` / `体力增加10` / `体力减少5` / `降低/上升/下降/加/减` 等直接识别为增减量（% 忽略、数值为增量，与 0-100 百分制一致）；括号格式仍优先',
+                    '【特别版】修复 `（烙印值-5）` 被当成"增加 5"的 bug：负号被正则捕获在运算符里、数值解析时丢失——现在符号与数值合并，减法正确落地（clamp 到 schema min）',
+                    '【特别版】状态面板支持折叠：`<summary>` 标题不再删除，提取为 Flutter 原生标题栏（箭头指示），点击收起/展开——折叠由 StatefulWidget 控制，不再依赖 HtmlWidget 对 `<details>` 的不可靠渲染；无 summary 的面板行为与旧版一致',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.48',
                   date: '2026-08-07',
                   changes: [

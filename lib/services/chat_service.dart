@@ -79,6 +79,11 @@ class ChatService {
     /// 特别版：发送给模型的完整内容（快捷指令场景：界面显示 [input]，
     /// 实际送模型的为 [modelText]）
     String? modelText,
+    /// 特别版：本地状态解析文本（快捷指令场景：界面 [input] 只是指令名，
+    /// 用户补充内容（如"烙印值提高40%"）在 [modelText] 里——必须单独传给
+    /// 状态解析器，否则补充的状态变化只送给模型、本地不落地（v49 确认
+    /// 的"快捷指令下状态不更新"根因）。为 null 时回退解析 [input]。
+    String? trackerText,
     /// 特别版：群聊中本条回复的发言角色 id（assistant 消息归属）
     String? assistantCharacterId,
   }) async {
@@ -133,6 +138,14 @@ class ChatService {
     // 旁白字段本轮去重：这些字段已确定性落地，模型再输出同字段 patch
     // 会被过滤（防止 20→旁白+10→模型add+10→40 的重复叠加）
     var narrationChanges = <String, (String, bool)>{};
+    // 状态解析文本：trackerText（快捷指令补充）优先，否则用户原始输入。
+    // 快捷指令场景 [input] 只是指令名（如"旁白"），补充内容（如
+    // "烙印值提高40%"）在 [modelText] 里——不单独传的话本地解析器
+    // 完全看不到补充，状态不落地（v49 确认的链路断点）。
+    final narrationText =
+        trackerText?.trim().isNotEmpty == true
+            ? trackerText!.trim()
+            : input.trim();
     // v47：TRACKER_FLOW 排查日志——一次确认旁白链路到底断在哪一环
     // （tracker 未解析 / 正则没匹配 / SQLite 没写入 / 变量刷新没拿到 /
     // 快照仍用旧值）。装带日志的包后 adb logcat 过滤 [TRACKER_FLOW]。
@@ -141,11 +154,11 @@ class ChatService {
       'card=${character.name} '
       'trackerEnabled=${narrationConfig.isEnabled} '
       'schemaKeys=${narrationConfig.stateSchema.keys} '
-      'input=${input.length > 40 ? input.substring(0, 40) : input}',
+      'narrationText=${narrationText.length > 40 ? narrationText.substring(0, 40) : narrationText}',
     );
-    if (narrationConfig.isEnabled && input.trim().isNotEmpty) {
+    if (narrationConfig.isEnabled && narrationText.isNotEmpty) {
       narrationChanges =
-          TrackerRuntime.parseNarrationStateChanges(input, narrationConfig);
+          TrackerRuntime.parseNarrationStateChanges(narrationText, narrationConfig);
       if (narrationChanges.isNotEmpty) {
         // before：应用前快照（供 TRACKER_FLOW 对比）
         final beforeVariables = Map<String, String>.from(localVariables)

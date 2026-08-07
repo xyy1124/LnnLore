@@ -373,6 +373,76 @@ void main() {
           TrackerRuntime.parseNarrationStateChanges('（黑丝状态=破损）', _config());
       expect(changes, isEmpty);
     });
+    test('v49: 旁白（体力-5）负号保留（-5 而非 +5）', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('（体力-5）', _config());
+      expect(changes['energy'], ('-5', true));
+    });
+    test('v49: 旁白（体力 - 5）带空格负号也保留', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('（体力 - 5）', _config());
+      expect(changes['energy'], ('-5', true));
+    });
+    test('v49: 旁白（关系-10）负增量（min<0 字段）', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('（关系-10）', _config());
+      expect(changes['relationship'], ('-10', true));
+    });
+    test('v49: 自然语言 体力提高40% → add +40', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('烙印值？体力提高40%', _config());
+      expect(changes['energy'], ('40', true));
+    });
+    test('v49: 自然语言 体力增加10 → add +10', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('旁白：体力增加10', _config());
+      expect(changes['energy'], ('10', true));
+    });
+    test('v49: 自然语言 体力上升8 → add +8', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('体力上升8', _config());
+      expect(changes['energy'], ('8', true));
+    });
+    test('v49: 自然语言 体力加3 → add +3', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('体力加3', _config());
+      expect(changes['energy'], ('3', true));
+    });
+    test('v49: 自然语言 体力减少5 → add -5', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('体力减少5', _config());
+      expect(changes['energy'], ('-5', true));
+    });
+    test('v49: 自然语言 体力降低3 → add -3', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('体力降低3', _config());
+      expect(changes['energy'], ('-3', true));
+    });
+    test('v49: 自然语言 体力下降2 → add -2', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('体力下降2', _config());
+      expect(changes['energy'], ('-2', true));
+    });
+    test('v49: 自然语言 体力减 5（带空格）→ add -5', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('体力减 5', _config());
+      expect(changes['energy'], ('-5', true));
+    });
+    test('v49: 括号格式优先于自然语言（（体力+10）体力提高40）', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('（体力+10）体力提高40', _config());
+      expect(changes['energy'], ('10', true));
+    });
+    test('v49: 字符串字段自然语言增减不解析', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('地点提高2', _config());
+      expect(changes, isEmpty);
+    });
+    test('v49: 自然语言 关系降低10 → add -10', () {
+      final changes =
+          TrackerRuntime.parseNarrationStateChanges('关系降低10', _config());
+      expect(changes['relationship'], ('-10', true));
+    });
     test('无旁白文本返回空', () {
       expect(TrackerRuntime.parseNarrationStateChanges('正常聊天', _config()),
           isEmpty);
