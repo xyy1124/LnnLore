@@ -94,9 +94,106 @@ class DecisionChoice {
 class TrackerRuntime {
   TrackerRuntime._();
 
-  /// 从模型输出提取 patch。优先 JSON 块（含 patch.set/add），
-  /// 失败回退 STATE 块。找不到返回空 patch。
+  /// v70：<TRACKER_UPDATE> 标记块——快速模式正文与状态协议分离：
+  /// 正文正常输出，末尾追加标记块（不把长篇正文塞进 JSON reply）。
+  static const String kTrackerUpdateOpenTag = '<TRACKER_UPDATE>';
+  static const String kTrackerUpdateCloseTag = '</TRACKER_UPDATE>';
+
+  /// v70：从响应中提取裁判可选输出的最终状态 "state" 字段——
+  /// `{"state":{"字段key":最终值}}`，App 检测到后按最终值一次性 set
+  /// （不再增量叠加）。key 经 [canonicalizeNarrative] 规范化（label/
+  /// 别名 → 真实 key）。无 state 字段返回空表。
+  static Map<String, String> extractFinalState(
+    String text,
+    TrackerConfig config,
+  ) {
+    // 先扫候选 JSON 块（代码块/含协议键的裸对象）
+    for (final body in _allJsonBlocks(text)) {
+      final result = _finalStateFromBody(body, config);
+      if (result.isNotEmpty) {
+        return result;
+      }
+    }
+    // 兜底：裸 "state" 键（裁判可能不包代码块、无其他协议键）
+    final markerIdx = text.indexOf('"state"');
+    if (markerIdx >= 0) {
+      final start = _backtrackToOpenBrace(text, markerIdx);
+      final end = _findBalancedJsonEnd(text, start);
+      if (end > start) {
+        final result = _finalStateFromBody(
+          text.substring(start, end + 1),
+          config,
+        );
+        if (result.isNotEmpty) {
+          return result;
+        }
+      }
+    }
+    return const <String, String>{};
+  }
+
+  static Map<String, String> _finalStateFromBody(
+    String body,
+    TrackerConfig config,
+  ) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is! Map<String, dynamic>) {
+        return const {};
+      }
+      final raw = decoded['state'];
+      if (raw is! Map<String, dynamic>) {
+        return const {};
+      }
+      final result = <String, String>{};
+      raw.forEach((k, v) {
+        final key = canonicalTrackerKey('$k', config);
+        if (key != null && v != null) {
+          result[key] = '$v';
+        }
+      });
+      return result;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// v70：从文本中提取 <TRACKER_UPDATE>...</TRACKER_UPDATE> 标记块。
+  /// 返回 (标记内 JSON 文本, 标记前正文)；无标记返回 (null, 原文本)。
+  static (String?, String) extractTrackerUpdateBlock(String text) {
+    final start = text.lastIndexOf(kTrackerUpdateOpenTag);
+    if (start < 0) {
+      return (null, text);
+    }
+    final end = text.indexOf(kTrackerUpdateCloseTag, start);
+    if (end <= start) {
+      return (null, text);
+    }
+    final jsonText = text
+        .substring(start + kTrackerUpdateOpenTag.length, end)
+        .trim();
+    final displayText = text.substring(0, start).trim();
+    return (jsonText, displayText);
+  }
+
+  /// 从模型输出提取 patch。优先 <TRACKER_UPDATE> 标记（v70 快速模式
+  /// 新协议），再 JSON 块（含 patch.set/add），失败回退 STATE 块。
+  /// 找不到返回空 patch。
   static StatePatch extractPatch(String text) {
+    final (markerJson, _) = extractTrackerUpdateBlock(text);
+    if (markerJson != null) {
+      try {
+        final decoded = jsonDecode(markerJson);
+        if (decoded is Map<String, dynamic>) {
+          final patch = _patchFromDecoded(decoded);
+          if (patch != null) {
+            return patch;
+          }
+        }
+      } catch (_) {
+        // 标记内 JSON 解析失败 → 回退 JSON 块解析（兼容旧协议）
+      }
+    }
     final jsonPatch = _extractJsonPatch(text);
     if (jsonPatch != null) {
       return jsonPatch;
@@ -709,6 +806,49 @@ class TrackerRuntime {
       '- 如果用户行为与当前状态冲突，应描写合理的抵抗、过渡或转变，'
       '并输出对应 patch。\n'
       '- 没有明确恢复事件时，服装、伤势、关系、位置等连续状态必须保持。';
+
+  /// v70：后台/严格模式的主模型指令——只要求正文体现状态，**禁止输出
+  /// 任何状态协议**（状态判断由独立裁判完成）。单一写入者：快速=主模型，
+  /// 后台/严格=裁判。
+  static const String kStoryOnlySuffix =
+      '[状态输出规则]\n'
+      '- 当前状态必须自然影响剧情。\n'
+      '- 只输出剧情正文。\n'
+      '- 禁止输出 JSON、STATE、HTML、状态栏或状态面板。\n'
+      '- 状态判断由独立裁判完成，你不需要输出任何状态更新。';
+
+  /// v70：快速模式的内联状态协议——正文正常输出，末尾追加标记块
+  /// （不把长篇正文塞进 JSON reply——转义/截断导致整个对象无法解析，
+  /// 快速模式 patch 随机失败的根因）。
+  static const String kInlineTrackerProtocolSuffix =
+      '（正文正常输出；正文结束后，在本条回复末尾用以下标记追加状态'
+      '更新（不要包裹在正文里）：\n'
+      '<TRACKER_UPDATE>\n'
+      '{\n'
+      '  "patch": {\n'
+      '    "set": {},\n'
+      '    "add": {}\n'
+      '  },\n'
+      '  "narrative": {},\n'
+      '  "consequence": {}\n'
+      '}\n'
+      '</TRACKER_UPDATE>\n'
+      '【字段更新方式】number 字段增减写入 add（例如某好感字段增加 2 时写 '
+      '"add":{"该字段key":2}）；string 字段变化写入 set（例如某状态字段变为'
+      '新状态时写 "set":{"该字段key":"新状态"}）。JSON 中禁止使用'
+      '"字段key""数值变化"等占位文字。\n'
+      'patch 只使用上方列出的 key。状态有变化就如实输出；没有变化也必须'
+      '输出空 patch（"patch":{"set":{},"add":{}}）。\n'
+      'narrative 中凡是 patch 修改过的字段都必须给出解读（一句话，结合本轮'
+      '实际发生的事件；只能使用字段 key，禁止中文 label）。\n'
+      'consequence 与 narrative 覆盖相同字段——说明该状态下一轮应如何'
+      '影响角色行为（持续状态的保持要求/反转条件）。\n'
+      '【v69 最高优先级规则】\n'
+      '- 正文只写剧情。\n'
+      '- 禁止在正文中输出任何状态栏。\n'
+      '- 禁止输出 <details>、<summary>、<!--panel-->、状态栏 HTML。\n'
+      '- 禁止输出"当前状态：""状态面板：""状态栏："等纯文本状态栏。\n'
+      '- 状态栏由 App 根据最终状态自动渲染。）';
 
   /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`。
   ///
@@ -1656,40 +1796,50 @@ class TrackerRuntime {
         if (decoded is! Map<String, dynamic>) {
           continue;
         }
-        final patchRaw = decoded['patch'];
-        final setValues = <String, dynamic>{};
-        final addValues = <String, num>{};
-        // v55：只要 JSON 含 "patch" 键即视为协议出现（空 patch 也算）——
-        // 区分"模型输出了合法空 patch（判断无变化）"与"没输出协议"
-        var protocolDetected = decoded.containsKey('patch');
-        if (patchRaw is Map<String, dynamic>) {
-          final set = patchRaw['set'];
-          if (set is Map<String, dynamic>) {
-            set.forEach((k, v) => setValues[k] = v);
-          }
-          final add = patchRaw['add'];
-          if (add is Map<String, dynamic>) {
-            add.forEach((k, v) {
-              final numValue = v is num ? v : num.tryParse('$v');
-              if (numValue != null && numValue.isFinite) {
-                addValues[k] = numValue;
-              }
-            });
-          }
-        }
-        if (protocolDetected || setValues.isNotEmpty || addValues.isNotEmpty) {
-          // 协议正文：JSON 含 "reply" 字段时一并携带（防止正文丢失）
-          final reply = decoded['reply'];
-          return StatePatch(
-            setValues: setValues,
-            addValues: addValues,
-            reply: reply is String && reply.isNotEmpty ? reply : null,
-            protocolDetected: protocolDetected,
-          );
+        final patch = _patchFromDecoded(decoded);
+        if (patch != null) {
+          return patch;
         }
       } catch (_) {
         // JSON 解析失败继续下一个候选
       }
+    }
+    return null;
+  }
+
+  /// v70：从解码后的 JSON map 解析 patch（<TRACKER_UPDATE> 标记与
+  /// JSON 块共用）。只要含 "patch" 键即视为协议出现（空 patch 也算）。
+  static StatePatch? _patchFromDecoded(Map<String, dynamic> decoded) {
+    final patchRaw = decoded['patch'];
+    final setValues = <String, dynamic>{};
+    final addValues = <String, num>{};
+    // v55：只要 JSON 含 "patch" 键即视为协议出现（空 patch 也算）——
+    // 区分"模型输出了合法空 patch（判断无变化）"与"没输出协议"
+    var protocolDetected = decoded.containsKey('patch');
+    if (patchRaw is Map<String, dynamic>) {
+      final set = patchRaw['set'];
+      if (set is Map<String, dynamic>) {
+        set.forEach((k, v) => setValues[k] = v);
+      }
+      final add = patchRaw['add'];
+      if (add is Map<String, dynamic>) {
+        add.forEach((k, v) {
+          final numValue = v is num ? v : num.tryParse('$v');
+          if (numValue != null && numValue.isFinite) {
+            addValues[k] = numValue;
+          }
+        });
+      }
+    }
+    if (protocolDetected || setValues.isNotEmpty || addValues.isNotEmpty) {
+      // 协议正文：JSON 含 "reply" 字段时一并携带（防止正文丢失）
+      final reply = decoded['reply'];
+      return StatePatch(
+        setValues: setValues,
+        addValues: addValues,
+        reply: reply is String && reply.isNotEmpty ? reply : null,
+        protocolDetected: protocolDetected,
+      );
     }
     return null;
   }
