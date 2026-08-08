@@ -1,3 +1,4 @@
+import 'package:pocket_inn/models/tracker_config.dart';
 import 'package:pocket_inn/services/chat_variable_service.dart';
 import 'package:pocket_inn/services/tracker_runtime.dart';
 
@@ -331,11 +332,17 @@ class ChatDisplaySanitizer {
   /// 开场消息批量提取：正文列表 + 特殊状态栏 HTML（取最后一个）。
   /// 空白/重复消息过滤（避免空白开场进翻页）。
   static SanitizedOpeningMessages extractOpeningMessages(
-    Iterable<String> raw,
-  ) {
+    Iterable<String> raw, {
+    /// v71：角色卡 JSON——提供 tracker config 用于剥离开场消息末尾的
+    /// 纯文本状态栏（"当前场景：…\n好感：30/100"——首条消息正文里
+    /// 残留的纯文本状态栏，extract 只剥 HTML 面板/协议块、不剥纯文本
+    /// label:值 行）。
+    Map<String, dynamic>? cardJson,
+  }) {
     final messages = <String>[];
     final seen = <String>{};
     String? specialStatusHtml;
+    final config = cardJson == null ? null : TrackerConfig.fromCardJson(cardJson);
     for (final text in raw) {
       final extracted = extract(text);
 
@@ -347,6 +354,13 @@ class ChatDisplaySanitizer {
         if (!isPurePanelText(text, extracted.specialStatusHtml)) {
           displayText = stripStoredMessageForDisplay(text);
         }
+      }
+      // v71：剥离开场消息末尾的纯文本状态栏（有 tracker config 时）
+      if (config != null && config.isEnabled) {
+        displayText = TrackerRuntime.stripTrailingPlainTrackerPanel(
+          displayText,
+          config,
+        );
       }
 
       if (displayText.isNotEmpty && seen.add(displayText)) {
