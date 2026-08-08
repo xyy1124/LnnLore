@@ -20,6 +20,13 @@ import 'special_status_panel.dart';
 import 'thinking_chain_widget.dart';
 import '../utils/pseudo_thinking_chain.dart';
 
+/// v64：消息长按菜单动作（showMenu 路由方案）。
+enum _MessageMenuAction {
+  copy,
+  edit,
+  delete,
+}
+
 class MessageBubble extends StatefulWidget {
   const MessageBubble({
     super.key,
@@ -90,10 +97,6 @@ class MessageBubble extends StatefulWidget {
 }
 
 class _MessageBubbleState extends State<MessageBubble> {
-  static _MessageBubbleState? _currentPopupOwner;
-  final OverlayPortalController _overlayPortalController =
-      OverlayPortalController();
-
   /// 特别版：choices 查询 future 缓存（按 messageId，避免每 build 重建查询）
   Future<List<Map<String, dynamic>>>? _choicesFuture;
   String? _choicesFutureMessageId;
@@ -111,191 +114,123 @@ class _MessageBubbleState extends State<MessageBubble> {
     return _choicesFuture!;
   }
 
-  @override
-  void dispose() {
-    _hideActionPopup();
-    if (_currentPopupOwner == this) {
-      _currentPopupOwner = null;
-    }
-    super.dispose();
-  }
-
   /// v62：统一菜单可用判断（显示操作区且可用）。
   bool get _canOpenActionPopup => widget.showActions && widget.actionsEnabled;
 
-  /// v62：打开请求令牌——同一帧内长按识别与列表重建重复触发时，
-  /// 只放行最后一次请求。
-  int _popupRequestToken = 0;
+  /// v64：防止同一条消息重复发起菜单请求（showMenu 弹出期间忽略后续长按）。
+  bool _openingActionMenu = false;
 
   @override
   void didUpdateWidget(covariant MessageBubble oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // v62：只在消息身份/内容或交互状态真正变化时才关闭菜单——
-    // 之前每次父组件重建（状态栏刷新/变量刷新/主题刷新/普通列表
-    // 重建）都在下一帧隐藏菜单，刚弹出就被关闭。
-    final messageChanged = oldWidget.message.id != widget.message.id ||
-        oldWidget.message.text != widget.message.text;
-    final interactionChanged = oldWidget.showActions != widget.showActions ||
-        oldWidget.actionsEnabled != widget.actionsEnabled;
-    if (messageChanged || interactionChanged) {
-      _hideActionPopup();
-    }
+    // v64：消息身份/内容变化时关闭菜单——旧 OverlayPortal 方案在
+    // 父组件重建时下一帧隐藏菜单（刚弹出就被关闭）；showMenu 是
+    // Navigator 路由，不随消息组件重建，这里不再需要 didUpdateWidget
+    // 干预菜单生命周期。
   }
 
-  void _showActionPopup() {
-    final requestToken = ++_popupRequestToken;
-    if (_currentPopupOwner != null && !_currentPopupOwner!.mounted) {
-      _currentPopupOwner = null;
-    }
-    _currentPopupOwner?._hideActionPopup();
-    _hideActionPopup();
-    if (!mounted || !_canOpenActionPopup) {
+  /// v64：长按消息弹出操作菜单——由 Navigator 管理的 showMenu 路由，
+  /// 替代旧方案"每条消息一个 OverlayPortalController + 全局 owner +
+  /// 下一帧延迟显示"（排队回调不失效导致偶尔不弹/再次长按延迟）。
+  Future<void> _showActionMenu(Offset globalPosition) async {
+    if (_openingActionMenu || !mounted || !_canOpenActionPopup) {
       return;
     }
-    // v62：下一帧再显示——长按识别与列表重建可能在同一帧内重复
-    // 触发打开；令牌保证只放行最后一次
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted ||
-          requestToken != _popupRequestToken ||
-          !_canOpenActionPopup) {
+    _openingActionMenu = true;
+    try {
+      final overlayState = Overlay.of(context, rootOverlay: true);
+      final renderObject = overlayState.context.findRenderObject();
+      if (renderObject is! RenderBox) {
         return;
       }
-      _overlayPortalController.show();
-      _currentPopupOwner = this;
-    });
-  }
+      final overlayRect = Offset.zero & renderObject.size;
+      final anchorRect = globalPosition & const Size(1, 1);
 
-  void _hideActionPopup() {
-    if (_overlayPortalController.isShowing) {
-      _overlayPortalController.hide();
-    }
-    if (_currentPopupOwner == this) {
-      _currentPopupOwner = null;
-    }
-  }
-
-  Widget _buildPopupOverlay(BuildContext context, OverlayChildLayoutInfo info) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isMe = widget.message.isMe;
-    final Offset targetPos = Offset(
-      info.childPaintTransform.getTranslation().x,
-      info.childPaintTransform.getTranslation().y,
-    );
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Positioned(
-          left: -targetPos.dx,
-          top: -targetPos.dy,
-          width: info.overlaySize.width,
-          height: info.overlaySize.height,
-          child: Listener(
-            behavior: HitTestBehavior.translucent,
-            onPointerDown: (_) => _hideActionPopup(),
-          ),
+      final result = await showMenu<_MessageMenuAction>(
+        context: context,
+        useRootNavigator: true,
+        position: RelativeRect.fromRect(anchorRect, overlayRect),
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        elevation: 6,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
         ),
-        Positioned(
-          left: isMe ? null : targetPos.dx,
-          right: isMe
-              ? info.overlaySize.width - targetPos.dx - info.childSize.width
-              : null,
-          // v62：菜单上下自适应——下方空间不足（靠近屏幕底部/输入框）
-          // 时显示在消息上方，不再被遮挡
-          top: _popupTop(targetPos, info),
-          child: TextFieldTapRegion(
-            groupId: widget.inputTapRegionGroupId,
-            child: Material(
-              elevation: 6,
-              borderRadius: BorderRadius.circular(12),
-              color: colorScheme.surfaceContainerHigh,
-              shadowColor: colorScheme.shadow.withValues(alpha: 0.3),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: _buildPopupActions(colorScheme),
-                ),
+        constraints: const BoxConstraints(minWidth: 120, maxWidth: 220),
+        items: [
+          PopupMenuItem<_MessageMenuAction>(
+            value: _MessageMenuAction.copy,
+            // v64：保留 TapRegion 组——点击菜单项不收起输入框键盘
+            child: TextFieldTapRegion(
+              groupId: widget.inputTapRegionGroupId,
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.copy_outlined, size: 18),
+                  SizedBox(width: 10),
+                  Text('复制'),
+                ],
               ),
             ),
           ),
-        ),
-      ],
-    );
-  }
+          if (widget.canEdit)
+            PopupMenuItem<_MessageMenuAction>(
+              value: _MessageMenuAction.edit,
+              child: TextFieldTapRegion(
+                groupId: widget.inputTapRegionGroupId,
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.edit_outlined, size: 18),
+                    SizedBox(width: 10),
+                    Text('编辑'),
+                  ],
+                ),
+              ),
+            ),
+          if (widget.canDelete)
+            PopupMenuItem<_MessageMenuAction>(
+              value: _MessageMenuAction.delete,
+              child: TextFieldTapRegion(
+                groupId: widget.inputTapRegionGroupId,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.delete_outline,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      '删除',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      );
 
-  /// v62：弹出菜单位置——下面有空间显示在消息下方，否则显示在上方
-  /// （避免底部消息被输入框/屏幕边缘遮挡）。
-  double _popupTop(Offset targetPos, OverlayChildLayoutInfo info) {
-    const popupHeight = 48.0;
-    const popupGap = 4.0;
-    const screenPadding = 8.0;
-    final belowTop = targetPos.dy + info.childSize.height + popupGap;
-    final hasSpaceBelow =
-        belowTop + popupHeight <= info.overlaySize.height - screenPadding;
-    final rawTop = hasSpaceBelow
-        ? belowTop
-        : targetPos.dy - popupHeight - popupGap;
-    return rawTop.clamp(
-      screenPadding,
-      info.overlaySize.height - popupHeight - screenPadding,
-    );
-  }
-
-  List<Widget> _buildPopupActions(ColorScheme colorScheme) {
-    return <Widget>[
-      _buildPopupActionButton(
-        icon: Icons.copy_outlined,
-        tooltip: '复制',
-        onPressed: () {
+      if (!mounted || result == null) {
+        return;
+      }
+      switch (result) {
+        case _MessageMenuAction.copy:
           widget.onCopy();
-          _hideActionPopup();
-        },
-        color: colorScheme.onSurface,
-      ),
-      if (widget.canEdit)
-        _buildPopupActionButton(
-          icon: Icons.edit_outlined,
-          tooltip: '编辑',
-          onPressed: () {
-            widget.onEdit();
-            _hideActionPopup();
-          },
-          color: colorScheme.onSurface,
-        ),
-      if (widget.canDelete)
-        _buildPopupActionButton(
-          icon: Icons.delete_outline,
-          tooltip: '删除',
-          onPressed: () {
-            widget.onDelete();
-            _hideActionPopup();
-          },
-          color: colorScheme.error,
-        ),
-    ];
-  }
-
-  Widget _buildPopupActionButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onPressed,
-    required Color color,
-  }) {
-    return ExcludeFocus(
-      child: IconButton(
-        icon: Icon(icon, size: 18, color: color),
-        onPressed: onPressed,
-        tooltip: tooltip,
-        visualDensity: VisualDensity.compact,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-        style: IconButton.styleFrom(
-          foregroundColor: color,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
-      ),
-    );
+          break;
+        case _MessageMenuAction.edit:
+          widget.onEdit();
+          break;
+        case _MessageMenuAction.delete:
+          widget.onDelete();
+          break;
+      }
+    } finally {
+      _openingActionMenu = false;
+    }
   }
 
   @override
@@ -348,43 +283,39 @@ class _MessageBubbleState extends State<MessageBubble> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              OverlayPortal.overlayChildLayoutBuilder(
-                controller: _overlayPortalController,
-                overlayChildBuilder: _buildPopupOverlay,
-                // v62：普通点击不弹菜单（点击只关闭已打开的菜单）；
-                // 长按才打开应用操作菜单。关闭原生文本选择（selectable:
-                // false）——系统复制菜单与应用菜单不再同时争抢长按手势。
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _hideActionPopup,
-                  onLongPressStart: _canOpenActionPopup
-                      ? (_) => _showActionPopup()
-                      : null,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
+              // v64：长按菜单改用 showMenu（Navigator 路由）——不再需要
+              // OverlayPortal 附着在消息组件上；菜单外点击由路由自带关闭。
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onLongPressStart: _canOpenActionPopup
+                    ? (details) => unawaited(
+                          _showActionMenu(details.globalPosition),
+                        )
+                    : null,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: bubbleColor,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(18),
+                      topRight: Radius.circular(18),
+                      bottomLeft: Radius.circular(18),
+                      bottomRight: Radius.circular(4),
                     ),
-                    decoration: BoxDecoration(
-                      color: bubbleColor,
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(18),
-                        topRight: Radius.circular(18),
-                        bottomLeft: Radius.circular(18),
-                        bottomRight: Radius.circular(4),
-                      ),
-                    ),
-                    child: Semantics(
-                      container: true,
-                      child: ChatMarkdownBody(
-                        text: displayText,
-                        settings: settings,
-                        textColor: textColor,
-                        inlineCodeColor: inlineCodeColor,
-                        codeBlockColor: codeBlockColor,
-                        applyBodyTextColor: false,
-                        selectable: false,
-                      ),
+                  ),
+                  child: Semantics(
+                    container: true,
+                    child: ChatMarkdownBody(
+                      text: displayText,
+                      settings: settings,
+                      textColor: textColor,
+                      inlineCodeColor: inlineCodeColor,
+                      codeBlockColor: codeBlockColor,
+                      applyBodyTextColor: false,
+                      selectable: false,
                     ),
                   ),
                 ),
@@ -511,73 +442,70 @@ class _MessageBubbleState extends State<MessageBubble> {
               const SizedBox(width: 12),
             ],
             Expanded(
-              child: OverlayPortal.overlayChildLayoutBuilder(
-                controller: _overlayPortalController,
-                overlayChildBuilder: _buildPopupOverlay,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (widget.message.hasThinkingChain)
-                      _buildThinkingChain(context, colorScheme),
-                    if (pseudoChain != null)
-                      ThinkingChainWidget(
-                        thinkingChain: pseudoChain,
-                        colorScheme: colorScheme,
-                        initiallyExpanded: !pseudoChainComplete,
-                      ),
-                    // v62：同用户消息——普通点击不弹菜单，长按才打开
-                    // 应用菜单；关闭原生文本选择避免双菜单争抢
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _hideActionPopup,
-                      onLongPressStart: _canOpenActionPopup
-                          ? (_) => _showActionPopup()
-                          : null,
-                      child: Semantics(
-                        container: true,
-                        child: Builder(builder: (context) {
-                          // 显示层轻量清洗（不提取 div/details，避免
-                          // 破坏性 extract 把正文剥空）+ 解析 getvar；
-                          // 为空（纯协议块）不渲染空气泡
-                          final displayText =
-                              ChatVariableService.resolveGetVars(
-                                ChatDisplaySanitizer
-                                    .stripStoredMessageForDisplay(
-                                  _applyRegexScripts(cleanedText),
-                                ),
-                                widget.sessionVariables,
-                              ).trim();
-                          if (displayText.isEmpty) {
-                            return const SizedBox.shrink();
-                          }
-                          return ChatMarkdownBody(
-                            text: displayText,
-                            settings: settings,
-                            textColor: textColor,
-                            inlineCodeColor: inlineCodeColor,
-                            codeBlockColor: codeBlockColor,
-                            selectable: false,
-                          );
-                        }),
-                      ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (widget.message.hasThinkingChain)
+                    _buildThinkingChain(context, colorScheme),
+                  if (pseudoChain != null)
+                    ThinkingChainWidget(
+                      thinkingChain: pseudoChain,
+                      colorScheme: colorScheme,
+                      initiallyExpanded: !pseudoChainComplete,
                     ),
-                    // v51：操作区保留布局——生成/冻结时禁用交互并淡出
-                    // （不移除布局，避免消息高度变化导致视口跳动）
-                    IgnorePointer(
-                      ignoring: !widget.actionsEnabled,
-                      child: AnimatedOpacity(
-                        opacity: widget.actionsEnabled ? 1 : 0,
-                        duration: const Duration(milliseconds: 120),
-                        child: _buildActionButtons(context, colorScheme),
-                      ),
+                  // v64：同用户消息——长按菜单改用 showMenu（Navigator
+                  // 路由），菜单外点击由路由自带关闭
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onLongPressStart: _canOpenActionPopup
+                        ? (details) => unawaited(
+                              _showActionMenu(details.globalPosition),
+                            )
+                        : null,
+                    child: Semantics(
+                      container: true,
+                      child: Builder(builder: (context) {
+                        // 显示层轻量清洗（不提取 div/details，避免
+                        // 破坏性 extract 把正文剥空）+ 解析 getvar；
+                        // 为空（纯协议块）不渲染空气泡
+                        final displayText =
+                            ChatVariableService.resolveGetVars(
+                              ChatDisplaySanitizer
+                                  .stripStoredMessageForDisplay(
+                                _applyRegexScripts(cleanedText),
+                              ),
+                              widget.sessionVariables,
+                            ).trim();
+                        if (displayText.isEmpty) {
+                          return const SizedBox.shrink();
+                        }
+                        return ChatMarkdownBody(
+                          text: displayText,
+                          settings: settings,
+                          textColor: textColor,
+                          inlineCodeColor: inlineCodeColor,
+                          codeBlockColor: codeBlockColor,
+                          selectable: false,
+                        );
+                      }),
                     ),
-                    // 特别版：消息动作按钮（模型 choices）
-                    _buildChoicesRow(context, colorScheme),
-                    // 特别版：本条消息的状态面板（跟随消息渲染，
-                    // 从会话变量表按消息 id 关联）
-                    ?_buildMessageStatusPanel(context),
-                  ],
-                ),
+                  ),
+                  // v51：操作区保留布局——生成/冻结时禁用交互并淡出
+                  // （不移除布局，避免消息高度变化导致视口跳动）
+                  IgnorePointer(
+                    ignoring: !widget.actionsEnabled,
+                    child: AnimatedOpacity(
+                      opacity: widget.actionsEnabled ? 1 : 0,
+                      duration: const Duration(milliseconds: 120),
+                      child: _buildActionButtons(context, colorScheme),
+                    ),
+                  ),
+                  // 特别版：消息动作按钮（模型 choices）
+                  _buildChoicesRow(context, colorScheme),
+                  // 特别版：本条消息的状态面板（跟随消息渲染，
+                  // 从会话变量表按消息 id 关联）
+                  ?_buildMessageStatusPanel(context),
+                ],
               ),
             ),
           ],
@@ -780,14 +708,6 @@ class _MessageBubbleState extends State<MessageBubble> {
       return null;
     }
   }
-
-  /// 从卡 `data.extensions.regex_scripts` 取 StatusFallback 的 replaceString
-  /// 作为"卡里设置的状态栏样子"（含 `{{getvar::key}}` 占位）。
-  /// ⚠️ 卡 JSON 的 extensions 在 `data.extensions` 下（顶层没有）——
-  ///    必须走深层路径，否则所有卡都读不到模板、统一回退内置样式。
-  /// 群聊按消息发言人角色取模板（非全局 activeCharacter）。
-  String? _statusFallbackTemplate() =>
-      TrackerRuntime.statusFallbackTemplate(_messageCharacter?.cardJson);
 
   /// 运行时生成状态面板：无消息级快照时，按卡内 StatusFallback 模板
   /// 渲染（`{{getvar::key}}` 用当前变量表值/initialState 填充）——与
