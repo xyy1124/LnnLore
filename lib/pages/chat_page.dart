@@ -129,6 +129,14 @@ class _ChatPageState extends State<ChatPage> {
     _viewModel.onSessionReloaded = _onSessionReloaded;
     _viewModel.initialize();
     _loadQuickCommands();
+    // v74：快捷指令在管理页新增/编辑/删除后自动重载——
+    // 之前只在 initState 加载一次，新指令要等下次进聊天页才显示
+    QuickCommandService.instance.addListener(_onQuickCommandsChanged);
+  }
+
+  /// v74：快捷指令变化（新增/编辑/删除）时重载列表。
+  void _onQuickCommandsChanged() {
+    _loadQuickCommands();
   }
 
   /// 加载快捷指令（供输入框上方的快捷指令栏使用）。
@@ -154,6 +162,8 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void dispose() {
     _viewModel.removeListener(_onViewModelChanged);
+    // v74：移除快捷指令监听
+    QuickCommandService.instance.removeListener(_onQuickCommandsChanged);
     _textController.dispose();
     _inputFocusNode.dispose();
     _scrollController.dispose();
