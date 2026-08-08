@@ -426,6 +426,9 @@ class TrackerRuntime {
   static String? renderStatusPanelHtml({
     required Map<String, dynamic>? cardJson,
     required Map<String, String> variables,
+    /// v63：本轮动态解读（消息快照 v4 携带，按字段）——`{{getnarrative::key}}`
+    /// 优先用它；无则回退静态阶段描述（gettext）。
+    Map<String, String>? narrative,
   }) {
     final config = TrackerConfig.fromCardJson(cardJson);
     String? valueOf(String key) {
@@ -474,7 +477,7 @@ class TrackerRuntime {
     // getpercent 任一出现即视为模板）。
     if (template != null &&
         RegExp(
-          r'get(var|title|text|color|percent)',
+          r'get(var|title|text|color|percent|narrative)',
           caseSensitive: false,
         ).hasMatch(template)) {
       var rendered = template
@@ -487,7 +490,7 @@ class TrackerRuntime {
       // 不转义会破坏模板结构）。
       rendered = rendered.replaceAllMapped(
         RegExp(
-          r'\{\{\s*(getvar|gettitle|gettext|getcolor|getpercent)::([^}]+)\}\}',
+          r'\{\{\s*(getvar|gettitle|gettext|getcolor|getpercent|getnarrative)::([^}]+)\}\}',
           caseSensitive: false,
         ),
         (m) {
@@ -504,6 +507,15 @@ class TrackerRuntime {
               );
             case 'getpercent':
               return _htmlEscape(_percentText(key, valueOf(key), config));
+            case 'getnarrative':
+              // v63：本轮动态解读优先，无则回退静态阶段描述
+              final n = narrative?[key];
+              if (n != null && n.trim().isNotEmpty) {
+                return _htmlEscape(n.trim());
+              }
+              return _htmlEscape(
+                stageInfo(key, valueOf(key), config)?.text ?? '',
+              );
             default:
               return _htmlEscape(valueOf(key) ?? '');
           }
@@ -613,7 +625,7 @@ class TrackerRuntime {
       return false;
     }
     return RegExp(
-      r'\{\{\s*get(var|title|text|color|percent)::[^}]+\}\}',
+      r'\{\{\s*get(var|title|text|color|percent|narrative)::[^}]+\}\}',
       caseSensitive: false,
     ).hasMatch(value);
   }
@@ -979,6 +991,35 @@ class TrackerRuntime {
     };
   }
 
+  /// v63：从裁判响应中提取 narrative（每字段本轮动态解读）——
+  /// 状态裁判除 patch 外返回 `{"narrative":{"字段key":"本轮解读文字"}}`，
+  /// 数值没跨阶段时文字也能随剧情变化。
+  static Map<String, String> extractNarrative(String text) {
+    final result = <String, String>{};
+    for (final body in _allJsonBlocks(text)) {
+      try {
+        final decoded = jsonDecode(body);
+        if (decoded is! Map<String, dynamic>) {
+          continue;
+        }
+        final raw = decoded['narrative'];
+        if (raw is Map<String, dynamic>) {
+          raw.forEach((k, v) {
+            if (k is String && v is String && v.trim().isNotEmpty) {
+              result[k] = v.trim();
+            }
+          });
+        }
+        if (result.isNotEmpty) {
+          return result;
+        }
+      } catch (_) {
+        // 跳过解析失败的候选块
+      }
+    }
+    return result;
+  }
+
   /// 把状态格式化为注入 prompt 的自然文本。
   static String formatStateText({
     required Map<String, dynamic> state,
@@ -1076,6 +1117,22 @@ class TrackerRuntime {
       }
       if (policy != null) {
         line += '\n  mode=${policy.mode}';
+      }
+      // v63：注入语义提示（理解方向而非死规则）
+      final hints = policy?.semanticHints;
+      if (hints != null) {
+        if (hints.meaning.isNotEmpty) {
+          line += '\n  meaning=${hints.meaning}';
+        }
+        if (hints.positiveSignals.isNotEmpty) {
+          line += '\n  positive=${hints.positiveSignals.join('，')}';
+        }
+        if (hints.negativeSignals.isNotEmpty) {
+          line += '\n  negative=${hints.negativeSignals.join('，')}';
+        }
+        if (hints.neutralSignals.isNotEmpty) {
+          line += '\n  neutral=${hints.neutralSignals.join('，')}';
+        }
       }
       fields.add(line);
     }

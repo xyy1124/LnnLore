@@ -104,6 +104,15 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.63',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】状态裁判基线修复：裁判 patch 改为在**候选状态**（旁白 + 主模型 patch）上叠加——之前以旁白基线重新应用裁判 patch，裁判看到的状态与实际应用基线不一致（原始 20 → 主 +3 → 裁判看到 23 → 裁判 +2 → 基线 20+2=22 丢 +3），且主模型更新多字段时裁判只返回一个字段会导致其余字段丢失',
+                    '【特别版】本轮动态解读（narrative）：状态裁判除 patch 外返回 `narrative`（每字段结合本轮剧情的一句话解读）——数值没跨阶段文字也能随剧情变化，不再永远重复同一段固定描述；保存到消息级快照 v4（`__msg_tracker_state_v4__:<id>` 含 state + narrative，历史消息显示消息时刻的解读）；新增模板变量 `{{getnarrative::key}}`（动态解读优先，无则回退静态 gettext）',
+                    '【特别版】字段语义提示（semanticHints）：卡可声明 meaning / positiveSignals / negativeSignals / neutralSignals——提供"理解方向"而非死规则，注入状态指令与裁判（neutral 中的行为不得触发变化）；App 仍限制未知字段/上下限/单轮上限/重复事件',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.62',
                   date: '2026-08-08',
                   changes: [

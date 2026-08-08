@@ -141,6 +141,7 @@ class TrackerUpdatePolicy {
     this.mode = 'conservative',
     this.qualitativeDeltas = const {},
     this.maxAutoDeltaPerTurn,
+    this.semanticHints,
   });
 
   /// explicit | conservative | active
@@ -151,6 +152,13 @@ class TrackerUpdatePolicy {
 
   /// 每轮自动增减上限（防膨胀；null 不限制）
   final num? maxAutoDeltaPerTurn;
+
+  /// v63：字段语义提示——卡提供"理解方向"而非死规则：
+  /// meaning（字段代表什么）/ positiveSignals（通常提升的行为）/
+  /// negativeSignals（通常降低的行为）/ neutralSignals（不应触发
+  /// 变化的行为）——注入状态裁判，让模型根据实际剧情自由判断，
+  /// 但 App 仍限制未知字段/上下限/单轮上限/重复事件。
+  final TrackerSemanticHints? semanticHints;
 
   factory TrackerUpdatePolicy.fromJson(Map<String, dynamic> json) {
     final deltas = <String, num>{};
@@ -164,12 +172,54 @@ class TrackerUpdatePolicy {
         }
       });
     }
+    final rawHints = CharacterCardExtensionsReader.asMap(
+      json['semanticHints'],
+    );
     return TrackerUpdatePolicy(
       mode: json['mode'] is String ? json['mode'] as String : 'conservative',
       qualitativeDeltas: deltas,
       maxAutoDeltaPerTurn: json['maxAutoDeltaPerTurn'] is num
           ? json['maxAutoDeltaPerTurn'] as num
           : null,
+      semanticHints: rawHints == null
+          ? null
+          : TrackerSemanticHints.fromJson(rawHints),
+    );
+  }
+}
+
+/// v63：字段语义提示（updatePolicy.semanticHints）。
+class TrackerSemanticHints {
+  const TrackerSemanticHints({
+    this.meaning = '',
+    this.positiveSignals = const [],
+    this.negativeSignals = const [],
+    this.neutralSignals = const [],
+  });
+
+  /// 这个字段代表什么（剧情含义）
+  final String meaning;
+  /// 通常提升该字段的行为
+  final List<String> positiveSignals;
+  /// 通常降低该字段的行为
+  final List<String> negativeSignals;
+  /// 不应触发变化的行为（普通闲聊/重复描写等）
+  final List<String> neutralSignals;
+
+  factory TrackerSemanticHints.fromJson(Map<String, dynamic> json) {
+    List<String> listOf(String key) {
+      final raw = json[key];
+      if (raw is List) {
+        return raw.whereType<String>().map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      }
+      return const [];
+    }
+
+    return TrackerSemanticHints(
+      meaning: json['meaning'] is String ? json['meaning'] as String : '',
+      positiveSignals: listOf('positiveSignals'),
+      negativeSignals: listOf('negativeSignals'),
+      neutralSignals: listOf('neutralSignals'),
     );
   }
 }

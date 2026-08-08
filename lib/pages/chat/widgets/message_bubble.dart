@@ -587,14 +587,15 @@ class _MessageBubbleState extends State<MessageBubble> {
   }
 
   /// 本条消息的状态面板：两路兜底——
-  /// ①消息级结构化状态快照（`__msg_tracker_state_v3__:<id>`，该消息
-  /// 处理完成时的 tracker 状态 JSON）→ 用**当前角色卡模板**动态渲染
-  /// （模板来自 post_history_instructions 的 <!--panel--> HTML，样式
-  /// 始终与卡一致；数值=消息时刻状态，不随后续轮次漂移）
+  /// ①消息级结构化状态快照（v4 `__msg_tracker_state_v4__:<id>` 含
+  /// state + narrative；v3 `__msg_tracker_state_v3__:<id>` 仅 state，
+  /// 该消息处理完成时的 tracker 状态 JSON）→ 用**当前角色卡模板**
+  /// 动态渲染（模板来自 post_history_instructions 的 <!--panel--> HTML，
+  /// 样式始终与卡一致；数值=消息时刻状态，不随后续轮次漂移）
   /// ②运行时生成面板（卡的 tracker 声明 + 当前变量表 + **initialState
   /// 兜底**，新会话/开场/旧会话无快照消息也能显示）
   ///
-  /// 注意：不再读取任何预渲染 HTML 快照——v3 只存状态值不存 HTML，
+  /// 注意：不再读取任何预渲染 HTML 快照——v3/v4 只存状态值不存 HTML，
   /// 旧版 v2（`__msg_status_html_v2__:<id>`）/v1（`__msg_status_html__:<id>`）
   /// /全局（`__special_status_html__`）快照一律忽略（v2 含错误纯文本模板
   /// 生成的统一面板，会掩盖新实现）。
@@ -606,15 +607,31 @@ class _MessageBubbleState extends State<MessageBubble> {
     // 新会话开场消息下无状态栏），id 缺失时跳过消息级快照即可。
     String? html;
     if (widget.message.id != null) {
-      final rawState = widget.sessionVariables[
-          ChatService.messageStatusHtmlKey(widget.message.id!)];
-      final decoded = rawState == null ? null : _decodeStatusState(rawState);
-      if (decoded != null && decoded.isNotEmpty) {
-        // v3 结构化状态：用消息时刻的状态值 + 当前角色卡模板动态渲染
-        html = TrackerRuntime.renderStatusPanelHtml(
-          cardJson: _messageCharacter?.cardJson,
-          variables: decoded,
-        );
+      final messageId = widget.message.id!;
+      // v63：优先 v4 快照（state + narrative），回退 v3（仅 state）
+      final rawV4 = widget.sessionVariables[
+          ChatService.messageStatusSnapshotV4Key(messageId)];
+      if (rawV4 != null && rawV4.trim().isNotEmpty) {
+        final parsedV4 = _decodeStatusSnapshotV4(rawV4);
+        if (parsedV4 != null) {
+          html = TrackerRuntime.renderStatusPanelHtml(
+            cardJson: _messageCharacter?.cardJson,
+            variables: parsedV4.$1,
+            narrative: parsedV4.$2,
+          );
+        }
+      }
+      if (html == null || html.trim().isEmpty) {
+        final rawState = widget.sessionVariables[
+            ChatService.messageStatusHtmlKey(messageId)];
+        final decoded = rawState == null ? null : _decodeStatusState(rawState);
+        if (decoded != null && decoded.isNotEmpty) {
+          // v3 结构化状态：用消息时刻的状态值 + 当前角色卡模板动态渲染
+          html = TrackerRuntime.renderStatusPanelHtml(
+            cardJson: _messageCharacter?.cardJson,
+            variables: decoded,
+          );
+        }
       }
     }
     if (html == null || html.trim().isEmpty) {
@@ -722,6 +739,43 @@ class _MessageBubbleState extends State<MessageBubble> {
             key.toString(),
             value.toString(),
           ));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// v63：解析 v4 快照 JSON（`{"state":{...},"narrative":{...}}`）。
+  /// 返回 (state 变量表, narrative 解读表)；解析失败返回 null。
+  static (Map<String, String>, Map<String, String>)? _decodeStatusSnapshotV4(
+    String raw,
+  ) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        return null;
+      }
+      final rawState = decoded['state'];
+      final rawNarrative = decoded['narrative'];
+      final state = <String, String>{};
+      if (rawState is Map) {
+        rawState.forEach((k, v) {
+          if (k is String && v != null) {
+            state[k] = '$v';
+          }
+        });
+      }
+      final narrative = <String, String>{};
+      if (rawNarrative is Map) {
+        rawNarrative.forEach((k, v) {
+          if (k is String && v is String && v.trim().isNotEmpty) {
+            narrative[k] = v.trim();
+          }
+        });
+      }
+      if (state.isEmpty) {
+        return null;
+      }
+      return (state, narrative);
     } catch (_) {
       return null;
     }

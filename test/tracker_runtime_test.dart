@@ -1388,6 +1388,143 @@ void main() {
     });
   });
 
+  group('v63: narrative 动态解读', () {
+    test('extractNarrative 从裁判响应提取', () {
+      final narrative = TrackerRuntime.extractNarrative(
+        '```json\n{"patch":{"set":{},"add":{"like":2}},'
+        '"narrative":{"like":"她接受道歉后戒备略有放松。",'
+        '"power":"神力没有变化。"}}\n```',
+      );
+      expect(narrative['like'], '她接受道歉后戒备略有放松。');
+      expect(narrative['power'], '神力没有变化。');
+    });
+
+    test('无 narrative 返回空', () {
+      expect(
+        TrackerRuntime.extractNarrative('普通回复 {"patch":{"set":{},"add":{}}}'),
+        isEmpty,
+      );
+    });
+
+    test('getnarrative 优先动态解读，无则回退静态 gettext', () {
+      final card = {
+        'data': {
+          'name': '测试卡',
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'like': {
+                  'type': 'number',
+                  'label': '好感度',
+                  'min': 0,
+                  'max': 100,
+                  'presentation': {
+                    'ranges': [
+                      {
+                        'gte': 0,
+                        'lt': 60,
+                        'title': '逐渐信任',
+                        'color': '#FFA726',
+                        'text': '静态描述：开始对你产生信赖。',
+                      },
+                    ],
+                  },
+                },
+              },
+              'initialState': {'like': 0},
+              'template':
+                  '<div>{{getvar::like}}|{{getnarrative::like}}</div>',
+            },
+          },
+        },
+      };
+      // 有 narrative：显示动态解读
+      final html1 = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: card,
+        variables: {'like': '23'},
+        narrative: {'like': '她因为你解释误会而略微放松。'},
+      );
+      expect(html1, contains('她因为你解释误会而略微放松。'));
+      expect(html1, isNot(contains('静态描述')));
+      // 无 narrative：回退静态阶段描述
+      final html2 = TrackerRuntime.renderStatusPanelHtml(
+        cardJson: card,
+        variables: {'like': '23'},
+      );
+      expect(html2, contains('静态描述：开始对你产生信赖。'));
+    });
+
+    test('semanticHints 解析', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'like': {
+                  'type': 'number',
+                  'label': '好感度',
+                  'min': 0,
+                  'max': 100,
+                  'updatePolicy': {
+                    'mode': 'conservative',
+                    'qualitativeDeltas': {'一点': 1},
+                    'semanticHints': {
+                      'meaning': '角色对用户的亲近与信任程度',
+                      'positiveSignals': ['主动帮助', '接受道歉'],
+                      'negativeSignals': ['欺骗', '背叛'],
+                      'neutralSignals': ['普通闲聊'],
+                    },
+                  },
+                },
+              },
+              'initialState': {'like': 0},
+            },
+          },
+        },
+      });
+      final hints = config.stateSchema['like']!.updatePolicy!.semanticHints!;
+      expect(hints.meaning, contains('亲近'));
+      expect(hints.positiveSignals, contains('接受道歉'));
+      expect(hints.negativeSignals, contains('背叛'));
+      expect(hints.neutralSignals, contains('普通闲聊'));
+    });
+
+    test('semanticHints 注入状态指令', () {
+      final config = TrackerConfig.fromCardJson({
+        'data': {
+          'extensions': {
+            'tracker': {
+              'stateSchema': {
+                'like': {
+                  'type': 'number',
+                  'label': '好感度',
+                  'min': 0,
+                  'max': 100,
+                  'updatePolicy': {
+                    'mode': 'conservative',
+                    'semanticHints': {
+                      'meaning': '亲近与信任',
+                      'positiveSignals': ['主动帮助'],
+                      'neutralSignals': ['普通闲聊'],
+                    },
+                  },
+                },
+              },
+              'initialState': {'like': 0},
+            },
+          },
+        },
+      });
+      final text = TrackerRuntime.formatTrackerInstruction(
+        state: {'like': '20'},
+        config: config,
+      );
+      expect(text, contains('meaning=亲近与信任'));
+      expect(text, contains('positive=主动帮助'));
+      expect(text, contains('neutral=普通闲聊'));
+    });
+  });
+
   group('filterProtectedPatch（旁白字段本轮去重）', () {
     test('模型对旁白已落地字段的 add 被过滤（20→30 而非 40）', () {
       // 发送链路：旁白（烙印值+10）确定性落地 → 模型又输出 add +10
