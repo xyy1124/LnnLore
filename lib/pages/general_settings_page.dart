@@ -73,6 +73,20 @@ class GeneralSettingsPage extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 12),
+                    // v66：状态更新模式三档
+                    _DropdownTile<TrackerUpdateMode>(
+                      title: '状态更新模式',
+                      subtitle: '快速：正文与状态一次生成（单次 API，默认）；'
+                          '后台精确：正文先显示、状态裁判后台补算（状态栏稍后更新）；'
+                          '严格：等待状态裁判完成后再显示正文（最慢但一致性最高）',
+                      value: settings.trackerUpdateMode,
+                      options: TrackerUpdateMode.values,
+                      labelOf: (mode) => mode.label,
+                      onChanged: (value) => updateAppSettings(
+                        trackerUpdateMode: value,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     // 特别版：DeepSeek 原生思考模式档位
                     _DropdownTile<DeepSeekThinkingMode>(
                       title: 'DeepSeek 原生思考（thinking mode）',
