@@ -661,14 +661,32 @@ class TrackerRuntime {
   /// 状态指令。抽为常量供上下文用量估算共用（避免估算漏算）。
   /// v66：协议增加 narrative（快速模式：主模型一次输出 reply+patch+
   /// narrative，不再需要第二次裁判请求）。
+  /// v68：示例改为**合法 JSON**（不再用"字段key/数值变化"等无法解析的
+  /// 中文占位值——模型照抄示例会导致 jsonDecode 失败、patch 提取不到）。
   static const String kTrackerProtocolSuffix =
       '（本条回复末尾必须用 JSON 代码块输出结构化状态更新，格式：\n'
-      '```json\n{"reply":"剧情正文","patch":{"set":{},"add":{"字段key":数值变化}},"narrative":{"字段key":"本轮剧情下该字段的动态解读（一句话）"}}\n```\n'
+      '```json\n'
+      '{\n'
+      '  "reply": "剧情正文",\n'
+      '  "patch": {\n'
+      '    "set": {},\n'
+      '    "add": {}\n'
+      '  },\n'
+      '  "narrative": {},\n'
+      '  "consequence": {}\n'
+      '}\n'
+      '```\n'
+      'number 字段增减写入 add，例如对实际字段 key 增加 2：'
+      '"add":{"字段key":2}。\n'
+      'string 字段变化写入 set，例如将实际字段 key 设为新状态：'
+      '"set":{"字段key":"新状态"}。\n'
       'reply 为本轮剧情正文，patch 只使用上方列出的 key（set 为直接赋值，'
       'add 为增减量）。状态有变化就如实输出；没有变化也必须输出空 patch'
-      '（{"reply":"剧情正文","patch":{"set":{},"add":{}}}）。'
+      '（"patch":{"set":{},"add":{}}）。\n'
       'narrative 中凡是 patch 修改过的字段都必须给出解读（一句话，结合本轮'
-      '实际发生的事件；只能使用字段 key，禁止中文 label）。'
+      '实际发生的事件；只能使用字段 key，禁止中文 label）。\n'
+      'consequence 与 narrative 覆盖相同字段——说明该状态下一轮应如何'
+      '影响角色行为（持续状态的保持要求/反转条件）。\n'
       '不要输出状态面板模板本身，面板由系统自动渲染。）';
 
   /// v67：状态对剧情的约束指令（固定尾部）——让状态成为"下一轮剧情的
