@@ -104,6 +104,17 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.70',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】三种模式改为"每轮只有一个状态决策者"：快速=主模型（唯一写入者）；后台/严格=主模型**只输出正文**（状态由独立裁判决定，不再输出 patch/narrative/HTML/纯文本状态栏——彻底消除主模型 patch 与裁判 patch 相互覆盖、重复增加、状态栏泄漏正文）',
+                    '【特别版】快速模式协议分离：正文正常输出（不再把长篇剧情塞进 JSON reply——转义/截断导致整个对象无法解析的根因），末尾追加 `<TRACKER_UPDATE>...</TRACKER_UPDATE>` 标记块（短状态协议，解析成功率大幅提升）；模型偶尔失败时正文仍完整，只丢这轮状态',
+                    '【特别版】后台裁判按会话串行：每会话任务队列 `_pendingTrackerJudges`——正文立即显示、状态稍后更新，但用户下一次发送前**必须等待上一轮状态结算完成**（不再因"裁判返回太晚"整轮状态被丢弃；全局轮次令牌保留作过期兜底）',
+                    '【特别版】裁判可选输出最终状态：`{"state":{"字段key":最终值}}` 一次性保存（校验 key/类型/范围后 set，不再增量叠加，从根源消除重复增加）；未输出 state 时仍用 patch 增量（兼容）',
+                    '【特别版】历史消息入模前清洗：assistant 历史消息发送给模型前走显示清洗（旧版本已入库的 HTML/纯文本状态栏、状态协议块不再进入模型上下文——模型看到历史每轮输出面板就会继续模仿）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.69',
                   date: '2026-08-08',
                   changes: [
