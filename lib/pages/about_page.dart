@@ -104,6 +104,17 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.62',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】消息操作菜单手势修复（长按专属）：普通点击不再弹菜单（点击只关闭已打开的菜单），**长按**才打开应用操作菜单——之前 onTapDown 让普通点击也可能弹菜单',
+                    '【特别版】关闭消息正文原生文本选择（selectable: false）：ChatMarkdownBody 默认包 SelectionArea，长按时系统复制菜单与应用菜单同时争抢长按手势——现在长按只由应用菜单处理，复制由菜单内"复制"按钮负责（复制整条消息）',
+                    '【特别版】didUpdateWidget 不再无条件关闭菜单：只有消息身份/内容或交互状态真正变化时才关闭——之前每次父组件重建（状态栏刷新/变量刷新/普通列表重建）都在下一帧隐藏菜单，刚弹出就被关闭',
+                    '【特别版】菜单上下自适应：下方空间不足（靠近屏幕底部/输入框）时显示在消息上方，不再被遮挡',
+                    '【特别版】打开请求防重复：长按识别与列表重建在同一帧重复触发时只放行最后一次（令牌保护）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.61',
                   date: '2026-08-07',
                   changes: [

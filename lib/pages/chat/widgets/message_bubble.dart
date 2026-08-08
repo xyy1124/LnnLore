@@ -120,23 +120,49 @@ class _MessageBubbleState extends State<MessageBubble> {
     super.dispose();
   }
 
+  /// v62：统一菜单可用判断（显示操作区且可用）。
+  bool get _canOpenActionPopup => widget.showActions && widget.actionsEnabled;
+
+  /// v62：打开请求令牌——同一帧内长按识别与列表重建重复触发时，
+  /// 只放行最后一次请求。
+  int _popupRequestToken = 0;
+
   @override
   void didUpdateWidget(covariant MessageBubble oldWidget) {
     super.didUpdateWidget(oldWidget);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _hideActionPopup();
-    });
+    // v62：只在消息身份/内容或交互状态真正变化时才关闭菜单——
+    // 之前每次父组件重建（状态栏刷新/变量刷新/主题刷新/普通列表
+    // 重建）都在下一帧隐藏菜单，刚弹出就被关闭。
+    final messageChanged = oldWidget.message.id != widget.message.id ||
+        oldWidget.message.text != widget.message.text;
+    final interactionChanged = oldWidget.showActions != widget.showActions ||
+        oldWidget.actionsEnabled != widget.actionsEnabled;
+    if (messageChanged || interactionChanged) {
+      _hideActionPopup();
+    }
   }
 
   void _showActionPopup() {
+    final requestToken = ++_popupRequestToken;
     if (_currentPopupOwner != null && !_currentPopupOwner!.mounted) {
       _currentPopupOwner = null;
     }
     _currentPopupOwner?._hideActionPopup();
     _hideActionPopup();
-    if (!mounted) return;
-    _overlayPortalController.show();
-    _currentPopupOwner = this;
+    if (!mounted || !_canOpenActionPopup) {
+      return;
+    }
+    // v62：下一帧再显示——长按识别与列表重建可能在同一帧内重复
+    // 触发打开；令牌保证只放行最后一次
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          requestToken != _popupRequestToken ||
+          !_canOpenActionPopup) {
+        return;
+      }
+      _overlayPortalController.show();
+      _currentPopupOwner = this;
+    });
   }
 
   void _hideActionPopup() {
@@ -174,7 +200,9 @@ class _MessageBubbleState extends State<MessageBubble> {
           right: isMe
               ? info.overlaySize.width - targetPos.dx - info.childSize.width
               : null,
-          top: targetPos.dy + info.childSize.height + 4,
+          // v62：菜单上下自适应——下方空间不足（靠近屏幕底部/输入框）
+          // 时显示在消息上方，不再被遮挡
+          top: _popupTop(targetPos, info),
           child: TextFieldTapRegion(
             groupId: widget.inputTapRegionGroupId,
             child: Material(
@@ -193,6 +221,24 @@ class _MessageBubbleState extends State<MessageBubble> {
           ),
         ),
       ],
+    );
+  }
+
+  /// v62：弹出菜单位置——下面有空间显示在消息下方，否则显示在上方
+  /// （避免底部消息被输入框/屏幕边缘遮挡）。
+  double _popupTop(Offset targetPos, OverlayChildLayoutInfo info) {
+    const popupHeight = 48.0;
+    const popupGap = 4.0;
+    const screenPadding = 8.0;
+    final belowTop = targetPos.dy + info.childSize.height + popupGap;
+    final hasSpaceBelow =
+        belowTop + popupHeight <= info.overlaySize.height - screenPadding;
+    final rawTop = hasSpaceBelow
+        ? belowTop
+        : targetPos.dy - popupHeight - popupGap;
+    return rawTop.clamp(
+      screenPadding,
+      info.overlaySize.height - popupHeight - screenPadding,
     );
   }
 
@@ -305,8 +351,13 @@ class _MessageBubbleState extends State<MessageBubble> {
               OverlayPortal.overlayChildLayoutBuilder(
                 controller: _overlayPortalController,
                 overlayChildBuilder: _buildPopupOverlay,
+                // v62：普通点击不弹菜单（点击只关闭已打开的菜单）；
+                // 长按才打开应用操作菜单。关闭原生文本选择（selectable:
+                // false）——系统复制菜单与应用菜单不再同时争抢长按手势。
                 child: GestureDetector(
-                  onTapDown: widget.showActions && widget.actionsEnabled
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _hideActionPopup,
+                  onLongPressStart: _canOpenActionPopup
                       ? (_) => _showActionPopup()
                       : null,
                   child: Container(
@@ -332,6 +383,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                         inlineCodeColor: inlineCodeColor,
                         codeBlockColor: codeBlockColor,
                         applyBodyTextColor: false,
+                        selectable: false,
                       ),
                     ),
                   ),
@@ -473,8 +525,12 @@ class _MessageBubbleState extends State<MessageBubble> {
                         colorScheme: colorScheme,
                         initiallyExpanded: !pseudoChainComplete,
                       ),
+                    // v62：同用户消息——普通点击不弹菜单，长按才打开
+                    // 应用菜单；关闭原生文本选择避免双菜单争抢
                     GestureDetector(
-                      onTapDown: widget.showActions && widget.actionsEnabled
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _hideActionPopup,
+                      onLongPressStart: _canOpenActionPopup
                           ? (_) => _showActionPopup()
                           : null,
                       child: Semantics(
@@ -500,6 +556,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                             textColor: textColor,
                             inlineCodeColor: inlineCodeColor,
                             codeBlockColor: codeBlockColor,
+                            selectable: false,
                           );
                         }),
                       ),
