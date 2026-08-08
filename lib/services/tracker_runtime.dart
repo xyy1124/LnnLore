@@ -959,20 +959,93 @@ class TrackerRuntime {
   /// 规则/行为约束等非输出指令。
   static String stripPanelTemplates(String text) {
     var result = text.replaceAll(_panelBlockPattern, '');
-    // v69：剥离"输出状态栏/面板"指令句（行级匹配，中文标点容错）
+    // v69：剥离"输出状态栏/面板"指令句（行级匹配，中文标点容错）。
+    // v70：放宽匹配——卡的写法多样（"每一次回复的末尾都必须输出状态
+    // 面板""随后必须输出 HTML 状态面板"），只需同一行内同时出现
+    // 输出类词 + 状态栏词 + 必须类词（任意顺序），不再要求固定前缀。
     result = result.replaceAll(
       RegExp(
-        r'^[^\n]*?(?:每次回复|回复末尾|每轮回复|必须在|需要|请|要)[^\n]*?(?:输出|附带|显示|附带输出)[^\n]*?(?:状态栏|状态面板|状态条|面板)[^\n]*$',
+        r'^[^\n]*(?:必须|需要|记得|要|请|得)[^\n]*(?:输出|附带|显示|渲染)[^\n]*(?:状态栏|状态面板|状态条|面板)[^\n]*$',
         multiLine: true,
       ),
       '',
     );
-    // 常见独立短句（无动词前缀）
     result = result.replaceAll(
       RegExp(
-        r'^[^\n]*?(?:状态栏|状态面板|状态条)[^\n]*?(?:必须|需要|记得)[^\n]*?(?:输出|显示|更新)[^\n]*$',
+        r'^[^\n]*(?:输出|附带|显示|渲染)[^\n]*(?:状态栏|状态面板|状态条|面板)[^\n]*(?:必须|需要|记得|要|请|得)[^\n]*$',
         multiLine: true,
       ),
+      '',
+    );
+    // 独立命令句："输出状态栏/面板" 本身（无必须类词）
+    result = result.replaceAll(
+      RegExp(
+        r'^[^\n]*(?:输出|附带|显示)[^\n]*(?:状态栏|状态面板|状态条|HTML 面板|HTML面板)[^\n]*$',
+        multiLine: true,
+      ),
+      '',
+    );
+    // v70："XX状态面板（代码块格式，每次回复末尾必须输出）" 语序——
+    // 状态面板词在前、必须输出在后（被括号/冒号包裹）
+    result = result.replaceAll(
+      RegExp(
+        r'^[^\n]*(?:状态栏|状态面板|状态条)[^\n]*(?:每次回复|回复末尾|每轮回复)[^\n]*(?:必须|需要|记得)[^\n]*(?:输出|附带|显示)[^\n]*$',
+        multiLine: true,
+      ),
+      '',
+    );
+    result = result.replaceAll(
+      RegExp(
+        r'^[^\n]*(?:状态栏|状态面板|状态条)[^\n]*[（(][^\n]*(?:必须|需要|记得)[^\n]*(?:输出|附带|显示)[^\n]*[）)][^\n]*$',
+        multiLine: true,
+      ),
+      '',
+    );
+    // v70：剥离 ST 三件套指令（setvar 输出行）——App 模式下模型不需要
+    // 输出 {{setvar::}} 宏（App 自己处理变量），ST 兼容由正则/QR 承担
+    result = result.replaceAll(
+      RegExp(r'^[^\n]*\{\{setvar::[^\n]*$', multiLine: true),
+      '',
+    );
+    result = result.replaceAll(
+      RegExp(
+        r'^[^\n]*(?:输出|先输出|附带输出)[^\n]*变量更新行[^\n]*$',
+        multiLine: true,
+      ),
+      '',
+    );
+    // v70：剥离【强制输出规则】段中引用面板模板的条款（"按下文模板"
+    // "输出下方面板"）——面板模板已被剥，引用条款失去对象且会诱导模型
+    result = result.replaceAll(
+      RegExp(
+        r'^[^\n]*(?:按下文模板|按此模板|输出下方面板|输出上方模板|输出该面板)[^\n]*$',
+        multiLine: true,
+      ),
+      '',
+    );
+    // v70：剥离裸 <details> 旧面板（不在 <!--panel--> 块内）——模型看到
+    // 会模仿输出 HTML 状态栏；以及代码块旧面板（``` 包裹的
+    // "人物：/当前心理状态：/状态面板" 占位模板）
+    result = result.replaceAll(
+      RegExp(r'<details>[\s\S]*?</details>', caseSensitive: false),
+      '',
+    );
+    result = result.replaceAll(
+      RegExp(
+        r'```(?:html|xml)?\s*\n[\s\S]*?(?:人物：|当前心理状态：|状态面板|当前状态：)[\s\S]*?```',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    // v70：剥离【状态栏三件套】标题行（App 模式不需要 ST 宏指令段）
+    result = result.replaceAll(
+      RegExp(r'^[^\n]*状态栏三件套[^\n]*$', multiLine: true),
+      '',
+    );
+    // v70：剥离【强制输出规则】孤儿标题行——其下"输出面板"条款已全部
+    // 剥离，标题失去对象（保留"数值与剧情一致"等合理规则行）
+    result = result.replaceAll(
+      RegExp(r'^[^\n]*【强制输出规则[^\n]*$', multiLine: true),
       '',
     );
     // 清理剥离后产生的多余空行
