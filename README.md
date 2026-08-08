@@ -81,6 +81,35 @@
 - **number 字段**：`presentation.ranges`（≥3 段）——`gte ≤ 值 < lt` 匹配，最后一段可省略 `lt`
 - **string 字段**：`presentation.states`（≥2 枚举）——值精确匹配 `{title, color, text}`
 
+### 3.5 自主判断（updatePolicy + semanticHints，number 字段推荐）
+
+number 字段可声明 `updatePolicy`——把"模糊程度词"量化成数值增量（本地确定性解析），并给状态裁判提供字段语义提示（剧情事件后独立判断状态变化）：
+
+```json
+"energy": {
+  "type": "number", "label": "体力", "min": 0, "max": 100,
+  "aliases": ["精力", "元气"],
+  "updatePolicy": {
+    "mode": "conservative",
+    "qualitativeDeltas": { "一点": 1, "稍微": 2, "明显": 5, "大幅": 10 },
+    "maxAutoDeltaPerTurn": 10,
+    "semanticHints": {
+      "meaning": "角色当前剩余体力",
+      "positiveSignals": ["休息", "进食", "治疗", "睡眠"],
+      "negativeSignals": ["剧烈运动", "战斗", "熬夜", "受伤"],
+      "neutralSignals": ["普通闲聊", "重复描写"]
+    }
+  }
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `qualitativeDeltas` | 程度词 → 增量（"体力提升一点"本地确定性 +1） |
+| `maxAutoDeltaPerTurn` | 每轮自动增减上限（防膨胀） |
+| `semanticHints` | 裁判理解方向的语义提示：`meaning` 字段含义、`positiveSignals` 通常提升的行为、`negativeSignals` 通常降低的行为、`neutralSignals` 不得触发变化的行为 |
+| `aliases` | 字段口语别名（"精力"等），本地解析与裁判判断时与 label/key 同等匹配 |
+
 ### 4. 状态面板模板与变量
 
 `post_history_instructions` 中用 `<!--panel-->` 标记声明 HTML 面板模板（App 渲染，样式随卡）：
@@ -90,7 +119,7 @@
 <details><summary>🖤 卡名·状态面板</summary>
 <div style="padding:10px;background-color:#171020;border:2px solid #8e44ad;border-radius:10px;color:#e8e8e8;line-height:1.8">
   <span style="color:#8e44ad">体力</span>：<b>【{{getvar::energy}}/100】</b> <span style="color:{{getcolor::energy}};font-weight:bold">· {{gettitle::energy}}</span><br>
-  <span style="color:#a8a098;font-size:11px">{{gettext::energy}}</span><br>
+  <span style="color:#a8a098;font-size:11px">{{getnarrative::energy}}</span><br>
   <span style="color:#8e44ad">心情</span>：<b>【{{getvar::mood}}】</b>
 </div>
 </details>
@@ -101,9 +130,10 @@
 |---|---|
 | `{{getvar::key}}` | 当前原始值（如 `45`） |
 | `{{gettitle::key}}` | 当前阶段标题（如 `明显改造`） |
-| `{{gettext::key}}` | 当前阶段长描述 |
+| `{{gettext::key}}` | 当前阶段长描述（**string 字段描述行用这个**——states 枚举静态文本） |
 | `{{getcolor::key}}` | 当前阶段颜色 |
 | `{{getpercent::key}}` | number 字段百分比（min/max 归一） |
+| `{{getnarrative::key}}` | 本轮动态解读（**number 字段描述行用这个**——状态裁判按剧情生成的解读，无解读时自动回退 `{{gettext}}`） |
 
 支持的 HTML：`div/span/b/strong/br/p/table/tr/td/th/details/summary/img`；CSS：`color/background-color/border/border-radius/padding/margin/font-size/font-weight/text-align/width/height`。**不执行 JavaScript、不加载外部样式**（安全清洗：script/iframe/object/embed/事件属性/固定定位一律剥离）。
 
@@ -115,6 +145,7 @@
 | 模型 JSON patch | `{"patch":{"set":{},"add":{"energy":10}}}` | 模型每轮输出（支持 `{reply, patch}` 结构，中文 label 自动映射回 key） |
 | `<STATE>` 兜底 | `<STATE> energy=+10 </STATE>` | 兼容协议 |
 | setvar 宏 | `{{setvar::energy::5}}` | 统一经过 tracker 校验（受保护字段过滤 + clamp） |
+| 状态裁判（双阶段） | 剧情生成后独立 API 请求 | 仅返回 JSON patch + narrative；narrative 显示为面板动态解读（`{{getnarrative}}`），候选状态在"旁白 + 主模型 patch"之上叠加 |
 
 ## ✨ 特别版功能
 
