@@ -104,6 +104,17 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.69',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】后台模式 UI 刷新竞态修复：后台裁判完成写库后，ViewModel 之前因 _isSending 拦截了所有数据库通知（状态已写库但状态栏显示旧值）——variables/choices 通知现在不受发送中状态限制（只刷轻量变量缓存），_isSending 保护仅作用于 messages/session 重载',
+                    '【特别版】从模型上下文彻底移除"输出状态栏"角色卡指令：stripPanelTemplates 现在同时剥离面板外的"每次回复末尾输出状态栏/请在正文末尾附带状态面板"等指令句——模型不再收到两套互相矛盾的要求（之前角色卡要求输出面板、App 要求只输出 JSON，导致面板混进正文）',
+                    '【特别版】协议明确禁止状态栏混入正文：reply 只写剧情正文；禁止输出 <details>/<summary>/<!--panel--> 状态栏 HTML；禁止输出"当前状态：""状态面板："等纯文本状态栏；状态栏由 App 根据最终状态自动渲染；patch/narrative/consequence 必须在同一 JSON 对象',
+                    '【特别版】纯文本状态栏尾部识别（兼容模型犯错）：stripTrailingPlainTrackerPanel 识别正文末尾的"状态栏：\n堕落进度：27/100\n当前状态：压制中"（≥2 行命中 tracker label、每行含冒号，防误删剧情正文），剥离并作为兼容状态来源回写变量（不覆盖模型 patch/setvar 已更新的字段）',
+                    '【特别版】诊断日志：[TRACKER_MODE] 每轮打印 mode/mainProtocol/mainPatch/mainNarrative/panelDetected/judgeCalled——快速模式看不到更新时一行确认是哪层失败',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.68',
                   date: '2026-08-08',
                   changes: [
