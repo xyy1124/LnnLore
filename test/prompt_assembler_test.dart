@@ -160,8 +160,15 @@ void main() {
       );
 
       // 面板 HTML 模板被剥离（避免"输出 HTML 面板"与"只输出 JSON patch"
-      // 冲突），文字规则保留
-      expect(result.mergedText, contains('每次回复末尾输出状态面板'));
+      // 冲突），文字规则保留。
+      // v69：面板外的"输出状态栏"指令句也被剥离——模型只输出 JSON，
+      // 面板由 App 渲染（否则模型收到两套互相矛盾的要求，会把面板
+      // 混进正文）；非输出指令（字段含义/数值一致性规则）保留。
+      expect(
+        result.mergedText,
+        isNot(contains('每次回复末尾输出状态面板')),
+        reason: 'v69："输出状态栏"指令句不再注入模型（App 负责渲染面板）',
+      );
       expect(result.mergedText, contains('数值必须与剧情一致'));
       expect(result.mergedText, isNot(contains('<details>')));
       expect(result.mergedText, isNot(contains('<!--panel-->')));
