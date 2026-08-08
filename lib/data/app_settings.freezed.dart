@@ -920,7 +920,8 @@ mixin _$AppSettings {
  bool get showApiRequestLogEntry;/// 特别版：是否启用强制思维链约束（角色回复前必须输出 12 步思维链）
  bool get enableThinkingChainGuard;/// 特别版：DeepSeek 原生思考模式档位（默认最高 max）。
  DeepSeekThinkingMode get deepSeekThinkingMode;/// 特别版：是否启用角色卡正则脚本（ST extensions.regex_scripts）
- bool get regexScriptsEnabled;
+ bool get regexScriptsEnabled;/// v66：状态更新模式（快速单次 API / 后台精确 / 严格等待裁判）。
+ TrackerUpdateMode get trackerUpdateMode;
 /// Create a copy of AppSettings
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -931,16 +932,16 @@ $AppSettingsCopyWith<AppSettings> get copyWith => _$AppSettingsCopyWithImpl<AppS
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is AppSettings&&(identical(other.colorMode, colorMode) || other.colorMode == colorMode)&&(identical(other.themePreset, themePreset) || other.themePreset == themePreset)&&const DeepCollectionEquality().equals(other.themeConfigs, themeConfigs)&&(identical(other.showAvatar, showAvatar) || other.showAvatar == showAvatar)&&(identical(other.backgroundOpacity, backgroundOpacity) || other.backgroundOpacity == backgroundOpacity)&&(identical(other.inputGlassEffect, inputGlassEffect) || other.inputGlassEffect == inputGlassEffect)&&(identical(other.showApiRequestLogEntry, showApiRequestLogEntry) || other.showApiRequestLogEntry == showApiRequestLogEntry)&&(identical(other.enableThinkingChainGuard, enableThinkingChainGuard) || other.enableThinkingChainGuard == enableThinkingChainGuard)&&(identical(other.deepSeekThinkingMode, deepSeekThinkingMode) || other.deepSeekThinkingMode == deepSeekThinkingMode)&&(identical(other.regexScriptsEnabled, regexScriptsEnabled) || other.regexScriptsEnabled == regexScriptsEnabled));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AppSettings&&(identical(other.colorMode, colorMode) || other.colorMode == colorMode)&&(identical(other.themePreset, themePreset) || other.themePreset == themePreset)&&const DeepCollectionEquality().equals(other.themeConfigs, themeConfigs)&&(identical(other.showAvatar, showAvatar) || other.showAvatar == showAvatar)&&(identical(other.backgroundOpacity, backgroundOpacity) || other.backgroundOpacity == backgroundOpacity)&&(identical(other.inputGlassEffect, inputGlassEffect) || other.inputGlassEffect == inputGlassEffect)&&(identical(other.showApiRequestLogEntry, showApiRequestLogEntry) || other.showApiRequestLogEntry == showApiRequestLogEntry)&&(identical(other.enableThinkingChainGuard, enableThinkingChainGuard) || other.enableThinkingChainGuard == enableThinkingChainGuard)&&(identical(other.deepSeekThinkingMode, deepSeekThinkingMode) || other.deepSeekThinkingMode == deepSeekThinkingMode)&&(identical(other.regexScriptsEnabled, regexScriptsEnabled) || other.regexScriptsEnabled == regexScriptsEnabled)&&(identical(other.trackerUpdateMode, trackerUpdateMode) || other.trackerUpdateMode == trackerUpdateMode));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,colorMode,themePreset,const DeepCollectionEquality().hash(themeConfigs),showAvatar,backgroundOpacity,inputGlassEffect,showApiRequestLogEntry,enableThinkingChainGuard,deepSeekThinkingMode,regexScriptsEnabled);
+int get hashCode => Object.hash(runtimeType,colorMode,themePreset,const DeepCollectionEquality().hash(themeConfigs),showAvatar,backgroundOpacity,inputGlassEffect,showApiRequestLogEntry,enableThinkingChainGuard,deepSeekThinkingMode,regexScriptsEnabled,trackerUpdateMode);
 
 @override
 String toString() {
-  return 'AppSettings(colorMode: $colorMode, themePreset: $themePreset, themeConfigs: $themeConfigs, showAvatar: $showAvatar, backgroundOpacity: $backgroundOpacity, inputGlassEffect: $inputGlassEffect, showApiRequestLogEntry: $showApiRequestLogEntry, enableThinkingChainGuard: $enableThinkingChainGuard, deepSeekThinkingMode: $deepSeekThinkingMode, regexScriptsEnabled: $regexScriptsEnabled)';
+  return 'AppSettings(colorMode: $colorMode, themePreset: $themePreset, themeConfigs: $themeConfigs, showAvatar: $showAvatar, backgroundOpacity: $backgroundOpacity, inputGlassEffect: $inputGlassEffect, showApiRequestLogEntry: $showApiRequestLogEntry, enableThinkingChainGuard: $enableThinkingChainGuard, deepSeekThinkingMode: $deepSeekThinkingMode, regexScriptsEnabled: $regexScriptsEnabled, trackerUpdateMode: $trackerUpdateMode)';
 }
 
 
@@ -951,7 +952,7 @@ abstract mixin class $AppSettingsCopyWith<$Res>  {
   factory $AppSettingsCopyWith(AppSettings value, $Res Function(AppSettings) _then) = _$AppSettingsCopyWithImpl;
 @useResult
 $Res call({
- AppColorMode colorMode, AppThemePreset themePreset, Map<AppThemePreset, AppThemeConfig> themeConfigs, bool showAvatar, double backgroundOpacity, bool inputGlassEffect, bool showApiRequestLogEntry, bool enableThinkingChainGuard, DeepSeekThinkingMode deepSeekThinkingMode, bool regexScriptsEnabled
+ AppColorMode colorMode, AppThemePreset themePreset, Map<AppThemePreset, AppThemeConfig> themeConfigs, bool showAvatar, double backgroundOpacity, bool inputGlassEffect, bool showApiRequestLogEntry, bool enableThinkingChainGuard, DeepSeekThinkingMode deepSeekThinkingMode, bool regexScriptsEnabled, TrackerUpdateMode trackerUpdateMode
 });
 
 
@@ -968,7 +969,7 @@ class _$AppSettingsCopyWithImpl<$Res>
 
 /// Create a copy of AppSettings
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? colorMode = null,Object? themePreset = null,Object? themeConfigs = null,Object? showAvatar = null,Object? backgroundOpacity = null,Object? inputGlassEffect = null,Object? showApiRequestLogEntry = null,Object? enableThinkingChainGuard = null,Object? deepSeekThinkingMode = null,Object? regexScriptsEnabled = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? colorMode = null,Object? themePreset = null,Object? themeConfigs = null,Object? showAvatar = null,Object? backgroundOpacity = null,Object? inputGlassEffect = null,Object? showApiRequestLogEntry = null,Object? enableThinkingChainGuard = null,Object? deepSeekThinkingMode = null,Object? regexScriptsEnabled = null,Object? trackerUpdateMode = null,}) {
   return _then(_self.copyWith(
 colorMode: null == colorMode ? _self.colorMode : colorMode // ignore: cast_nullable_to_non_nullable
 as AppColorMode,themePreset: null == themePreset ? _self.themePreset : themePreset // ignore: cast_nullable_to_non_nullable
@@ -980,7 +981,8 @@ as bool,showApiRequestLogEntry: null == showApiRequestLogEntry ? _self.showApiRe
 as bool,enableThinkingChainGuard: null == enableThinkingChainGuard ? _self.enableThinkingChainGuard : enableThinkingChainGuard // ignore: cast_nullable_to_non_nullable
 as bool,deepSeekThinkingMode: null == deepSeekThinkingMode ? _self.deepSeekThinkingMode : deepSeekThinkingMode // ignore: cast_nullable_to_non_nullable
 as DeepSeekThinkingMode,regexScriptsEnabled: null == regexScriptsEnabled ? _self.regexScriptsEnabled : regexScriptsEnabled // ignore: cast_nullable_to_non_nullable
-as bool,
+as bool,trackerUpdateMode: null == trackerUpdateMode ? _self.trackerUpdateMode : trackerUpdateMode // ignore: cast_nullable_to_non_nullable
+as TrackerUpdateMode,
   ));
 }
 
@@ -1065,10 +1067,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AppColorMode colorMode,  AppThemePreset themePreset,  Map<AppThemePreset, AppThemeConfig> themeConfigs,  bool showAvatar,  double backgroundOpacity,  bool inputGlassEffect,  bool showApiRequestLogEntry,  bool enableThinkingChainGuard,  DeepSeekThinkingMode deepSeekThinkingMode,  bool regexScriptsEnabled)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AppColorMode colorMode,  AppThemePreset themePreset,  Map<AppThemePreset, AppThemeConfig> themeConfigs,  bool showAvatar,  double backgroundOpacity,  bool inputGlassEffect,  bool showApiRequestLogEntry,  bool enableThinkingChainGuard,  DeepSeekThinkingMode deepSeekThinkingMode,  bool regexScriptsEnabled,  TrackerUpdateMode trackerUpdateMode)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _AppSettings() when $default != null:
-return $default(_that.colorMode,_that.themePreset,_that.themeConfigs,_that.showAvatar,_that.backgroundOpacity,_that.inputGlassEffect,_that.showApiRequestLogEntry,_that.enableThinkingChainGuard,_that.deepSeekThinkingMode,_that.regexScriptsEnabled);case _:
+return $default(_that.colorMode,_that.themePreset,_that.themeConfigs,_that.showAvatar,_that.backgroundOpacity,_that.inputGlassEffect,_that.showApiRequestLogEntry,_that.enableThinkingChainGuard,_that.deepSeekThinkingMode,_that.regexScriptsEnabled,_that.trackerUpdateMode);case _:
   return orElse();
 
 }
@@ -1086,10 +1088,10 @@ return $default(_that.colorMode,_that.themePreset,_that.themeConfigs,_that.showA
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AppColorMode colorMode,  AppThemePreset themePreset,  Map<AppThemePreset, AppThemeConfig> themeConfigs,  bool showAvatar,  double backgroundOpacity,  bool inputGlassEffect,  bool showApiRequestLogEntry,  bool enableThinkingChainGuard,  DeepSeekThinkingMode deepSeekThinkingMode,  bool regexScriptsEnabled)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AppColorMode colorMode,  AppThemePreset themePreset,  Map<AppThemePreset, AppThemeConfig> themeConfigs,  bool showAvatar,  double backgroundOpacity,  bool inputGlassEffect,  bool showApiRequestLogEntry,  bool enableThinkingChainGuard,  DeepSeekThinkingMode deepSeekThinkingMode,  bool regexScriptsEnabled,  TrackerUpdateMode trackerUpdateMode)  $default,) {final _that = this;
 switch (_that) {
 case _AppSettings():
-return $default(_that.colorMode,_that.themePreset,_that.themeConfigs,_that.showAvatar,_that.backgroundOpacity,_that.inputGlassEffect,_that.showApiRequestLogEntry,_that.enableThinkingChainGuard,_that.deepSeekThinkingMode,_that.regexScriptsEnabled);case _:
+return $default(_that.colorMode,_that.themePreset,_that.themeConfigs,_that.showAvatar,_that.backgroundOpacity,_that.inputGlassEffect,_that.showApiRequestLogEntry,_that.enableThinkingChainGuard,_that.deepSeekThinkingMode,_that.regexScriptsEnabled,_that.trackerUpdateMode);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -1106,10 +1108,10 @@ return $default(_that.colorMode,_that.themePreset,_that.themeConfigs,_that.showA
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AppColorMode colorMode,  AppThemePreset themePreset,  Map<AppThemePreset, AppThemeConfig> themeConfigs,  bool showAvatar,  double backgroundOpacity,  bool inputGlassEffect,  bool showApiRequestLogEntry,  bool enableThinkingChainGuard,  DeepSeekThinkingMode deepSeekThinkingMode,  bool regexScriptsEnabled)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AppColorMode colorMode,  AppThemePreset themePreset,  Map<AppThemePreset, AppThemeConfig> themeConfigs,  bool showAvatar,  double backgroundOpacity,  bool inputGlassEffect,  bool showApiRequestLogEntry,  bool enableThinkingChainGuard,  DeepSeekThinkingMode deepSeekThinkingMode,  bool regexScriptsEnabled,  TrackerUpdateMode trackerUpdateMode)?  $default,) {final _that = this;
 switch (_that) {
 case _AppSettings() when $default != null:
-return $default(_that.colorMode,_that.themePreset,_that.themeConfigs,_that.showAvatar,_that.backgroundOpacity,_that.inputGlassEffect,_that.showApiRequestLogEntry,_that.enableThinkingChainGuard,_that.deepSeekThinkingMode,_that.regexScriptsEnabled);case _:
+return $default(_that.colorMode,_that.themePreset,_that.themeConfigs,_that.showAvatar,_that.backgroundOpacity,_that.inputGlassEffect,_that.showApiRequestLogEntry,_that.enableThinkingChainGuard,_that.deepSeekThinkingMode,_that.regexScriptsEnabled,_that.trackerUpdateMode);case _:
   return null;
 
 }
@@ -1121,7 +1123,7 @@ return $default(_that.colorMode,_that.themePreset,_that.themeConfigs,_that.showA
 
 
 class _AppSettings extends AppSettings {
-  const _AppSettings({this.colorMode = AppColorMode.system, this.themePreset = AppThemePreset.sunset, final  Map<AppThemePreset, AppThemeConfig> themeConfigs = defaultAppThemeConfigs, this.showAvatar = true, this.backgroundOpacity = 0.85, this.inputGlassEffect = true, this.showApiRequestLogEntry = true, this.enableThinkingChainGuard = true, this.deepSeekThinkingMode = DeepSeekThinkingMode.max, this.regexScriptsEnabled = true}): _themeConfigs = themeConfigs,super._();
+  const _AppSettings({this.colorMode = AppColorMode.system, this.themePreset = AppThemePreset.sunset, final  Map<AppThemePreset, AppThemeConfig> themeConfigs = defaultAppThemeConfigs, this.showAvatar = true, this.backgroundOpacity = 0.85, this.inputGlassEffect = true, this.showApiRequestLogEntry = true, this.enableThinkingChainGuard = true, this.deepSeekThinkingMode = DeepSeekThinkingMode.max, this.regexScriptsEnabled = true, this.trackerUpdateMode = TrackerUpdateMode.quick}): _themeConfigs = themeConfigs,super._();
   
 
 @override@JsonKey() final  AppColorMode colorMode;
@@ -1147,6 +1149,8 @@ class _AppSettings extends AppSettings {
 @override@JsonKey() final  DeepSeekThinkingMode deepSeekThinkingMode;
 /// 特别版：是否启用角色卡正则脚本（ST extensions.regex_scripts）
 @override@JsonKey() final  bool regexScriptsEnabled;
+/// v66：状态更新模式（快速单次 API / 后台精确 / 严格等待裁判）。
+@override@JsonKey() final  TrackerUpdateMode trackerUpdateMode;
 
 /// Create a copy of AppSettings
 /// with the given fields replaced by the non-null parameter values.
@@ -1158,16 +1162,16 @@ _$AppSettingsCopyWith<_AppSettings> get copyWith => __$AppSettingsCopyWithImpl<_
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AppSettings&&(identical(other.colorMode, colorMode) || other.colorMode == colorMode)&&(identical(other.themePreset, themePreset) || other.themePreset == themePreset)&&const DeepCollectionEquality().equals(other._themeConfigs, _themeConfigs)&&(identical(other.showAvatar, showAvatar) || other.showAvatar == showAvatar)&&(identical(other.backgroundOpacity, backgroundOpacity) || other.backgroundOpacity == backgroundOpacity)&&(identical(other.inputGlassEffect, inputGlassEffect) || other.inputGlassEffect == inputGlassEffect)&&(identical(other.showApiRequestLogEntry, showApiRequestLogEntry) || other.showApiRequestLogEntry == showApiRequestLogEntry)&&(identical(other.enableThinkingChainGuard, enableThinkingChainGuard) || other.enableThinkingChainGuard == enableThinkingChainGuard)&&(identical(other.deepSeekThinkingMode, deepSeekThinkingMode) || other.deepSeekThinkingMode == deepSeekThinkingMode)&&(identical(other.regexScriptsEnabled, regexScriptsEnabled) || other.regexScriptsEnabled == regexScriptsEnabled));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AppSettings&&(identical(other.colorMode, colorMode) || other.colorMode == colorMode)&&(identical(other.themePreset, themePreset) || other.themePreset == themePreset)&&const DeepCollectionEquality().equals(other._themeConfigs, _themeConfigs)&&(identical(other.showAvatar, showAvatar) || other.showAvatar == showAvatar)&&(identical(other.backgroundOpacity, backgroundOpacity) || other.backgroundOpacity == backgroundOpacity)&&(identical(other.inputGlassEffect, inputGlassEffect) || other.inputGlassEffect == inputGlassEffect)&&(identical(other.showApiRequestLogEntry, showApiRequestLogEntry) || other.showApiRequestLogEntry == showApiRequestLogEntry)&&(identical(other.enableThinkingChainGuard, enableThinkingChainGuard) || other.enableThinkingChainGuard == enableThinkingChainGuard)&&(identical(other.deepSeekThinkingMode, deepSeekThinkingMode) || other.deepSeekThinkingMode == deepSeekThinkingMode)&&(identical(other.regexScriptsEnabled, regexScriptsEnabled) || other.regexScriptsEnabled == regexScriptsEnabled)&&(identical(other.trackerUpdateMode, trackerUpdateMode) || other.trackerUpdateMode == trackerUpdateMode));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,colorMode,themePreset,const DeepCollectionEquality().hash(_themeConfigs),showAvatar,backgroundOpacity,inputGlassEffect,showApiRequestLogEntry,enableThinkingChainGuard,deepSeekThinkingMode,regexScriptsEnabled);
+int get hashCode => Object.hash(runtimeType,colorMode,themePreset,const DeepCollectionEquality().hash(_themeConfigs),showAvatar,backgroundOpacity,inputGlassEffect,showApiRequestLogEntry,enableThinkingChainGuard,deepSeekThinkingMode,regexScriptsEnabled,trackerUpdateMode);
 
 @override
 String toString() {
-  return 'AppSettings(colorMode: $colorMode, themePreset: $themePreset, themeConfigs: $themeConfigs, showAvatar: $showAvatar, backgroundOpacity: $backgroundOpacity, inputGlassEffect: $inputGlassEffect, showApiRequestLogEntry: $showApiRequestLogEntry, enableThinkingChainGuard: $enableThinkingChainGuard, deepSeekThinkingMode: $deepSeekThinkingMode, regexScriptsEnabled: $regexScriptsEnabled)';
+  return 'AppSettings(colorMode: $colorMode, themePreset: $themePreset, themeConfigs: $themeConfigs, showAvatar: $showAvatar, backgroundOpacity: $backgroundOpacity, inputGlassEffect: $inputGlassEffect, showApiRequestLogEntry: $showApiRequestLogEntry, enableThinkingChainGuard: $enableThinkingChainGuard, deepSeekThinkingMode: $deepSeekThinkingMode, regexScriptsEnabled: $regexScriptsEnabled, trackerUpdateMode: $trackerUpdateMode)';
 }
 
 
@@ -1178,7 +1182,7 @@ abstract mixin class _$AppSettingsCopyWith<$Res> implements $AppSettingsCopyWith
   factory _$AppSettingsCopyWith(_AppSettings value, $Res Function(_AppSettings) _then) = __$AppSettingsCopyWithImpl;
 @override @useResult
 $Res call({
- AppColorMode colorMode, AppThemePreset themePreset, Map<AppThemePreset, AppThemeConfig> themeConfigs, bool showAvatar, double backgroundOpacity, bool inputGlassEffect, bool showApiRequestLogEntry, bool enableThinkingChainGuard, DeepSeekThinkingMode deepSeekThinkingMode, bool regexScriptsEnabled
+ AppColorMode colorMode, AppThemePreset themePreset, Map<AppThemePreset, AppThemeConfig> themeConfigs, bool showAvatar, double backgroundOpacity, bool inputGlassEffect, bool showApiRequestLogEntry, bool enableThinkingChainGuard, DeepSeekThinkingMode deepSeekThinkingMode, bool regexScriptsEnabled, TrackerUpdateMode trackerUpdateMode
 });
 
 
@@ -1195,7 +1199,7 @@ class __$AppSettingsCopyWithImpl<$Res>
 
 /// Create a copy of AppSettings
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? colorMode = null,Object? themePreset = null,Object? themeConfigs = null,Object? showAvatar = null,Object? backgroundOpacity = null,Object? inputGlassEffect = null,Object? showApiRequestLogEntry = null,Object? enableThinkingChainGuard = null,Object? deepSeekThinkingMode = null,Object? regexScriptsEnabled = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? colorMode = null,Object? themePreset = null,Object? themeConfigs = null,Object? showAvatar = null,Object? backgroundOpacity = null,Object? inputGlassEffect = null,Object? showApiRequestLogEntry = null,Object? enableThinkingChainGuard = null,Object? deepSeekThinkingMode = null,Object? regexScriptsEnabled = null,Object? trackerUpdateMode = null,}) {
   return _then(_AppSettings(
 colorMode: null == colorMode ? _self.colorMode : colorMode // ignore: cast_nullable_to_non_nullable
 as AppColorMode,themePreset: null == themePreset ? _self.themePreset : themePreset // ignore: cast_nullable_to_non_nullable
@@ -1207,7 +1211,8 @@ as bool,showApiRequestLogEntry: null == showApiRequestLogEntry ? _self.showApiRe
 as bool,enableThinkingChainGuard: null == enableThinkingChainGuard ? _self.enableThinkingChainGuard : enableThinkingChainGuard // ignore: cast_nullable_to_non_nullable
 as bool,deepSeekThinkingMode: null == deepSeekThinkingMode ? _self.deepSeekThinkingMode : deepSeekThinkingMode // ignore: cast_nullable_to_non_nullable
 as DeepSeekThinkingMode,regexScriptsEnabled: null == regexScriptsEnabled ? _self.regexScriptsEnabled : regexScriptsEnabled // ignore: cast_nullable_to_non_nullable
-as bool,
+as bool,trackerUpdateMode: null == trackerUpdateMode ? _self.trackerUpdateMode : trackerUpdateMode // ignore: cast_nullable_to_non_nullable
+as TrackerUpdateMode,
   ));
 }
 
