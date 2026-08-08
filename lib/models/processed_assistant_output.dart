@@ -11,6 +11,8 @@ import 'package:pocket_inn/services/tracker_runtime.dart';
 /// - [finalVariables]：本轮处理后持久化的完整会话变量表（含 setvar/
 ///   patch 应用后的最终状态；无副作用时为 null）——用于生成规范消息
 ///   快照（快照数值 = 该消息时的最终状态，不随后续轮次漂移）。
+/// - [narrative]：v66 主模型输出的动态解读（快速模式直接使用，不再
+///   等待独立状态裁判；后台/严格模式作为裁判未返回时的兜底基线）。
 class ProcessedAssistantOutput {
   const ProcessedAssistantOutput({
     required this.displayText,
@@ -18,6 +20,7 @@ class ProcessedAssistantOutput {
     this.choices = const [],
     this.specialStatusHtml,
     this.finalVariables,
+    this.narrative = const {},
   });
 
   final String displayText;
@@ -25,6 +28,7 @@ class ProcessedAssistantOutput {
   final List<DecisionChoice> choices;
   final String? specialStatusHtml;
   final Map<String, String>? finalVariables;
+  final Map<String, String> narrative;
 
   bool get hasChoices => choices.isNotEmpty;
 }
