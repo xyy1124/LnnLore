@@ -104,6 +104,13 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.77',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】状态栏模板兜底清洗：tracker.template 混入 PHI 指令文本（"带 <!--panel--> 标记；数值用 {{getvar}} 引用，不得编造）：" 前缀——批量补模板时把说明尾巴带进来）时，渲染只取面板本体（有 <!--panel--> 块提取块内 HTML，否则提取 <details>…</details>），指令文本不再显示在状态栏里；无 ::key 的裸 {{getvar}}/{{gettitle}} 引用一并剥离',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.76',
                   date: '2026-08-08',
                   changes: [
