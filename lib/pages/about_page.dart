@@ -104,6 +104,13 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.72',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】开场消息（first_mes）纯文本状态栏剥离：部分卡开场白末尾自带"当前场景：…\n好感：30/100"纯文本状态栏——之前只在模型回复处理时剥离，开场消息漏过（首条消息正文里显示状态行）。现在 extractOpeningMessages 传卡 JSON 时对每条消息做 stripTrailingPlainTrackerPanel（≥2 行命中 tracker label 才剥，防误删叙事），辉夜大小姐等卡的 first_mes 状态行不再残留正文',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.71',
                   date: '2026-08-08',
                   changes: [
