@@ -104,6 +104,16 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.73',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】后台裁判令牌按会话独立计数：之前全局整数会串会话（会话 A 启动裁判 turn=1，切到 B 发送 turn=2，A 的裁判返回被判过期、A 的状态不更新）——改为 _trackerJudgeTurns Map 每会话独立递增，多会话互不影响',
+                    '【特别版】裁判最终状态优先级修正：state 存在时完全忽略 patch.add——模型同时返回 {"state":{"like":30},"patch":{"add":{"like":5}}} 时，之前会 set 30 后再 +5 变 35（与"一次性保存"矛盾），现在只按 state 保存 30',
+                    '【特别版】后台/严格模式单一状态写入者收口：_processAssistantOutput 新增 allowInlineTrackerProtocol——快速模式=true（主模型唯一写入者）；后台/严格=false（主模型 patch/setvar/STATE/面板回写全部忽略，只保留正文清洗/choices/基础宏清洗）——彻底消除两个状态写入者重复增加/冲突',
+                    '【特别版】上下文用量估算按模式：_estimateTrackerInstructionText 按状态更新模式选协议尾部（快速=kInlineTrackerProtocolSuffix 含 <TRACKER_UPDATE> 标记、后台/严格=kStoryOnlySuffix 只输出正文）——与实发提示一致，之前固定用旧 kTrackerProtocolSuffix 估算与实发不符',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.72',
                   date: '2026-08-08',
                   changes: [
