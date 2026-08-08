@@ -659,12 +659,16 @@ class TrackerRuntime {
 
   /// v61：状态协议输出指令（固定尾部）——与状态字段列表拼装成完整
   /// 状态指令。抽为常量供上下文用量估算共用（避免估算漏算）。
+  /// v66：协议增加 narrative（快速模式：主模型一次输出 reply+patch+
+  /// narrative，不再需要第二次裁判请求）。
   static const String kTrackerProtocolSuffix =
       '（本条回复末尾必须用 JSON 代码块输出结构化状态更新，格式：\n'
-      '```json\n{"reply":"剧情正文","patch":{"set":{},"add":{"字段key":数值变化}}}\n```\n'
+      '```json\n{"reply":"剧情正文","patch":{"set":{},"add":{"字段key":数值变化}},"narrative":{"字段key":"本轮剧情下该字段的动态解读（一句话）"}}\n```\n'
       'reply 为本轮剧情正文，patch 只使用上方列出的 key（set 为直接赋值，'
       'add 为增减量）。状态有变化就如实输出；没有变化也必须输出空 patch'
       '（{"reply":"剧情正文","patch":{"set":{},"add":{}}}）。'
+      'narrative 中凡是 patch 修改过的字段都必须给出解读（一句话，结合本轮'
+      '实际发生的事件；只能使用字段 key，禁止中文 label）。'
       '不要输出状态面板模板本身，面板由系统自动渲染。）';
 
   /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`。
@@ -1045,6 +1049,71 @@ class TrackerRuntime {
       }
     }
     return result;
+  }
+
+  /// v66：给状态裁判裁剪输入正文——裁判只需判断状态变化，不需要读整篇
+  /// 长文。保留：开头、结尾、以及命中语义提示关键词（semanticHints /
+  /// 字段 label / aliases / 程度词）的段落；总长不超过 [maxChars]。
+  static String selectRelevantText(
+    String text, {
+    required TrackerConfig config,
+    int maxChars = 3500,
+  }) {
+    if (text.length <= maxChars) {
+      return text;
+    }
+    // 收集所有字段的提示关键词（semanticHints 三组 + label + aliases）
+    final keywords = <String>{};
+    for (final schema in config.stateSchema.values) {
+      if (schema.label.isNotEmpty) {
+        keywords.add(schema.label);
+      }
+      keywords.addAll(schema.aliases);
+      final hints = schema.updatePolicy?.semanticHints;
+      if (hints != null) {
+        keywords
+          ..addAll(hints.positiveSignals)
+          ..addAll(hints.negativeSignals)
+          ..addAll(hints.neutralSignals);
+      }
+    }
+    // 程度词（qualitativeDeltas 的键）也视为关键词
+    for (final schema in config.stateSchema.values) {
+      final deltas = schema.updatePolicy?.qualitativeDeltas.keys;
+      if (deltas != null) {
+        keywords.addAll(deltas);
+      }
+    }
+
+    // 按段落拆分，命中关键词的段落优先保留
+    final paragraphs = text.split(RegExp(r'\n+'));
+    final kept = <String>[];
+    for (final para in paragraphs) {
+      if (kept.length >= 24) {
+        break;
+      }
+      if (keywords.any((k) => k.isNotEmpty && para.contains(k))) {
+        kept.add(para);
+      }
+    }
+    // 开头 + 结尾保底（关键词段落不足时也有上下文）
+    final result = StringBuffer();
+    if (kept.isNotEmpty) {
+      final head = paragraphs.first;
+      final tail = paragraphs.last;
+      result.write('（开头）$head\n');
+      if (head != tail && paragraphs.length > 1) {
+        result.write('（中间）${kept.join('\n')}\n');
+        result.write('（结尾）$tail');
+      }
+    } else {
+      result.write(paragraphs.first);
+    }
+    final trimmed = result.toString().trim();
+    if (trimmed.length <= maxChars) {
+      return trimmed;
+    }
+    return '${trimmed.substring(0, maxChars - 3)}…';
   }
 
   /// 把状态格式化为注入 prompt 的自然文本。
