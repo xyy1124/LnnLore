@@ -281,6 +281,15 @@ class ChatService {
         trackerStateText: _trackerStateText(
           character.cardJson,
           localVariables,
+          // v67：注入上一轮 narrative/consequence——状态成为剧情驱动器
+          narrative: _previousStoryContextFromHistory(
+            chatMessages,
+            localVariables,
+          ).$1,
+          consequence: _previousStoryContextFromHistory(
+            chatMessages,
+            localVariables,
+          ).$2,
         ),
       );
 
@@ -300,7 +309,7 @@ class ChatService {
       // strict 等待裁判；background 正文先显示、裁判后台补算。
       final updateMode = appSettingsNotifier.value.trackerUpdateMode;
       final turn = _nextTrackerJudgeTurn;
-      (StatePatch, Map<String, String>)? judgeResult;
+      (StatePatch, Map<String, String>, Map<String, String>)? judgeResult;
       if (updateMode == TrackerUpdateMode.strict) {
         try {
           judgeResult = await _judgeTrackerState(
@@ -323,6 +332,11 @@ class ChatService {
           updateMode == TrackerUpdateMode.strict
               ? (judgeResult?.$2 ?? processed.narrative)
               : processed.narrative;
+      // v67：consequence（下一轮剧情影响指令）——同样三档取值
+      final judgeConsequence =
+          updateMode == TrackerUpdateMode.strict
+              ? (judgeResult?.$3 ?? processed.consequence)
+              : processed.consequence;
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: activeSession.id,
@@ -366,6 +380,7 @@ class ChatService {
           localVariables,
         ),
         beforeVariables: localVariables,
+        consequence: judgeConsequence,
       );
       // v66：后台模式——正文已保存显示，裁判在后台补算（轮次令牌
       // 防旧裁判覆盖新状态）
@@ -530,6 +545,15 @@ class ChatService {
         trackerStateText: _trackerStateText(
           character.cardJson,
           localVariables,
+          // v67：注入上一轮 narrative/consequence——状态成为剧情驱动器
+          narrative: _previousStoryContextFromHistory(
+            chatMessages,
+            localVariables,
+          ).$1,
+          consequence: _previousStoryContextFromHistory(
+            chatMessages,
+            localVariables,
+          ).$2,
         ),
       );
 
@@ -542,7 +566,7 @@ class ChatService {
       // v66：三档模式（quick 不调裁判/background 后台/strict 等待）
       final updateMode = appSettingsNotifier.value.trackerUpdateMode;
       final turn = _nextTrackerJudgeTurn;
-      (StatePatch, Map<String, String>)? judgeResult;
+      (StatePatch, Map<String, String>, Map<String, String>)? judgeResult;
       if (updateMode == TrackerUpdateMode.strict) {
         try {
           judgeResult = await _judgeTrackerState(
@@ -563,6 +587,11 @@ class ChatService {
           updateMode == TrackerUpdateMode.strict
               ? (judgeResult?.$2 ?? processed.narrative)
               : processed.narrative;
+      // v67：consequence（下一轮剧情影响指令）
+      final judgeConsequence =
+          updateMode == TrackerUpdateMode.strict
+              ? (judgeResult?.$3 ?? processed.consequence)
+              : processed.consequence;
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: activeSession.id,
@@ -608,6 +637,7 @@ class ChatService {
           localVariables,
         ),
         beforeVariables: localVariables,
+        consequence: judgeConsequence,
       );
       // v66：后台模式——裁判后台补算（令牌防旧裁判覆盖新状态）
       if (updateMode == TrackerUpdateMode.background) {
@@ -765,6 +795,15 @@ class ChatService {
         trackerStateText: _trackerStateText(
           character.cardJson,
           localVariables,
+          // v67：注入上一轮 narrative/consequence——状态成为剧情驱动器
+          narrative: _previousStoryContextFromHistory(
+            historyBeforeUserMessage,
+            localVariables,
+          ).$1,
+          consequence: _previousStoryContextFromHistory(
+            historyBeforeUserMessage,
+            localVariables,
+          ).$2,
         ),
       );
 
@@ -779,7 +818,7 @@ class ChatService {
       // v66：三档模式（quick 不调裁判/background 后台/strict 等待）
       final updateMode = appSettingsNotifier.value.trackerUpdateMode;
       final turn = _nextTrackerJudgeTurn;
-      (StatePatch, Map<String, String>)? judgeResult;
+      (StatePatch, Map<String, String>, Map<String, String>)? judgeResult;
       if (updateMode == TrackerUpdateMode.strict) {
         try {
           judgeResult = await _judgeTrackerState(
@@ -800,6 +839,11 @@ class ChatService {
           updateMode == TrackerUpdateMode.strict
               ? (judgeResult?.$2 ?? processed.narrative)
               : processed.narrative;
+      // v67：consequence（下一轮剧情影响指令）
+      final judgeConsequence =
+          updateMode == TrackerUpdateMode.strict
+              ? (judgeResult?.$3 ?? processed.consequence)
+              : processed.consequence;
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: session.id,
@@ -838,6 +882,7 @@ class ChatService {
           localVariables,
         ),
         beforeVariables: localVariables,
+        consequence: judgeConsequence,
       );
       // v66：后台模式——裁判后台补算（令牌防旧裁判覆盖新状态）
       if (updateMode == TrackerUpdateMode.background) {
@@ -1021,7 +1066,19 @@ class ChatService {
     // 特别版：继续推进同样注入 tracker 状态指令（与普通发送一致），
     // 否则"继续"生成时模型收不到当前状态、也不会输出状态 patch。
     // v50：合并进最后一条 system（与 _createCompletion 一致，见 v50 说明）。
-    final trackerState = _trackerStateText(character.cardJson, localVariables);
+    final trackerState = _trackerStateText(
+      character.cardJson,
+      localVariables,
+      // v67：注入上一轮 narrative/consequence——状态成为剧情驱动器
+      narrative: _previousStoryContextFromHistory(
+        chatMessages,
+        localVariables,
+      ).$1,
+      consequence: _previousStoryContextFromHistory(
+        chatMessages,
+        localVariables,
+      ).$2,
+    );
     if (trackerState != null && trackerState.trim().isNotEmpty) {
       final systemIdx = requestMessages.lastIndexWhere(
         (m) => m['role'] == 'system',
@@ -1058,7 +1115,7 @@ class ChatService {
       // v66：三档模式（quick 不调裁判/background 后台/strict 等待）
       final updateMode = appSettingsNotifier.value.trackerUpdateMode;
       final turn = _nextTrackerJudgeTurn;
-      (StatePatch, Map<String, String>)? judgeResult;
+      (StatePatch, Map<String, String>, Map<String, String>)? judgeResult;
       if (updateMode == TrackerUpdateMode.strict) {
         try {
           judgeResult = await _judgeTrackerState(
@@ -1079,6 +1136,11 @@ class ChatService {
           updateMode == TrackerUpdateMode.strict
               ? (judgeResult?.$2 ?? processed.narrative)
               : processed.narrative;
+      // v67：consequence（下一轮剧情影响指令）
+      final judgeConsequence =
+          updateMode == TrackerUpdateMode.strict
+              ? (judgeResult?.$3 ?? processed.consequence)
+              : processed.consequence;
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
         sessionId: session.id,
@@ -1117,6 +1179,7 @@ class ChatService {
           localVariables,
         ),
         beforeVariables: localVariables,
+        consequence: judgeConsequence,
       );
       // v66：后台模式——裁判后台补算（令牌防旧裁判覆盖新状态）
       if (updateMode == TrackerUpdateMode.background) {
@@ -1484,6 +1547,11 @@ class ChatService {
           TrackerRuntime.extractNarrative(text),
           config,
         ),
+        // v67：主模型 consequence（下一轮剧情影响指令）
+        consequence: TrackerRuntime.canonicalizeNarrative(
+          TrackerRuntime.extractConsequence(text),
+          config,
+        ),
       );
     }
     return ProcessedAssistantOutput(
@@ -1494,6 +1562,11 @@ class ChatService {
       // v66：主模型 narrative（无副作用路径也提取——正文可能带协议块）
       narrative: TrackerRuntime.canonicalizeNarrative(
         TrackerRuntime.extractNarrative(text),
+        config,
+      ),
+      // v67：主模型 consequence
+      consequence: TrackerRuntime.canonicalizeNarrative(
+        TrackerRuntime.extractConsequence(text),
         config,
       ),
     );
@@ -1531,6 +1604,12 @@ class ChatService {
   static String messageStatusSnapshotV4Key(String messageId) =>
       '__msg_tracker_state_v4__:$messageId';
 
+  /// v67 快照 key：结构化状态 + narrative + consequence（下一轮剧情影响
+  /// 指令）——v5 结构是 v4 的超集（多了 consequence），读取时 v5 优先、
+  /// v4 回退。
+  static String messageStatusSnapshotV5Key(String messageId) =>
+      '__msg_tracker_state_v5__:$messageId';
+
   Future<void> _persistMessageStatusHtml(
     String sessionId,
     String messageId,
@@ -1544,6 +1623,9 @@ class ChatService {
     Map<String, String>? previousNarrative,
     /// v65：本轮开始前的变量表（计算 changedKeys 用）。
     Map<String, String>? beforeVariables,
+    /// v67：本轮 consequence（下一轮剧情影响指令，按字段）——写入 v5
+    /// 快照，下一轮主模型读取并作为剧情约束。
+    Map<String, String>? consequence,
   }) async {
     if (finalVariables == null) {
       return;
@@ -1581,6 +1663,42 @@ class ChatService {
         config: config,
       );
     }
+    // v67：consequence 合并——已变化字段必须有影响指令（裁判漏写回退
+    // 该字段 narrative；都没有则确定性兜底），未变化字段继承上一轮。
+    var completeConsequence = consequence;
+    if (consequence != null && beforeVariables != null) {
+      final changed = TrackerRuntime.changedKeys(
+        before: beforeVariables,
+        after: finalVariables,
+        config: config,
+      );
+      final merged = Map<String, String>.from(consequence);
+      for (final key in changed) {
+        if (merged[key]?.trim().isNotEmpty == true) {
+          continue;
+        }
+        final narrativeFallback = completeNarrative?[key]?.trim();
+        if (narrativeFallback != null && narrativeFallback.isNotEmpty) {
+          merged[key] = narrativeFallback;
+          continue;
+        }
+        final schema = config.stateSchema[key];
+        final label = schema?.label.trim().isNotEmpty == true
+            ? schema!.label.trim()
+            : key;
+        merged[key] =
+            '下一轮剧情中继续体现$label的当前状态（${finalVariables[key]}），'
+            '除非剧情中发生明确的反转事件。';
+      }
+      completeConsequence = merged;
+    }
+    final v5Payload = <String, dynamic>{
+      'state': state,
+      if (completeNarrative != null && completeNarrative.isNotEmpty)
+        'narrative': completeNarrative,
+      if (completeConsequence != null && completeConsequence.isNotEmpty)
+        'consequence': completeConsequence,
+    };
     await ChatDatabaseService.instance.upsertSessionVariables(sessionId, {
       messageStatusHtmlKey(messageId): jsonEncode(state),
       // v63：有动态解读时写 v4 快照（state + narrative），显示层优先 v4
@@ -1589,13 +1707,29 @@ class ChatService {
           'state': state,
           'narrative': completeNarrative,
         }),
+      // v67：v5 快照（state + narrative + consequence）——下一轮注入用
+      if (v5Payload.length > 1)
+        messageStatusSnapshotV5Key(messageId): jsonEncode(v5Payload),
     });
   }
 
-  /// v65：从历史中取上一条角色消息的完整 narrative（v4 快照的
-  /// narrative 部分）——倒序找最近一条带 v4 快照的角色消息。
+  /// v65：从历史中取上一条角色消息的完整 narrative（v4/v5 快照的
+  /// narrative 部分）——倒序找最近一条带快照的角色消息。
   /// 无则返回空表（合并时全部依赖本轮解读/静态回退）。
   Map<String, String> _previousNarrativeFromHistory(
+    List<ChatMessage> history,
+    Map<String, String> variables,
+  ) {
+    return _previousStoryContextFromHistory(history, variables).$1;
+  }
+
+  /// v67：从历史中取上一条角色消息的完整叙事上下文——倒序找最近一条
+  /// 带 v4/v5 快照的角色消息，返回其 (narrative, consequence)。
+  /// narrative 解释"当前状态为什么形成"，consequence 说明"该状态下一轮
+  /// 应如何影响角色行为"——两者注入下一轮主模型，让状态成为剧情驱动器。
+  /// 无则返回空表。
+  (Map<String, String>, Map<String, String>)
+      _previousStoryContextFromHistory(
     List<ChatMessage> history,
     Map<String, String> variables,
   ) {
@@ -1603,28 +1737,42 @@ class ChatService {
       if (msg.isMe || msg.id == null) {
         continue;
       }
-      final raw = variables[messageStatusSnapshotV4Key(msg.id!)];
+      final raw = variables[messageStatusSnapshotV5Key(msg.id!)] ??
+          variables[messageStatusSnapshotV4Key(msg.id!)];
       if (raw == null || raw.trim().isEmpty) {
         continue;
       }
       try {
         final decoded = jsonDecode(raw);
-        if (decoded is Map && decoded['narrative'] is Map) {
-          final narrative = <String, String>{};
-          (decoded['narrative'] as Map).forEach((k, v) {
+        if (decoded is! Map) {
+          continue;
+        }
+        final narrative = <String, String>{};
+        final rawNarrative = decoded['narrative'];
+        if (rawNarrative is Map) {
+          rawNarrative.forEach((k, v) {
             if (k is String && v is String && v.trim().isNotEmpty) {
               narrative[k] = v.trim();
             }
           });
-          if (narrative.isNotEmpty) {
-            return narrative;
-          }
+        }
+        final consequence = <String, String>{};
+        final rawConsequence = decoded['consequence'];
+        if (rawConsequence is Map) {
+          rawConsequence.forEach((k, v) {
+            if (k is String && v is String && v.trim().isNotEmpty) {
+              consequence[k] = v.trim();
+            }
+          });
+        }
+        if (narrative.isNotEmpty || consequence.isNotEmpty) {
+          return (narrative, consequence);
         }
       } catch (_) {
         // 快照解析失败跳过
       }
     }
-    return const <String, String>{};
+    return (const <String, String>{}, const <String, String>{});
   }
 
   /// 特别版：生成 Tracker 状态自然文本（无卡声明时返回 null）。
@@ -1635,8 +1783,13 @@ class ChatService {
   ///    否则历史状态快照会被当成"当前状态"重新注入模型。
   String? _trackerStateText(
     Map<String, dynamic>? cardJson,
-    Map<String, String> variables,
-  ) {
+    Map<String, String> variables, {
+    /// v67：上一轮完整 narrative（状态裁判/主模型生成的动态解读）——
+    /// 注入下一轮主模型，让状态成为"剧情驱动器"而非"事后记录器"。
+    Map<String, String> narrative = const {},
+    /// v67：上一轮 consequence（下一轮剧情影响指令）。
+    Map<String, String> consequence = const {},
+  }) {
     final config = TrackerConfig.fromCardJson(cardJson);
     if (!config.isEnabled) {
       return null;
@@ -1662,15 +1815,36 @@ class ChatService {
     if (text.isEmpty) {
       return null;
     }
-    // 输出指令：要求模型只输出结构化 patch（不再复制面板模板——模板
-    // 由 App 自己渲染，避免"状态栏未更新"等文案被模型带进面板）。
-    // v48：要求**每轮都输出** patch——即使无状态变化也输出空 patch
-    // （{"patch":{"set":{},"add":{}}}），便于日志区分"模型判断没有
-    // 变化"和"模型完全没遵守协议"。
-    // v50：格式改为固定 {reply, patch}（正文与协议分离，避免长剧情
-    // 末尾遗漏 patch）；key 映射已在上方列出，只能使用 key。
-    // v61：输出指令为共享常量（上下文用量估算同源计入）。
-    return '$text\n\n${TrackerRuntime.kTrackerProtocolSuffix}';
+    // v67：注入上一轮动态解读（narrative）与剧情影响指令（consequence）——
+    // 模型下一轮不只读到"压制中"标签，还读到"反抗正在失去效果"与
+    // "除非成功脱身，否则保持行动受限"等剧情约束，正文才能持续体现状态。
+    final parts = <String>[text];
+    final narrativeLines = <String>[];
+    for (final entry in narrative.entries) {
+      if (entry.value.trim().isEmpty) {
+        continue;
+      }
+      final label = config.stateSchema[entry.key]?.label ?? entry.key;
+      narrativeLines.add('- $label：${entry.value.trim()}');
+    }
+    if (narrativeLines.isNotEmpty) {
+      parts.add('[当前状态在剧情中的具体表现]\n${narrativeLines.join('\n')}');
+    }
+    final consequenceLines = <String>[];
+    for (final entry in consequence.entries) {
+      if (entry.value.trim().isEmpty) {
+        continue;
+      }
+      final label = config.stateSchema[entry.key]?.label ?? entry.key;
+      consequenceLines.add('- $label：${entry.value.trim()}');
+    }
+    if (consequenceLines.isNotEmpty) {
+      parts.add('[状态对下一轮剧情的约束]\n${consequenceLines.join('\n')}');
+    }
+    parts
+      ..add(TrackerRuntime.kTrackerStoryInfluenceSuffix)
+      ..add(TrackerRuntime.kTrackerProtocolSuffix);
+    return parts.join('\n\n');
   }
 
   /// v51：从消息历史恢复 tracker 基线状态——倒序找最近一条角色消息的
@@ -1789,13 +1963,15 @@ class ChatService {
   }
 
   /// 状态裁判：剧情生成后**独立调用一次**，返回 JSON patch 与本轮
-  /// 动态解读（narrative）。
+  /// 动态解读（narrative）与下一轮剧情影响（consequence）。
   /// 返回 null 表示未启用 / 卡无 tracker / 请求失败（不影响主流程——
   /// 状态保持主模型 patch 结果）。
   /// v66：[mainPatch] 为主模型本轮已输出的 patch——裁判不得重复叠加
   /// 同一事件（主模型已更新字段裁判不得再加）；[userText]/[assistantText]
   /// 会被裁剪（裁判只需判断状态变化，不需要读整篇长文）。
-  Future<(StatePatch, Map<String, String>)?> _judgeTrackerState({
+  /// v67：返回三元组 (patch, narrative, consequence)。
+  Future<(StatePatch, Map<String, String>, Map<String, String>)?>
+      _judgeTrackerState({
     required ResolvedApiConfig config,
     required Map<String, dynamic>? cardJson,
     required Map<String, String> variables,
@@ -1857,7 +2033,7 @@ class ChatService {
         : '主模型本轮已经通过 patch 更新了以下字段：'
             '${mainPatchKeys.join('，')}。\n'
             '这些字段的状态变化已经由主模型表达——裁判对它们'
-            '**不得再次增加**（避免同一事件叠加两次）；'
+            '不得再次增加（避免同一事件叠加两次）；'
             '若裁判认为主模型的更新方向/幅度不准确，可以对它们'
             '使用 set 直接修正为最终值，或不再返回这些字段。\n';
     final prompt = '$stateText\n\n'
@@ -1875,15 +2051,19 @@ class ChatService {
         '不得触发变化。\n'
         '输出格式（只输出 JSON 代码块，不要任何解释文字）：\n'
         '```json\n{"patch":{"set":{},"add":{"字段key":数值变化}},'
-        '"narrative":{"字段key":"本轮剧情下该字段的动态解读（一句话，结合本轮实际发生的事件；数值没变但剧情有实质进展也可以更新；没有新事件则省略该字段）"}}\n```\n'
-        '没有实质变化时输出 {"patch":{"set":{},"add":{}}}，可只带 narrative。）\n'
+        '"narrative":{"字段key":"本轮剧情下该字段的动态解读（一句话，结合本轮实际发生的事件；数值没变但剧情有实质进展也可以更新；没有新事件则省略该字段）"},'
+        '"consequence":{"字段key":"该状态下一轮应如何影响角色行为（一句话；持续存在的状态如服装/伤势/关系/位置必须说明保持要求，除非剧情发生明确反转）"}}\n```\n'
+        '没有实质变化时输出 {"patch":{"set":{},"add":{}}}，可只带 narrative/consequence。）\n'
         '【v65 强制规则】narrative 必须包含以下字段：\n'
         '1. patch.set 中的全部字段；\n'
         '2. patch.add 中的全部字段；\n'
         '3. 主模型已经修改的全部候选字段（对比上方 current 与本轮剧情）；\n'
         '4. 数值没有变化但本轮剧情含义明显改变的字段。\n'
         '凡是状态值发生变化的字段，禁止省略 narrative，禁止返回空字符串。\n'
-        'narrative 只能使用字段 key（禁止使用中文 label/别名）。';
+        'narrative 只能使用字段 key（禁止使用中文 label/别名）。\n'
+        '【v67 强制规则】consequence 与 narrative 覆盖相同的字段集合——'
+        'narrative 解释状态为什么形成，consequence 说明下一轮正文应如何'
+        '持续体现该状态（行动限制/心理反应/连续状态保持/反转条件）。';
     try {
       // v66：裁判专用精简预设——maxTokens 256、temperature 0、关闭
       // 思维链约束（裁判只需 JSON，不需要长篇回复或思考链）
@@ -1913,10 +2093,17 @@ class ChatService {
         TrackerRuntime.extractNarrative(completion.text),
         trackerConfig,
       );
-      debugPrint(
-        '[TRACKER_JUDGE] mode=$mode patch=$patch narrative=$narrative',
+      // v67：consequence 同样规范化（narrative 与 consequence 共用
+      // canonicalizeNarrative——都是"字段 → 文本"映射）
+      final consequence = TrackerRuntime.canonicalizeNarrative(
+        TrackerRuntime.extractConsequence(completion.text),
+        trackerConfig,
       );
-      return (patch, narrative);
+      debugPrint(
+        '[TRACKER_JUDGE] mode=$mode patch=$patch narrative=$narrative '
+        'consequence=$consequence',
+      );
+      return (patch, narrative, consequence);
     } on Object catch (error) {
       // 裁判失败不影响主流程（状态保持主模型 patch 结果）
       debugPrint('[TRACKER_JUDGE] 裁判请求失败（忽略）: $error');
@@ -1999,6 +2186,7 @@ class ChatService {
     }
     final judgePatch = judgeResult.$1;
     final judgeNarrative = judgeResult.$2;
+    final judgeConsequence = judgeResult.$3;
     final isCurrentTurn = turn == _trackerJudgeTurn;
     if (isCurrentTurn) {
       // 当前轮：裁判 patch 在候选状态上叠加 → 更新会话变量 + 快照
@@ -2023,6 +2211,7 @@ class ChatService {
         narrative: judgeNarrative,
         previousNarrative: _previousNarrativeFromHistory(history, localVariables),
         beforeVariables: localVariables,
+        consequence: judgeConsequence,
       );
       debugPrint(
         '[TRACKER_JUDGE] 后台裁判完成（当前轮）：patch=$judgePatch '
@@ -2038,6 +2227,7 @@ class ChatService {
         narrative: judgeNarrative,
         previousNarrative: _previousNarrativeFromHistory(history, localVariables),
         beforeVariables: localVariables,
+        consequence: judgeConsequence,
       );
       debugPrint(
         '[TRACKER_JUDGE] 后台裁判过期丢弃（turn=$turn 当前=$_trackerJudgeTurn）'
