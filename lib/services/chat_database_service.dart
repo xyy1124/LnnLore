@@ -958,12 +958,22 @@ class ChatDatabaseService {
       // v56：删除分支时同步清理消息级状态快照
       // （__msg_tracker_state_v3__:<id> 存在 chat_variables 表）——
       // 否则删除分支后快照残留成孤儿数据，长期累积污染变量表。
+      // v75：同时清理 v4/v5（narrative/consequence）与旧 v2/v1
+      // （预渲染 HTML）快照——之前只清 v3，v4/v5 残留孤儿数据
       for (final id in subtreeIds) {
-        await tx.delete(
-          'chat_variables',
-          where: 'session_id = ? AND key = ?',
-          whereArgs: [sessionId, '__msg_tracker_state_v3__:$id'],
-        );
+        for (final prefix in const [
+          '__msg_tracker_state_v3__:',
+          '__msg_tracker_state_v4__:',
+          '__msg_tracker_state_v5__:',
+          '__msg_status_html_v2__:',
+          '__msg_status_html__:',
+        ]) {
+          await tx.delete(
+            'chat_variables',
+            where: 'session_id = ? AND key = ?',
+            whereArgs: [sessionId, '$prefix$id'],
+          );
+        }
       }
 
       await tx.delete(
