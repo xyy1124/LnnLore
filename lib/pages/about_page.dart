@@ -104,6 +104,17 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.67',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】状态系统升级为"剧情驱动器"：上一轮完整动态解读（narrative）与下一轮剧情影响指令（consequence）注入下一轮主模型——模型不只读到"压制中"标签，还读到"反抗正在失去效果"与"除非成功脱身，否则保持行动受限"等剧情约束，正文持续体现状态（原来 narrative 只进消息快照供状态栏显示，下一轮正文读不到）',
+                    '【特别版】consequence 协议：状态裁判/主模型输出 `{"consequence":{"字段key":"该状态下一轮应如何影响角色行为"}}`——narrative 解释状态为什么形成，consequence 说明下一轮应如何持续体现（行动限制/心理反应/连续状态保持/反转条件）',
+                    '【特别版】状态约束指令（kTrackerStoryInfluenceSuffix）：当前状态是已发生的剧情事实、正文必须自然体现、不得无视/重置/无理由逆转、状态变化必须有实际事件支撑、服装/伤势/关系/位置等连续状态必须保持（无明确恢复事件时）',
+                    '【特别版】消息快照升级 v5（state + narrative + consequence）：v5 优先读取、v4 回退；consequence 合并规则同 narrative——已变化字段必须有影响指令（裁判漏写回退该字段 narrative，都没有则确定性兜底）',
+                    '【特别版】清理 Tracker prompt 的 ** 残留：formatTrackerInstruction/裁判提示中的 Markdown 粗体标记不再进入发送给模型的系统提示（污染协议文本）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.66',
                   date: '2026-08-08',
                   changes: [
