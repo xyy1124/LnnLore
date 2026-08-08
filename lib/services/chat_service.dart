@@ -56,10 +56,21 @@ class ChatService {
   /// 时若令牌已过期（用户已发起下一轮），只允许更新旧消息快照，
   /// 不允许覆盖当前会话状态（防旧裁判污染新剧情）。
   /// v70：升级为**按会话串行队列**——下一轮发送前等待上一轮裁判结算
-  /// 完成（不再因"裁判返回太晚"丢弃整轮状态）；令牌保留作过期兜底。
-  int _trackerJudgeTurn = 0;
+  /// 完成（不再因"裁判返回太晚"丢弃整轮状态）。
+  /// v73：令牌改为**按 sessionId 独立计数**——全局整数会串会话
+  /// （会话 A 启动裁判 turn=1，切到会话 B 发送 turn=2，A 的裁判返回
+  /// 被判过期、A 的状态不更新）；每会话独立递增互不影响。
+  final Map<String, int> _trackerJudgeTurns = {};
 
-  int get _nextTrackerJudgeTurn => ++_trackerJudgeTurn;
+  int _nextTrackerJudgeTurn(String sessionId) {
+    final next = (_trackerJudgeTurns[sessionId] ?? 0) + 1;
+    _trackerJudgeTurns[sessionId] = next;
+    return next;
+  }
+
+  /// v73：该会话当前令牌（判断后台裁判是否过期用）。
+  int _currentTrackerJudgeTurn(String sessionId) =>
+      _trackerJudgeTurns[sessionId] ?? 0;
 
   /// v70：每会话的后台裁判任务队列——开始新一轮前 await 上一轮结算，
   /// 保证"正文先显示、状态稍后更新，但用户下次发送前上一轮状态必须
@@ -319,6 +330,9 @@ class ChatService {
         ),
       );
 
+      // v73：后台/严格模式主模型只输出正文——状态由裁判决定；
+      // 快速模式主模型是唯一状态写入者
+      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
       final processed = await _processAssistantOutput(
         activeSession.id,
         completion.text,
@@ -328,13 +342,15 @@ class ChatService {
         // v56：状态事务——内存基线（含已应用的旁白），模型成功后
         // 与 patch/setvar 一起提交；取消/失败则状态保持原样
         baseVariables: localVariables,
+        // v73：后台/严格模式主模型只输出正文——状态由裁判决定
+        allowInlineTrackerProtocol:
+            updateMode == TrackerUpdateMode.quick,
       );
       // v60/v63：状态裁判——剧情生成后独立判断状态变化并生成本轮
       // 动态解读（narrative）。
       // v66：三档模式——quick（默认）不调裁判直接用主模型 narrative；
       // strict 等待裁判；background 正文先显示、裁判后台补算。
-      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
-      final turn = _nextTrackerJudgeTurn;
+    final turn = _nextTrackerJudgeTurn(activeSession.id);
       (StatePatch, Map<String, String>, Map<String, String>)? judgeResult;
       if (updateMode == TrackerUpdateMode.strict) {
         try {
@@ -599,15 +615,18 @@ class ChatService {
         ),
       );
 
+      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
       final processed = await _processAssistantOutput(
         activeSession.id,
         completion.text,
         cardJson: character.cardJson,
+        // v73：后台/严格模式主模型只输出正文——状态由裁判决定
+        allowInlineTrackerProtocol:
+            updateMode == TrackerUpdateMode.quick,
       );
       // v60/v63：状态裁判——群聊剧情后独立判断状态变化并生成解读
       // v66：三档模式（quick 不调裁判/background 后台/strict 等待）
-      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
-      final turn = _nextTrackerJudgeTurn;
+    final turn = _nextTrackerJudgeTurn(activeSession.id);
       (StatePatch, Map<String, String>, Map<String, String>)? judgeResult;
       if (updateMode == TrackerUpdateMode.strict) {
         try {
@@ -864,17 +883,20 @@ class ChatService {
         ),
       );
 
+      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
       final processed = await _processAssistantOutput(
         session.id,
         completion.text,
         cardJson: character.cardJson,
         // 原用户消息旁白字段本轮去重（只阻止模型重复更新，不重新应用）
         protectedStateKeys: regenerateProtectedKeys,
+        // v73：后台/严格模式主模型只输出正文——状态由裁判决定
+        allowInlineTrackerProtocol:
+            updateMode == TrackerUpdateMode.quick,
       );
       // v60/v63：状态裁判——重生成剧情后独立判断状态变化并生成解读
       // v66：三档模式（quick 不调裁判/background 后台/strict 等待）
-      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
-      final turn = _nextTrackerJudgeTurn;
+    final turn = _nextTrackerJudgeTurn(session.id);
       (StatePatch, Map<String, String>, Map<String, String>)? judgeResult;
       if (updateMode == TrackerUpdateMode.strict) {
         try {
@@ -1178,15 +1200,18 @@ class ChatService {
         onThinkingChainRetry: onThinkingChainRetry,
       );
 
+      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
       final processed = await _processAssistantOutput(
         session.id,
         completion.text,
         cardJson: character.cardJson,
+        // v73：后台/严格模式主模型只输出正文——状态由裁判决定
+        allowInlineTrackerProtocol:
+            updateMode == TrackerUpdateMode.quick,
       );
       // v60/v63：状态裁判——继续推进剧情后独立判断状态变化并生成解读
       // v66：三档模式（quick 不调裁判/background 后台/strict 等待）
-      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
-      final turn = _nextTrackerJudgeTurn;
+    final turn = _nextTrackerJudgeTurn(session.id);
       (StatePatch, Map<String, String>, Map<String, String>)? judgeResult;
       if (updateMode == TrackerUpdateMode.strict) {
         try {
@@ -1413,6 +1438,11 @@ class ChatService {
     Map<String, dynamic>? cardJson,
     Set<String> protectedStateKeys = const {},
     Map<String, String>? baseVariables,
+    /// v73：是否允许主模型输出内联状态协议（patch/setvar/STATE/面板
+    /// 回写）。快速模式=true（主模型是唯一状态写入者）；后台/严格=false
+    /// ——主模型**只输出正文**，任何状态修改都被忽略（状态由独立裁判
+    /// 决定，避免两个状态写入者重复增加/冲突）。
+    bool allowInlineTrackerProtocol = true,
   }) async {
     final calls = ChatVariableService.parseSetVarCalls(text);
     final config = TrackerConfig.fromCardJson(cardJson);
@@ -1420,7 +1450,11 @@ class ChatService {
     // （不再把长篇剧情塞进 JSON reply），标记内是短状态协议
     final (markerJson, markerDisplayText) =
         TrackerRuntime.extractTrackerUpdateBlock(text);
-    var patch = TrackerRuntime.extractPatch(text);
+    // v73：后台/严格模式禁止主模型状态修改——patch 置空（只保留
+    // protocolDetected=false 语义），setvar/STATE/面板回写一并忽略
+    var patch = allowInlineTrackerProtocol
+        ? TrackerRuntime.extractPatch(text)
+        : StatePatch();
     // v50：字段名规范化——模型可能输出中文 label（"烙印值"）而非真实
     // key（yw_brand），映射回 key；完全未知字段丢弃（避免被 reducer
     // 当成新变量保存，面板仍读不到）。
@@ -1435,7 +1469,8 @@ class ChatService {
     // set/add 为空，即合法空 patch）。
     debugPrint(
       '[TRACKER_RESPONSE] protocol=${patch.protocolDetected ? '有' : '无'} '
-      'set=${patch.setValues} add=${patch.addValues}',
+      'set=${patch.setValues} add=${patch.addValues} '
+      'allowInline=$allowInlineTrackerProtocol',
     );
     // 旁白字段本轮去重：模型对已落地旁白字段的 set/add 一律忽略
     // （其余字段照常应用）。
@@ -1494,13 +1529,17 @@ class ChatService {
     // v69：剥离正文末尾的纯文本状态栏——模型可能输出
     // "状态栏：\n堕落进度：27/100\n当前状态：压制中"（无 HTML 变体，
     // 显示层清洗器不识别）。识别规则：末尾、≥2 行命中 tracker label、
-    // 每行含冒号。识别到的 label→值回写变量（兼容状态来源）。
+    // 每行含冒号。
+    // v73：后台/严格模式仍剥离（正文不含状态行），但**不回写变量**——
+    // 状态由裁判决定，主模型的面板值不参与 reducer。
     if (config.isEnabled) {
       final plainPanelValues = <String, String>{};
       displayText = TrackerRuntime.stripTrailingPlainTrackerPanel(
         displayText,
         config,
-        plainPanelValues: plainPanelValues,
+        plainPanelValues: allowInlineTrackerProtocol
+            ? plainPanelValues
+            : null,
       );
       if (plainPanelValues.isNotEmpty) {
         debugPrint('[TRACKER_RESPONSE] 纯文本状态栏回写: $plainPanelValues');
@@ -2295,7 +2334,10 @@ class ChatService {
         }
         var patch = TrackerRuntime.extractPatch(completion.text);
         // v70：裁判可选输出最终状态 "state" 字段——检测到则按最终值
-        // 一次性 set（不再增量叠加，避免"主+裁判重复增加"）
+        // 一次性 set（不再增量叠加，避免"主+裁判重复增加"）。
+        // v73：state 存在时**完全忽略 patch.add**——模型同时返回
+        // {"state":{"like":30},"patch":{"add":{"like":5}}} 时，若保留
+        // add 会在 set 30 之后再 +5 变成 35（与"一次性保存"注释矛盾）。
         final finalState = TrackerRuntime.extractFinalState(
           completion.text,
           trackerConfig,
@@ -2303,13 +2345,13 @@ class ChatService {
         if (finalState.isNotEmpty) {
           patch = StatePatch(
             setValues: finalState,
-            addValues: patch.addValues,
+            addValues: const {},
             reply: patch.reply,
             protocolDetected: true,
           );
           debugPrint(
             '[TRACKER_JUDGE] 裁判输出最终状态 state=$finalState '
-            '（按 set 一次性保存）',
+            '（按 set 一次性保存，忽略 patch.add）',
           );
         }
         // v65：narrative key 规范化——模型可能用中文 label/别名作键，
@@ -2462,7 +2504,9 @@ class ChatService {
     final judgePatch = judgeResult.$1;
     final judgeNarrative = judgeResult.$2;
     final judgeConsequence = judgeResult.$3;
-    final isCurrentTurn = turn == _trackerJudgeTurn;
+    // v73：按会话令牌判断——不同会话的裁判互不影响（全局令牌会
+    // 串会话：会话 A 裁判返回时若 B 已发送，A 被判过期）
+    final isCurrentTurn = turn == _currentTrackerJudgeTurn(sessionId);
     if (isCurrentTurn) {
       // 当前轮：裁判 patch 在候选状态上叠加 → 更新会话变量 + 快照
       final (finalVars, needCommit) = _applyJudgePatch(
@@ -2505,7 +2549,8 @@ class ChatService {
         consequence: judgeConsequence,
       );
       debugPrint(
-        '[TRACKER_JUDGE] 后台裁判过期丢弃（turn=$turn 当前=$_trackerJudgeTurn）'
+        '[TRACKER_JUDGE] 后台裁判过期丢弃（turn=$turn '
+        '当前=${_currentTrackerJudgeTurn(sessionId)}）'
         '：仅更新旧消息快照',
       );
     }
