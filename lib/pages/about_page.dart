@@ -104,6 +104,13 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.74',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】快捷指令即时刷新：在快捷指令管理页新增/编辑/删除后，聊天页输入框的快捷指令栏**立即**更新（之前只在打开聊天页时加载一次，新指令要等下次进页面才显示）——QuickCommandService 改为 ChangeNotifier，add/update/delete 后通知；聊天页监听变化自动重载',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.73',
                   date: '2026-08-08',
                   changes: [
