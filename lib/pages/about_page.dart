@@ -104,6 +104,18 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.65',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】动态解读（narrative）完整修复——"值变了、点号还在、解释却空了"根因：① narrative key 未规范化（patch 会映射中文 label→key，narrative 不会——模型用"当前状态"作键时模板读不到）；② 裁判允许省略已变化字段的解读；③ v4 快照只存裁判本轮 partial narrative，不继承上一轮；④ 字符串新值不在 presentation.states 枚举时 gettitle/gettext 空白。',
+                    '【特别版】narrative 与 patch 共用同一 key 规范化（canonicalTrackerKey：真实 key > label > aliases）——模型输出中文 label/别名作 narrative 键也能正确显示',
+                    '【特别版】裁判 prompt 强制规则：patch.set/add 全部字段、主模型修改的全部候选字段、数值没变但含义明显改变的字段——凡是状态变化的字段禁止省略 narrative、禁止空字符串、只能使用字段 key',
+                    '【特别版】App 补齐 narrative（changedKeys + mergeNarrative）：未变化字段且裁判没新解读→继承上一轮完整解读；已变化字段有裁判解读→用新解读；已变化字段裁判漏写→不得继承旧描述，回退新阶段静态描述；连静态描述也没有→确定性兜底（"X已变为…，具体表现以本轮剧情为准"）——v4 快照保存合并后的完整解读，不再整包覆盖成 partial',
+                    '【特别版】渲染兜底：string 字段未匹配 presentation.states 时 gettitle/getnarrative 回退原始值（"压制中""乳贴脱落、衣物凌乱"等模型自创状态也能显示，不再留下空分隔符）',
+                    '【特别版】string 字段新增 `allowCustomValues` 协议（默认 true 兼容旧卡）：声明 false 的有限状态字段只接受 presentation.states 枚举值——模型自创未声明状态被拒绝写入；指令注入 allowedValues 列表（自由组合字段如服装状态保持 true）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.64',
                   date: '2026-08-08',
                   changes: [
