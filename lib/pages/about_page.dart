@@ -104,6 +104,13 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.76',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】卡级协议兼容修复：字段顶层 semanticHints（与 updatePolicy 平级、旧卡写法）不再静默失效——TrackerFieldSchema.fromJson 把顶层 semanticHints 合并进 updatePolicy（内部已声明时以内部为准）；信号列表兼容斜杠/顿号/逗号分隔的字符串写法（"双修/做爱/内射"），之前只接受 JSON 数组、字符串被整组忽略——修复部分卡"状态规则写了但裁判/主模型完全看不到、状态不更新"的问题',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.75',
                   date: '2026-08-08',
                   changes: [
