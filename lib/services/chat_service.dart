@@ -55,9 +55,28 @@ class ChatService {
   /// v66：后台裁判轮次令牌——每次发送/重生成/继续递增；后台裁判返回
   /// 时若令牌已过期（用户已发起下一轮），只允许更新旧消息快照，
   /// 不允许覆盖当前会话状态（防旧裁判污染新剧情）。
+  /// v70：升级为**按会话串行队列**——下一轮发送前等待上一轮裁判结算
+  /// 完成（不再因"裁判返回太晚"丢弃整轮状态）；令牌保留作过期兜底。
   int _trackerJudgeTurn = 0;
 
   int get _nextTrackerJudgeTurn => ++_trackerJudgeTurn;
+
+  /// v70：每会话的后台裁判任务队列——开始新一轮前 await 上一轮结算，
+  /// 保证"正文先显示、状态稍后更新，但用户下次发送前上一轮状态必须
+  /// 结算完成"（不丢状态、不覆盖）。
+  final Map<String, Future<void>> _pendingTrackerJudges = {};
+
+  /// v70：等待该会话上一轮后台裁判结算完成（无则立即返回）。
+  Future<void> _awaitPendingTrackerJudge(String sessionId) async {
+    final pending = _pendingTrackerJudges[sessionId];
+    if (pending != null) {
+      try {
+        await pending;
+      } catch (_) {
+        // 裁判异常不影响新一轮
+      }
+    }
+  }
 
   /// 特别版：强制思维链的最大自动重试次数（防止模型始终不合规时无限烧 token；
   /// 超过后抛出带原因的异常，用户可点击发送重试）。
@@ -134,6 +153,8 @@ class ChatService {
 
     // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）——从正式会话
     // id 读取，避免草稿/正式 id 不一致导致变量表错位。
+    // v70：会话串行——新一轮开始前等待上一轮后台裁判结算完成
+    await _awaitPendingTrackerJudge(session.id);
     var localVariables = await ChatDatabaseService.instance
         .getSessionVariables(activeSession.id);
 
@@ -290,6 +311,11 @@ class ChatService {
             chatMessages,
             localVariables,
           ).$2,
+          // v70：快速模式=主模型唯一写入者（输出 <TRACKER_UPDATE> 协议）；
+          // 后台/严格=主模型只输出正文（状态由裁判决定）
+          includeOutputProtocol:
+              appSettingsNotifier.value.trackerUpdateMode ==
+                  TrackerUpdateMode.quick,
         ),
       );
 
@@ -509,6 +535,8 @@ class ChatService {
         : await persistSession();
 
     // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
+    // v70：会话串行——新一轮开始前等待上一轮后台裁判结算完成
+    await _awaitPendingTrackerJudge(session.id);
     final localVariables = await ChatDatabaseService.instance
         .getSessionVariables(activeSession.id);
 
@@ -563,6 +591,11 @@ class ChatService {
             chatMessages,
             localVariables,
           ).$2,
+          // v70：快速模式=主模型唯一写入者（输出 <TRACKER_UPDATE> 协议）；
+          // 后台/严格=主模型只输出正文（状态由裁判决定）
+          includeOutputProtocol:
+              appSettingsNotifier.value.trackerUpdateMode ==
+                  TrackerUpdateMode.quick,
         ),
       );
 
@@ -746,6 +779,8 @@ class ChatService {
 
     // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
     // var：v51 分支回滚后会重新读取恢复后的变量表
+    // v70：会话串行——新一轮开始前等待上一轮后台裁判结算完成
+    await _awaitPendingTrackerJudge(session.id);
     var localVariables = await ChatDatabaseService.instance
         .getSessionVariables(session.id);
 
@@ -822,6 +857,10 @@ class ChatService {
             historyBeforeUserMessage,
             localVariables,
           ).$2,
+          // v70：快速模式=主模型唯一写入者；后台/严格=只输出正文
+          includeOutputProtocol:
+              appSettingsNotifier.value.trackerUpdateMode ==
+                  TrackerUpdateMode.quick,
         ),
       );
 
@@ -1038,6 +1077,8 @@ class ChatService {
 
     // 特别版：会话变量（ST {{getvar}} 跨轮持久化加载）
     // var：v55 分支基线恢复后会重新读取恢复后的变量表
+    // v70：会话串行——新一轮开始前等待上一轮后台裁判结算完成
+    await _awaitPendingTrackerJudge(session.id);
     var localVariables = await ChatDatabaseService.instance
         .getSessionVariables(session.id);
 
@@ -1105,6 +1146,10 @@ class ChatService {
         chatMessages,
         localVariables,
       ).$2,
+      // v70：快速模式=主模型唯一写入者；后台/严格=只输出正文
+      includeOutputProtocol:
+          appSettingsNotifier.value.trackerUpdateMode ==
+              TrackerUpdateMode.quick,
     );
     if (trackerState != null && trackerState.trim().isNotEmpty) {
       final systemIdx = requestMessages.lastIndexWhere(
@@ -1371,6 +1416,10 @@ class ChatService {
   }) async {
     final calls = ChatVariableService.parseSetVarCalls(text);
     final config = TrackerConfig.fromCardJson(cardJson);
+    // v70：提取 <TRACKER_UPDATE> 标记块——正文在标记之前正常输出
+    // （不再把长篇剧情塞进 JSON reply），标记内是短状态协议
+    final (markerJson, markerDisplayText) =
+        TrackerRuntime.extractTrackerUpdateBlock(text);
     var patch = TrackerRuntime.extractPatch(text);
     // v50：字段名规范化——模型可能输出中文 label（"烙印值"）而非真实
     // key（yw_brand），映射回 key；完全未知字段丢弃（避免被 reducer
@@ -1409,6 +1458,11 @@ class ChatService {
         replyExtracted != null && replyExtracted.displayText.trim().isNotEmpty
             ? replyExtracted.displayText
             : rawExtracted.displayText;
+    // v70：<TRACKER_UPDATE> 标记前的正文优先（新协议——正文在标记外，
+    // 不经过 JSON 转义，解析成功率更高）
+    if (markerDisplayText.trim().isNotEmpty) {
+      displayText = markerDisplayText;
+    }
 
     // extract 是破坏性拆解器。若误判导致正文为空，遍历候选源
     // （协议 reply 优先、其次原文），跳过纯面板后用恢复函数找回正文；
@@ -1895,6 +1949,11 @@ class ChatService {
     Map<String, String> narrative = const {},
     /// v67：上一轮 consequence（下一轮剧情影响指令）。
     Map<String, String> consequence = const {},
+    /// v70：是否要求主模型输出状态协议——快速模式 true（主模型是唯一
+    /// 状态写入者，末尾 <TRACKER_UPDATE> 标记块）；后台/严格模式 false
+    /// （主模型只输出正文，状态由独立裁判决定——单一写入者，避免主
+    /// 模型 patch 与裁判 patch 相互覆盖/重复增加）。
+    bool includeOutputProtocol = false,
   }) {
     final config = TrackerConfig.fromCardJson(cardJson);
     if (!config.isEnabled) {
@@ -1947,9 +2006,14 @@ class ChatService {
     if (consequenceLines.isNotEmpty) {
       parts.add('[状态对下一轮剧情的约束]\n${consequenceLines.join('\n')}');
     }
-    parts
-      ..add(TrackerRuntime.kTrackerStoryInfluenceSuffix)
-      ..add(TrackerRuntime.kTrackerProtocolSuffix);
+    parts.add(TrackerRuntime.kTrackerStoryInfluenceSuffix);
+    // v70：按模式选择输出协议——快速=内联 <TRACKER_UPDATE> 协议
+    // （主模型唯一写入者）；后台/严格=只输出正文（裁判决定状态）
+    parts.add(
+      includeOutputProtocol
+          ? TrackerRuntime.kInlineTrackerProtocolSuffix
+          : TrackerRuntime.kStoryOnlySuffix,
+    );
     return parts.join('\n\n');
   }
 
@@ -2170,6 +2234,10 @@ class ChatService {
         'string 字段变化写入 set（例如 "set":{"字段key":"新状态"}）。\n'
         'narrative 是"当前状态为什么形成"的解读；consequence 是"该状态'
         '下一轮应如何影响角色行为"（持续状态的保持要求/反转条件）。\n'
+        '【v70 可选最终状态】也可以输出 "state" 字段直接给出本轮结束后'
+        '全部字段的最终值（{"state":{"字段key":最终值}}）——App 检测到 '
+        'state 时按最终值一次性保存（不再叠加）；未输出 state 时仍用 '
+        'patch 增量。\n'
         '没有实质变化时输出 {"patch":{"set":{},"add":{}}}，可只带 '
         'narrative/consequence。）\n'
         '【v65 强制规则】narrative 必须包含以下字段：\n'
@@ -2225,7 +2293,25 @@ class ChatService {
           );
           continue; // 截断 → 第二次重试
         }
-        final patch = TrackerRuntime.extractPatch(completion.text);
+        var patch = TrackerRuntime.extractPatch(completion.text);
+        // v70：裁判可选输出最终状态 "state" 字段——检测到则按最终值
+        // 一次性 set（不再增量叠加，避免"主+裁判重复增加"）
+        final finalState = TrackerRuntime.extractFinalState(
+          completion.text,
+          trackerConfig,
+        );
+        if (finalState.isNotEmpty) {
+          patch = StatePatch(
+            setValues: finalState,
+            addValues: patch.addValues,
+            reply: patch.reply,
+            protocolDetected: true,
+          );
+          debugPrint(
+            '[TRACKER_JUDGE] 裁判输出最终状态 state=$finalState '
+            '（按 set 一次性保存）',
+          );
+        }
         // v65：narrative key 规范化——模型可能用中文 label/别名作键，
         // 统一映射回真实 key（patch 规范化与 narrative 规范化同一映射）
         final narrative = TrackerRuntime.canonicalizeNarrative(
@@ -2305,11 +2391,50 @@ class ChatService {
   /// v66：后台状态裁判——正文已保存并显示后异步补算状态与解读。
   ///
   /// 流程：正文先显示（用户不等第二次请求）→ 后台调用裁判 → 完成后
-  /// 更新该消息的 v4 快照（state + narrative 合并）与当前会话变量。
-  /// 轮次令牌：[turn] 与当前 `_trackerJudgeTurn` 不一致（用户已发起
-  /// 下一轮）时，裁判结果**只更新旧消息快照**、不覆盖当前会话状态
-  /// （防旧裁判污染新剧情）。
+  /// 更新该消息的 v4/v5 快照（state + narrative/consequence 合并）与
+  /// 当前会话变量。
+  /// v70：**按会话串行**——任务注册进 [_pendingTrackerJudges]，下一轮
+  /// 发送前 [_awaitPendingTrackerJudge] 等待结算完成（不再因裁判返回太
+  /// 晚丢弃整轮状态）；轮次令牌保留作过期兜底（极端情况下只更新旧
+  /// 消息快照）。
   Future<void> _runTrackerJudgeInBackground({
+    required int turn,
+    required ResolvedApiConfig config,
+    required Map<String, dynamic>? cardJson,
+    required String sessionId,
+    required String messageId,
+    required ProcessedAssistantOutput processed,
+    required Map<String, String> localVariables,
+    required Set<String> protectedKeys,
+    required List<ChatMessage> history,
+    required String userText,
+    required String assistantText,
+  }) async {
+    // v70：整个裁判任务注册进会话队列——下一轮发送前会被等待
+    final task = _runTrackerJudgeTask(
+      turn: turn,
+      config: config,
+      cardJson: cardJson,
+      sessionId: sessionId,
+      messageId: messageId,
+      processed: processed,
+      localVariables: localVariables,
+      protectedKeys: protectedKeys,
+      history: history,
+      userText: userText,
+      assistantText: assistantText,
+    );
+    _pendingTrackerJudges[sessionId] = task;
+    await task;
+    // 队列清理：仅当仍是本任务时移除（避免误删新一轮任务）
+    if (identical(_pendingTrackerJudges[sessionId], task)) {
+      _pendingTrackerJudges.remove(sessionId);
+    }
+  }
+
+  /// v70：后台裁判任务本体（被 [ _runTrackerJudgeInBackground] 包装进
+  /// 会话队列）。
+  Future<void> _runTrackerJudgeTask({
     required int turn,
     required ResolvedApiConfig config,
     required Map<String, dynamic>? cardJson,
