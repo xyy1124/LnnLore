@@ -55,6 +55,9 @@ class AppSettingsService {
   /// 特别版：角色卡正则脚本总开关。
   static const String _keyRegexScriptsEnabled = 'app_regex_scripts_enabled';
 
+  /// v68：状态更新模式（quick/background/strict，持久化为枚举 index）。
+  static const String _keyTrackerUpdateMode = 'app_tracker_update_mode';
+
   /// 加载应用设置
   Future<AppSettings> load() async {
     final storage = StorageService.instance;
@@ -77,6 +80,12 @@ class AppSettingsService {
       DeepSeekThinkingMode.max,
     );
     final regexScriptsEnabled = storage.getBool(_keyRegexScriptsEnabled);
+    // v68：状态更新模式（重启后保持用户选择）
+    final trackerUpdateMode = _enumValueOrDefault(
+      TrackerUpdateMode.values,
+      storage.getInt(_keyTrackerUpdateMode),
+      TrackerUpdateMode.quick,
+    );
     final themePreset = _enumValueOrDefault(
       AppThemePreset.values,
       themePresetIndex,
@@ -103,6 +112,7 @@ class AppSettingsService {
       enableThinkingChainGuard: enableThinkingChainGuard ?? true,
       deepSeekThinkingMode: deepSeekThinkingMode,
       regexScriptsEnabled: regexScriptsEnabled ?? true,
+      trackerUpdateMode: trackerUpdateMode,
     );
   }
 
@@ -135,6 +145,11 @@ class AppSettingsService {
       storage.setBool(
         _keyRegexScriptsEnabled,
         settings.regexScriptsEnabled,
+      ),
+      // v68：状态更新模式持久化（重启后保持）
+      storage.setInt(
+        _keyTrackerUpdateMode,
+        settings.trackerUpdateMode.index,
       ),
     ]);
 
