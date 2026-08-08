@@ -337,6 +337,15 @@ class ChatService {
           updateMode == TrackerUpdateMode.strict
               ? (judgeResult?.$3 ?? processed.consequence)
               : processed.consequence;
+      // v69：诊断日志——快速模式看不到更新时，一行确认是哪层失败
+      debugPrint(
+        '[TRACKER_MODE] mode=$updateMode '
+        'mainProtocol=${processed.patch.protocolDetected} '
+        'mainPatch=${processed.patch} '
+        'mainNarrative=${processed.narrative.keys} '
+        'panelDetected=${processed.specialStatusHtml != null} '
+        'judgeCalled=${judgeResult != null}',
+      );
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: activeSession.id,
@@ -592,6 +601,15 @@ class ChatService {
           updateMode == TrackerUpdateMode.strict
               ? (judgeResult?.$3 ?? processed.consequence)
               : processed.consequence;
+      // v69：诊断日志——快速模式看不到更新时，一行确认是哪层失败
+      debugPrint(
+        '[TRACKER_MODE] mode=$updateMode '
+        'mainProtocol=${processed.patch.protocolDetected} '
+        'mainPatch=${processed.patch} '
+        'mainNarrative=${processed.narrative.keys} '
+        'panelDetected=${processed.specialStatusHtml != null} '
+        'judgeCalled=${judgeResult != null}',
+      );
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: activeSession.id,
@@ -844,6 +862,15 @@ class ChatService {
           updateMode == TrackerUpdateMode.strict
               ? (judgeResult?.$3 ?? processed.consequence)
               : processed.consequence;
+      // v69：诊断日志——快速模式看不到更新时，一行确认是哪层失败
+      debugPrint(
+        '[TRACKER_MODE] mode=$updateMode '
+        'mainProtocol=${processed.patch.protocolDetected} '
+        'mainPatch=${processed.patch} '
+        'mainNarrative=${processed.narrative.keys} '
+        'panelDetected=${processed.specialStatusHtml != null} '
+        'judgeCalled=${judgeResult != null}',
+      );
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: session.id,
@@ -1141,6 +1168,15 @@ class ChatService {
           updateMode == TrackerUpdateMode.strict
               ? (judgeResult?.$3 ?? processed.consequence)
               : processed.consequence;
+      // v69：诊断日志——快速模式看不到更新时，一行确认是哪层失败
+      debugPrint(
+        '[TRACKER_MODE] mode=$updateMode '
+        'mainProtocol=${processed.patch.protocolDetected} '
+        'mainPatch=${processed.patch} '
+        'mainNarrative=${processed.narrative.keys} '
+        'panelDetected=${processed.specialStatusHtml != null} '
+        'judgeCalled=${judgeResult != null}',
+      );
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
         sessionId: session.id,
@@ -1397,6 +1433,76 @@ class ChatService {
         if (recovered.trim().isNotEmpty) {
           displayText = recovered.trim();
           break;
+        }
+      }
+    }
+
+    // v69：剥离正文末尾的纯文本状态栏——模型可能输出
+    // "状态栏：\n堕落进度：27/100\n当前状态：压制中"（无 HTML 变体，
+    // 显示层清洗器不识别）。识别规则：末尾、≥2 行命中 tracker label、
+    // 每行含冒号。识别到的 label→值回写变量（兼容状态来源）。
+    if (config.isEnabled) {
+      final plainPanelValues = <String, String>{};
+      displayText = TrackerRuntime.stripTrailingPlainTrackerPanel(
+        displayText,
+        config,
+        plainPanelValues: plainPanelValues,
+      );
+      if (plainPanelValues.isNotEmpty) {
+        debugPrint('[TRACKER_RESPONSE] 纯文本状态栏回写: $plainPanelValues');
+        // 解析出的 label → 真实 key，走 reducer（canonicalize + clamp）
+        final panelSet = StatePatch(setValues: {
+          for (final e in plainPanelValues.entries) e.key: e.value,
+        });
+        final (canonical, _) =
+            TrackerRuntime.canonicalizePatch(panelSet, config);
+        // 受保护字段（旁白已落地）不覆盖
+        final filtered = StatePatch(setValues: {
+          for (final e in canonical.setValues.entries)
+            if (!protectedStateKeys.contains(e.key)) e.key: e.value,
+        });
+        if (!filtered.isEmpty) {
+          // 只补模型 patch/setvar 未覆盖的字段——面板值通常反映模型
+          // 输出的时刻状态，可能比 patch 旧；模型已更新的字段以
+          // patch/setvar 为准（避免面板旧值覆盖新 patch）。
+          // setvar key 可能为中文 label，先 canonicalize 再对比
+          final (canonicalCalls, _) = config.isEnabled
+              ? TrackerRuntime.canonicalizePatch(
+                  StatePatch(setValues: {
+                    for (final (k, v) in calls) k: v,
+                  }),
+                  config,
+                )
+              : (
+                  StatePatch(setValues: {
+                    for (final (k, v) in calls) k: v,
+                  }),
+                  const <String>[],
+                );
+          final alreadyCovered = <String>{
+            ...patch.setValues.keys,
+            ...patch.addValues.keys,
+            ...canonicalCalls.setValues.keys,
+          };
+          final toMerge = <String, String>{
+            for (final e in filtered.setValues.entries)
+              if (!alreadyCovered.contains(e.key)) e.key: '${e.value}',
+          };
+          if (toMerge.isNotEmpty) {
+            final existingPatch = patch;
+            patch = StatePatch(
+              setValues: {
+                ...existingPatch.setValues,
+                ...toMerge,
+              },
+              addValues: existingPatch.addValues,
+              reply: existingPatch.reply,
+              protocolDetected: existingPatch.protocolDetected,
+            );
+            debugPrint(
+              '[TRACKER_RESPONSE] 纯文本状态栏合并进 patch: $toMerge',
+            );
+          }
         }
       }
     }
