@@ -334,12 +334,19 @@ class ChatService {
       // 特别版：本条消息的规范状态快照按消息关联持久化——始终用该
       // 消息处理后的最终变量表 + 角色卡模板生成（JSON-only 回复也
       // 有快照；数值=消息时刻状态，不被后续轮次污染）
+      // v65：传入上一轮 narrative 与本轮开始前变量表——未变化字段
+      // 继承旧解读，已变化字段强制补齐解读（裁判漏写也不留空白）
       await _persistMessageStatusHtml(
         activeSession.id,
         assistantNode.id,
         character.cardJson,
         finalVars,
         narrative: judgeNarrative,
+        previousNarrative: _previousNarrativeFromHistory(
+          chatMessages,
+          localVariables,
+        ),
+        beforeVariables: localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -542,12 +549,18 @@ class ChatService {
       }
       // 特别版：本条消息的规范状态快照按消息关联持久化
       // （JSON-only 回复也有快照；数值=消息时刻最终状态）
+      // v65：完整 narrative 合并（未变化字段继承旧解读）
       await _persistMessageStatusHtml(
         activeSession.id,
         assistantNode.id,
         character.cardJson,
         groupFinalVars ?? localVariables,
         narrative: judgeNarrative,
+        previousNarrative: _previousNarrativeFromHistory(
+          chatMessages,
+          localVariables,
+        ),
+        beforeVariables: localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -739,12 +752,18 @@ class ChatService {
       }
       // 特别版：本条消息的规范状态快照按消息关联持久化
       // （JSON-only 回复也有快照；数值=消息时刻最终状态）
+      // v65：完整 narrative 合并（未变化字段继承旧解读）
       await _persistMessageStatusHtml(
         session.id,
         assistantNode.id,
         character.cardJson,
         branchFinalVars ?? localVariables,
         narrative: judgeNarrative,
+        previousNarrative: _previousNarrativeFromHistory(
+          historyBeforeUserMessage,
+          localVariables,
+        ),
+        beforeVariables: localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -985,12 +1004,18 @@ class ChatService {
       }
       // 特别版：本条消息的规范状态快照按消息关联持久化
       // （JSON-only 回复也有快照；数值=消息时刻最终状态）
+      // v65：完整 narrative 合并（未变化字段继承旧解读）
       await _persistMessageStatusHtml(
         session.id,
         assistantNode.id,
         character.cardJson,
         branchFinalVars ?? localVariables,
         narrative: judgeNarrative,
+        previousNarrative: _previousNarrativeFromHistory(
+          chatMessages,
+          localVariables,
+        ),
+        beforeVariables: localVariables,
       );
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
@@ -1384,6 +1409,11 @@ class ChatService {
     /// v63：本轮动态解读（状态裁判生成，按字段）——写入 v4 快照，
     /// 历史消息显示消息时刻的解读，不随后续轮次漂移。
     Map<String, String>? narrative,
+    /// v65：上一条角色消息的完整 narrative（继承用——未变化字段且
+    /// 裁判没有新解读时沿用上一轮解读，不整包覆盖成 partial）。
+    Map<String, String>? previousNarrative,
+    /// v65：本轮开始前的变量表（计算 changedKeys 用）。
+    Map<String, String>? beforeVariables,
   }) async {
     if (finalVariables == null) {
       return;
@@ -1408,15 +1438,63 @@ class ChatService {
     if (state.isEmpty) {
       return;
     }
+    // v65：合并完整 narrative——已变化字段必须有解读（裁判新解读优先、
+    // 漏写回退新阶段静态描述、连静态也没有则确定性兜底）；未变化字段
+    // 且裁判没有新解读时继承上一轮（不再整包覆盖成 partial）。
+    var completeNarrative = narrative;
+    if (narrative != null && beforeVariables != null) {
+      completeNarrative = TrackerRuntime.mergeNarrative(
+        previousNarrative: previousNarrative ?? const <String, String>{},
+        judgeNarrative: narrative,
+        beforeVariables: beforeVariables,
+        afterVariables: finalVariables,
+        config: config,
+      );
+    }
     await ChatDatabaseService.instance.upsertSessionVariables(sessionId, {
       messageStatusHtmlKey(messageId): jsonEncode(state),
       // v63：有动态解读时写 v4 快照（state + narrative），显示层优先 v4
-      if (narrative != null && narrative.isNotEmpty)
+      if (completeNarrative != null && completeNarrative.isNotEmpty)
         messageStatusSnapshotV4Key(messageId): jsonEncode({
           'state': state,
-          'narrative': narrative,
+          'narrative': completeNarrative,
         }),
     });
+  }
+
+  /// v65：从历史中取上一条角色消息的完整 narrative（v4 快照的
+  /// narrative 部分）——倒序找最近一条带 v4 快照的角色消息。
+  /// 无则返回空表（合并时全部依赖本轮解读/静态回退）。
+  Map<String, String> _previousNarrativeFromHistory(
+    List<ChatMessage> history,
+    Map<String, String> variables,
+  ) {
+    for (final msg in history.reversed) {
+      if (msg.isMe || msg.id == null) {
+        continue;
+      }
+      final raw = variables[messageStatusSnapshotV4Key(msg.id!)];
+      if (raw == null || raw.trim().isEmpty) {
+        continue;
+      }
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map && decoded['narrative'] is Map) {
+          final narrative = <String, String>{};
+          (decoded['narrative'] as Map).forEach((k, v) {
+            if (k is String && v is String && v.trim().isNotEmpty) {
+              narrative[k] = v.trim();
+            }
+          });
+          if (narrative.isNotEmpty) {
+            return narrative;
+          }
+        }
+      } catch (_) {
+        // 快照解析失败跳过
+      }
+    }
+    return const <String, String>{};
   }
 
   /// 特别版：生成 Tracker 状态自然文本（无卡声明时返回 null）。
@@ -1637,7 +1715,14 @@ class ChatService {
         '输出格式（只输出 JSON 代码块，不要任何解释文字）：\n'
         '```json\n{"patch":{"set":{},"add":{"字段key":数值变化}},'
         '"narrative":{"字段key":"本轮剧情下该字段的动态解读（一句话，结合本轮实际发生的事件；数值没变但剧情有实质进展也可以更新；没有新事件则省略该字段）"}}\n```\n'
-        '没有实质变化时输出 {"patch":{"set":{},"add":{}}}，可只带 narrative。）';
+        '没有实质变化时输出 {"patch":{"set":{},"add":{}}}，可只带 narrative。）\n'
+        '【v65 强制规则】narrative 必须包含以下字段：\n'
+        '1. patch.set 中的全部字段；\n'
+        '2. patch.add 中的全部字段；\n'
+        '3. 主模型已经修改的全部候选字段（对比上方 current 与本轮剧情）；\n'
+        '4. 数值没有变化但本轮剧情含义明显改变的字段。\n'
+        '凡是状态值发生变化的字段，禁止省略 narrative，禁止返回空字符串。\n'
+        'narrative 只能使用字段 key（禁止使用中文 label/别名）。';
     try {
       final preset = await _resolvePreset(null);
       final completion = await _createCompletionFromMessages(
@@ -1655,7 +1740,12 @@ class ChatService {
         return null;
       }
       final patch = TrackerRuntime.extractPatch(completion.text);
-      final narrative = TrackerRuntime.extractNarrative(completion.text);
+      // v65：narrative key 规范化——模型可能用中文 label/别名作键，
+      // 统一映射回真实 key（patch 规范化与 narrative 规范化同一映射）
+      final narrative = TrackerRuntime.canonicalizeNarrative(
+        TrackerRuntime.extractNarrative(completion.text),
+        trackerConfig,
+      );
       debugPrint(
         '[TRACKER_JUDGE] mode=$mode patch=$patch narrative=$narrative',
       );
