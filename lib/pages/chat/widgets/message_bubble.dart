@@ -537,8 +537,14 @@ class _MessageBubbleState extends State<MessageBubble> {
     if (widget.message.id != null) {
       final messageId = widget.message.id!;
       // v63：优先 v4 快照（state + narrative），回退 v3（仅 state）
-      final rawV4 = widget.sessionVariables[
-          ChatService.messageStatusSnapshotV4Key(messageId)];
+      // v67：v5 快照（state + narrative + consequence）优先，v4 回退——
+      // 解码器结构兼容（consequence 仅用于注入下一轮，显示层不需要）
+      final rawV5 = widget.sessionVariables[
+          ChatService.messageStatusSnapshotV5Key(messageId)];
+      final rawV4 = rawV5?.trim().isNotEmpty == true
+          ? rawV5
+          : widget.sessionVariables[
+              ChatService.messageStatusSnapshotV4Key(messageId)];
       if (rawV4 != null && rawV4.trim().isNotEmpty) {
         final parsedV4 = _decodeStatusSnapshotV4(rawV4);
         if (parsedV4 != null) {
