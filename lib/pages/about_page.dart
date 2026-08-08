@@ -104,6 +104,19 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.66',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】状态更新三档模式（通用设置 → 状态更新模式，默认快速）：',
+                    '· 快速（单次 API）：主模型回复同时输出 reply+patch+narrative，不再等待第二次裁判请求——正文立即显示，速度最快',
+                    '· 后台精确：正文先显示、状态裁判后台补算（轮次令牌防旧裁判覆盖新状态，状态栏稍后更新）',
+                    '· 严格：等待状态裁判完成后再显示正文（最高一致性，最慢）',
+                    '【特别版】状态裁判提速：专用精简预设（maxTokens 256、temperature 0、关闭思维链）+ 输入正文裁剪（用户消息 ≤1000 字、角色回复 ≤3000 字，命中语义提示关键词的段落优先保留——selectRelevantText）',
+                    '【特别版】裁判防重复叠加：主模型已通过 patch 更新的字段，裁判不得再次增加同一事件（避免 20→主+2→裁判+2→24）；裁判只补充主模型遗漏的变化',
+                    '【特别版】主模型协议扩展：narrative 纳入 {reply, patch, narrative} 输出要求（patch 修改的字段必须给解读、只能使用字段 key）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.65',
                   date: '2026-08-08',
                   changes: [
