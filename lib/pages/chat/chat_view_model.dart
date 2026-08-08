@@ -710,18 +710,24 @@ class ChatViewModel extends ChangeNotifier {
   /// 聊天数据库变化时按类型分流：messages/session 重载会话；
   /// variables 只刷新变量缓存（不重载消息树——后台状态裁判写入
   /// 快照时禁止触发跳底）；choices 只刷新该消息动作按钮。
+  /// v69：`_isSending` 保护只作用于 messages/session（重载消息树）；
+  /// variables/choices 只刷新轻量缓存，**不受发送中状态限制**——后台
+  /// 裁判在正文显示后（isSending 可能仍为 true）写库时也必须刷新，
+  /// 否则"状态已写库但 UI 显示旧值"（v68 遗漏：_isSending 检查在
+  /// switch 之前拦截了所有类型）。
   Future<void> onChatDatabaseChanged(ChatDatabaseChange change) async {
     if (_isDraftSession) {
       return;
     }
     final sessionId = _activeSession?.id ?? preferredSessionId;
-    if (sessionId == null || _isLoading || _isSwitchingSession || _isSending) {
+    if (sessionId == null || _isLoading || _isSwitchingSession) {
       return;
     }
     switch (change.kind) {
       case ChatDatabaseChangeKind.variables:
-        // v68：Tracker 变量/状态快照更新——只刷新变量缓存与状态面板，
-        // 不重载消息树（后台裁判写入发生在正文显示后，重载会跳底）
+        // v68/v69：Tracker 变量/状态快照更新——只刷新变量缓存与状态
+        // 面板，不重载消息树（后台裁判写入发生在正文显示后，重载会
+        // 跳底；发送中也要刷新，否则状态栏显示旧值）
         await _refreshSessionVariables(
           change.sessionId ?? sessionId,
         );
@@ -733,6 +739,11 @@ class ChatViewModel extends ChangeNotifier {
         return;
       case ChatDatabaseChangeKind.messages:
       case ChatDatabaseChangeKind.session:
+        if (_isSending) {
+          // v69：发送中不重载消息树（流式输出期间重载会打断/跳底）；
+          // 消息树由发送流程本身在完成后刷新
+          return;
+        }
         await _loadSession(preferredSessionId: sessionId);
         return;
     }
