@@ -671,6 +671,20 @@ class TrackerRuntime {
       '实际发生的事件；只能使用字段 key，禁止中文 label）。'
       '不要输出状态面板模板本身，面板由系统自动渲染。）';
 
+  /// v67：状态对剧情的约束指令（固定尾部）——让状态成为"下一轮剧情的
+  /// 驱动器"而非"剧情后的记录器"：模型不只读到数值标签，还被要求把
+  /// 当前状态作为已发生的剧情事实持续体现在正文中。
+  static const String kTrackerStoryInfluenceSuffix =
+      '[状态对剧情的约束]\n'
+      '- 当前状态是已经发生的剧情事实，不是仅供展示的备注。\n'
+      '- 正文必须通过动作、语言、身体反应、态度和环境结果自然体现相关状态。\n'
+      '- 不要机械复述数值或状态栏文字。\n'
+      '- 不得无视、重置或无理由逆转当前状态。\n'
+      '- 状态发生变化时，正文必须包含足以支持该变化的实际事件。\n'
+      '- 如果用户行为与当前状态冲突，应描写合理的抵抗、过渡或转变，'
+      '并输出对应 patch。\n'
+      '- 没有明确恢复事件时，服装、伤势、关系、位置等连续状态必须保持。';
+
   /// 面板文本统一清洗：去"状态栏未更新"前缀与 `{{match}}`。
   ///
   /// v49：`<summary>/<details>` **不再在此删除**——折叠标题（summary）与
@@ -1051,6 +1065,36 @@ class TrackerRuntime {
     return result;
   }
 
+  /// v67：从响应中提取 consequence（每字段"下一轮剧情影响"指令）——
+  /// 与 narrative 同构：narrative 解释"当前状态为什么形成"，consequence
+  /// 说明"该状态下一轮应如何影响角色行为"。状态裁判与主模型都可输出
+  /// `{"consequence":{"字段key":"下一轮剧情影响"}}`。
+  static Map<String, String> extractConsequence(String text) {
+    final result = <String, String>{};
+    for (final body in _allJsonBlocks(text)) {
+      try {
+        final decoded = jsonDecode(body);
+        if (decoded is! Map<String, dynamic>) {
+          continue;
+        }
+        final raw = decoded['consequence'];
+        if (raw is Map<String, dynamic>) {
+          raw.forEach((k, v) {
+            if (k is String && v is String && v.trim().isNotEmpty) {
+              result[k] = v.trim();
+            }
+          });
+        }
+        if (result.isNotEmpty) {
+          return result;
+        }
+      } catch (_) {
+        // 跳过解析失败的候选块
+      }
+    }
+    return result;
+  }
+
   /// v66：给状态裁判裁剪输入正文——裁判只需判断状态变化，不需要读整篇
   /// 长文。保留：开头、结尾、以及命中语义提示关键词（semanticHints /
   /// 字段 label / aliases / 程度词）的段落；总长不超过 [maxChars]。
@@ -1258,8 +1302,8 @@ class TrackerRuntime {
         '${fields.join('\n')}\n'
         '（v60 状态判断规则：当剧情明确表示某字段上升或下降时，'
         '即使没有给出具体数字，也必须按 qualitative 中最匹配的程度词'
-        '输出增量（下降用负数）；**不得因为用户没有提供精确数字而返回'
-        '空 patch**。mode=explicit 时只处理明确状态描述；'
+        '输出增量（下降用负数）；不得因为用户没有提供精确数字而返回'
+        '空 patch。mode=explicit 时只处理明确状态描述；'
         'mode=conservative 时只从非常明确的剧情结果推断小幅变化，'
         '普通对话/心理描写/重复描述不更新；mode=active 时可根据整体'
         '剧情主动调整。同一事件每轮最多更新一次，每轮增量不超过'
