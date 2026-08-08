@@ -104,6 +104,18 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.68',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】状态更新模式持久化修复：TrackerUpdateMode（快速/后台/严格）之前只在内存生效、重启回默认——AppSettingsService 现在读取与保存（重启保持用户选择）',
+                    '【特别版】删除旧 tracker_judge_enabled 总开关对后台/严格模式的隐藏拦截：是否调用裁判由状态更新模式决定，旧开关不能拥有第二次否决权（旧开关曾关闭的升级用户后台/严格模式恢复正常）',
+                    '【特别版】协议 JSON 示例修正：之前 {"add":{"字段key":数值变化}} 是非法 JSON（模型照抄导致 jsonDecode 失败、patch 提取不到）——改为始终合法的空协议示例（reply/patch/narrative/consequence 全空对象），并在代码块外说明 number 字段写 add、string 字段写 set',
+                    '【特别版】状态裁判输出上限动态分配：patch+narrative+consequence 三件套在字段多时 256 tokens 会被截断（isPartial 直接 null → 模式失效）——按字段数分配 (384+字段数*128) 钳到 512-1024；截断/未输出合法协议时自动重试一次（压缩输出），仍失败保留主模型结果',
+                    '【特别版】数据库通知分类（ChatDatabaseChange）：messages/session 才重载消息树；variables（Tracker 变量/状态快照）只刷新变量缓存与状态面板、不重载列表；choices 只刷新该消息动作按钮——后台状态裁判写入快照不再触发整树重载',
+                    '【特别版】跳底回归修复：后台裁判完成后的变量/快照写入走 variables 通知 → 只刷变量缓存（notifyListeners 不重建 ListView 结构），视口完全不动；不再把任何数据库写入都当消息树变化全量重载',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.67',
                   date: '2026-08-08',
                   changes: [
