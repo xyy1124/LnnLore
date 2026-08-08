@@ -149,6 +149,14 @@ number 字段可声明 `updatePolicy`——把"模糊程度词"量化成数值�
 
 支持的 HTML：`div/span/b/strong/br/p/table/tr/td/th/details/summary/img`；CSS：`color/background-color/border/border-radius/padding/margin/font-size/font-weight/text-align/width/height`。**不执行 JavaScript、不加载外部样式**（安全清洗：script/iframe/object/embed/事件属性/固定定位一律剥离）。
 
+### 4.1 角色卡格式硬性要求（v71）
+
+- **所有面板模板只能放在 `<!--panel-->...<!--/panel-->` 块内**——禁止在 `post_history_instructions` 其他位置放裸 `<details>` 面板或代码块占位面板（``` 包裹的"人物：/当前心理状态："）——它们不在 panel 块内、App 剥离不到，会进入模型上下文教模型模仿输出状态栏
+- **`post_history_instructions` 禁止包含任何"输出状态栏/面板"指令**（"每次回复末尾必须输出状态面板""输出 {{setvar::}} 变量更新行"等任意语序）——模型永远不输出状态栏，面板由 App 按最终状态自动渲染；卡只保留字段含义、状态变化规则、行为约束
+- **`tracker.template` 必须存在且覆盖全部 stateSchema 字段**（每字段有 `{{getvar::<key>}}`）——App 渲染状态面板优先用它，缺失时回退内置兜底样式
+- **string 字段可声明 `allowCustomValues`**：`false` 时模型只能写 `presentation.states` 中的枚举值（有限状态字段，如"当前状态"）；`true`/默认允许自由组合（如服装状态"乳贴脱落、衣物凌乱"）
+- **面板描述行**：number 字段用 `{{getnarrative::key}}`（裁判动态解读优先、无则回退静态）、string 字段用 `{{gettext::key}}`（states 枚举文本）——不得混用
+
 ### 5. 状态更新方式
 
 | 方式 | 示例 | 说明 |
