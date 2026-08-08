@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/service_locator.dart';
 import '../../data/api_configs.dart';
+import '../../data/app_settings.dart';
 import '../../data/mock_user_settings.dart';
 import '../../data/preset_selection.dart';
 import '../../models/chat_message.dart';
@@ -2160,6 +2161,10 @@ class ChatViewModel extends ChangeNotifier {
   /// v61：Tracker 状态指令估算——与 chat_service._trackerStateText
   /// 同源（formatTrackerInstruction + 固定协议尾部），避免上下文用量
   /// 漏算 Tracker 每轮常驻指令。返回 null 表示卡未启用 tracker。
+  /// v73：按状态更新模式选协议尾部——快速=kInlineTrackerProtocolSuffix
+  /// （<TRACKER_UPDATE> 标记协议），后台/严格=kStoryOnlySuffix（只输出
+  /// 正文，状态由裁判决定）——与实际发送的提示一致（之前固定用旧
+  /// kTrackerProtocolSuffix，估算与实发不符）。
   String? _estimateTrackerInstructionText() {
     final card = _activeCharacter?.cardJson;
     if (card == null) {
@@ -2191,7 +2196,12 @@ class ChatViewModel extends ChangeNotifier {
     if (text.isEmpty) {
       return null;
     }
-    return '$text\n\n${TrackerRuntime.kTrackerProtocolSuffix}';
+    // v73：估算与实际发送同源（模式决定协议尾部）
+    final protocolTail =
+        appSettingsNotifier.value.trackerUpdateMode == TrackerUpdateMode.quick
+            ? TrackerRuntime.kInlineTrackerProtocolSuffix
+            : TrackerRuntime.kStoryOnlySuffix;
+    return '$text\n\n$protocolTail';
   }
 
   Future<void> _refreshContextEstimate() async {
