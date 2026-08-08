@@ -104,6 +104,15 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.75',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】后台/严格模式状态写入彻底收口：setvar 解析与 HTML 面板回写受 allowInlineTrackerProtocol 控制——主模型偷偷输出 {{setvar::}}/面板时不再改状态（之前 patch 已受控但 setvar/面板回写仍无条件执行，可绕过裁判改状态/重复增加）；HTML 面板仍提取供显示，但不回写变量',
+                    '【特别版】数据库事件会话过滤：onChatDatabaseChanged 对非当前会话的事件直接忽略——后台裁判完成会话 A 时若当前在查看会话 B，不再用 A 的变量刷新 B 的状态栏（之前 variables 分支直接用 change.sessionId，切换会话后状态栏短暂显示另一张卡的数值）',
+                    '【特别版】删除分支同步清理全部快照：deleteMessageBranch 现在清理 v3/v4/v5/v2/v1 五种消息级状态快照（之前只清 v3，v4/v5 残留孤儿数据、频繁编辑/重生成后数据库越来越脏）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.74',
                   date: '2026-08-08',
                   changes: [
