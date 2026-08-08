@@ -144,6 +144,22 @@ enum ChatTextFontStyleMode {
   final String label;
 }
 
+/// v66：状态更新模式（状态裁判与主模型的配合方式）。
+/// - quick（默认）：单次 API——主模型回复同时输出 reply+patch+narrative，
+///   不额外调用状态裁判，速度最快；
+/// - background：正文先显示，状态裁判在后台补算（轮次令牌防旧裁判覆盖
+///   新状态），状态栏稍后更新；
+/// - strict：正文生成后等待状态裁判完成再显示（最高一致性，最慢）。
+enum TrackerUpdateMode {
+  quick('快速（单次 API）'),
+  background('后台精确（正文先显示）'),
+  strict('严格（等待裁判）');
+
+  const TrackerUpdateMode(this.label);
+
+  final String label;
+}
+
 @freezed
 abstract class ChatTextStyleConfig with _$ChatTextStyleConfig {
   const ChatTextStyleConfig._();
@@ -373,6 +389,8 @@ abstract class AppSettings with _$AppSettings {
     @Default(DeepSeekThinkingMode.max) DeepSeekThinkingMode deepSeekThinkingMode,
     /// 特别版：是否启用角色卡正则脚本（ST extensions.regex_scripts）
     @Default(true) bool regexScriptsEnabled,
+    /// v66：状态更新模式（快速单次 API / 后台精确 / 严格等待裁判）。
+    @Default(TrackerUpdateMode.quick) TrackerUpdateMode trackerUpdateMode,
   }) = _AppSettings;
 }
 
@@ -397,6 +415,7 @@ void updateAppSettings({
   bool? enableThinkingChainGuard,
   DeepSeekThinkingMode? deepSeekThinkingMode,
   bool? regexScriptsEnabled,
+  TrackerUpdateMode? trackerUpdateMode,
 }) {
   var newSettings = appSettingsNotifier.value;
   if (colorMode != null) {
@@ -435,6 +454,11 @@ void updateAppSettings({
   if (regexScriptsEnabled != null) {
     newSettings = newSettings.copyWith(
       regexScriptsEnabled: regexScriptsEnabled,
+    );
+  }
+  if (trackerUpdateMode != null) {
+    newSettings = newSettings.copyWith(
+      trackerUpdateMode: trackerUpdateMode,
     );
   }
   appSettingsNotifier.value = newSettings;
