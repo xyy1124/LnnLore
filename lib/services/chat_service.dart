@@ -52,6 +52,13 @@ class ChatService {
 
   static final ChatService instance = ChatService._();
 
+  /// v66：后台裁判轮次令牌——每次发送/重生成/继续递增；后台裁判返回
+  /// 时若令牌已过期（用户已发起下一轮），只允许更新旧消息快照，
+  /// 不允许覆盖当前会话状态（防旧裁判污染新剧情）。
+  int _trackerJudgeTurn = 0;
+
+  int get _nextTrackerJudgeTurn => ++_trackerJudgeTurn;
+
   /// 特别版：强制思维链的最大自动重试次数（防止模型始终不合规时无限烧 token；
   /// 超过后抛出带原因的异常，用户可点击发送重试）。
   static const int maxThinkingChainRetryAttempts = 10;
@@ -288,22 +295,34 @@ class ChatService {
         baseVariables: localVariables,
       );
       // v60/v63：状态裁判——剧情生成后独立判断状态变化并生成本轮
-      // 动态解读（narrative）
+      // 动态解读（narrative）。
+      // v66：三档模式——quick（默认）不调裁判直接用主模型 narrative；
+      // strict 等待裁判；background 正文先显示、裁判后台补算。
+      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
+      final turn = _nextTrackerJudgeTurn;
       (StatePatch, Map<String, String>)? judgeResult;
-      try {
-        judgeResult = await _judgeTrackerState(
-          config: config,
-          cardJson: character.cardJson,
-          variables: processed.finalVariables ?? localVariables,
-          userText: normalizedModelText ?? normalizedInput,
-          assistantText: processed.displayText,
-          cancellationToken: cancellationToken,
-        );
-      } on Object {
-        judgeResult = null;
+      if (updateMode == TrackerUpdateMode.strict) {
+        try {
+          judgeResult = await _judgeTrackerState(
+            config: config,
+            cardJson: character.cardJson,
+            variables: processed.finalVariables ?? localVariables,
+            userText: normalizedModelText ?? normalizedInput,
+            assistantText: processed.displayText,
+            cancellationToken: cancellationToken,
+            mainPatch: processed.patch,
+          );
+        } on Object {
+          judgeResult = null;
+        }
       }
       final judgePatch = judgeResult?.$1;
-      final judgeNarrative = judgeResult?.$2 ?? const <String, String>{};
+      // v66：quick/background 用主模型 narrative；strict 用裁判 narrative
+      // （裁判未返回时回退主模型 narrative）
+      final judgeNarrative =
+          updateMode == TrackerUpdateMode.strict
+              ? (judgeResult?.$2 ?? processed.narrative)
+              : processed.narrative;
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: activeSession.id,
@@ -348,6 +367,25 @@ class ChatService {
         ),
         beforeVariables: localVariables,
       );
+      // v66：后台模式——正文已保存显示，裁判在后台补算（轮次令牌
+      // 防旧裁判覆盖新状态）
+      if (updateMode == TrackerUpdateMode.background) {
+        unawaited(
+          _runTrackerJudgeInBackground(
+            turn: turn,
+            config: config,
+            cardJson: character.cardJson,
+            sessionId: activeSession.id,
+            messageId: assistantNode.id,
+            processed: processed,
+            localVariables: localVariables,
+            protectedKeys: narrationChanges.keys.toSet(),
+            history: chatMessages,
+            userText: normalizedModelText ?? normalizedInput,
+            assistantText: processed.displayText,
+          ),
+        );
+      }
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
       if (processed.hasChoices) {
@@ -501,21 +539,30 @@ class ChatService {
         cardJson: character.cardJson,
       );
       // v60/v63：状态裁判——群聊剧情后独立判断状态变化并生成解读
+      // v66：三档模式（quick 不调裁判/background 后台/strict 等待）
+      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
+      final turn = _nextTrackerJudgeTurn;
       (StatePatch, Map<String, String>)? judgeResult;
-      try {
-        judgeResult = await _judgeTrackerState(
-          config: config,
-          cardJson: character.cardJson,
-          variables: processed.finalVariables ?? localVariables,
-          userText: '',
-          assistantText: processed.displayText,
-          cancellationToken: cancellationToken,
-        );
-      } on Object {
-        judgeResult = null;
+      if (updateMode == TrackerUpdateMode.strict) {
+        try {
+          judgeResult = await _judgeTrackerState(
+            config: config,
+            cardJson: character.cardJson,
+            variables: processed.finalVariables ?? localVariables,
+            userText: '',
+            assistantText: processed.displayText,
+            cancellationToken: cancellationToken,
+            mainPatch: processed.patch,
+          );
+        } on Object {
+          judgeResult = null;
+        }
       }
       final judgePatch = judgeResult?.$1;
-      final judgeNarrative = judgeResult?.$2 ?? const <String, String>{};
+      final judgeNarrative =
+          updateMode == TrackerUpdateMode.strict
+              ? (judgeResult?.$2 ?? processed.narrative)
+              : processed.narrative;
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: activeSession.id,
@@ -562,6 +609,24 @@ class ChatService {
         ),
         beforeVariables: localVariables,
       );
+      // v66：后台模式——裁判后台补算（令牌防旧裁判覆盖新状态）
+      if (updateMode == TrackerUpdateMode.background) {
+        unawaited(
+          _runTrackerJudgeInBackground(
+            turn: turn,
+            config: config,
+            cardJson: character.cardJson,
+            sessionId: activeSession.id,
+            messageId: assistantNode.id,
+            processed: processed,
+            localVariables: localVariables,
+            protectedKeys: const {},
+            history: chatMessages,
+            userText: '',
+            assistantText: processed.displayText,
+          ),
+        );
+      }
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
       if (processed.hasChoices) {
@@ -711,21 +776,30 @@ class ChatService {
         protectedStateKeys: regenerateProtectedKeys,
       );
       // v60/v63：状态裁判——重生成剧情后独立判断状态变化并生成解读
+      // v66：三档模式（quick 不调裁判/background 后台/strict 等待）
+      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
+      final turn = _nextTrackerJudgeTurn;
       (StatePatch, Map<String, String>)? judgeResult;
-      try {
-        judgeResult = await _judgeTrackerState(
-          config: config,
-          cardJson: character.cardJson,
-          variables: processed.finalVariables ?? localVariables,
-          userText: userTextForModel,
-          assistantText: processed.displayText,
-          cancellationToken: cancellationToken,
-        );
-      } on Object {
-        judgeResult = null;
+      if (updateMode == TrackerUpdateMode.strict) {
+        try {
+          judgeResult = await _judgeTrackerState(
+            config: config,
+            cardJson: character.cardJson,
+            variables: processed.finalVariables ?? localVariables,
+            userText: userTextForModel,
+            assistantText: processed.displayText,
+            cancellationToken: cancellationToken,
+            mainPatch: processed.patch,
+          );
+        } on Object {
+          judgeResult = null;
+        }
       }
       final judgePatch = judgeResult?.$1;
-      final judgeNarrative = judgeResult?.$2 ?? const <String, String>{};
+      final judgeNarrative =
+          updateMode == TrackerUpdateMode.strict
+              ? (judgeResult?.$2 ?? processed.narrative)
+              : processed.narrative;
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
             sessionId: session.id,
@@ -765,6 +839,24 @@ class ChatService {
         ),
         beforeVariables: localVariables,
       );
+      // v66：后台模式——裁判后台补算（令牌防旧裁判覆盖新状态）
+      if (updateMode == TrackerUpdateMode.background) {
+        unawaited(
+          _runTrackerJudgeInBackground(
+            turn: turn,
+            config: config,
+            cardJson: character.cardJson,
+            sessionId: session.id,
+            messageId: assistantNode.id,
+            processed: processed,
+            localVariables: localVariables,
+            protectedKeys: regenerateProtectedKeys,
+            history: historyBeforeUserMessage,
+            userText: userTextForModel,
+            assistantText: processed.displayText,
+          ),
+        );
+      }
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
       if (processed.hasChoices) {
@@ -963,21 +1055,30 @@ class ChatService {
         cardJson: character.cardJson,
       );
       // v60/v63：状态裁判——继续推进剧情后独立判断状态变化并生成解读
+      // v66：三档模式（quick 不调裁判/background 后台/strict 等待）
+      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
+      final turn = _nextTrackerJudgeTurn;
       (StatePatch, Map<String, String>)? judgeResult;
-      try {
-        judgeResult = await _judgeTrackerState(
-          config: config,
-          cardJson: character.cardJson,
-          variables: processed.finalVariables ?? localVariables,
-          userText: '',
-          assistantText: processed.displayText,
-          cancellationToken: cancellationToken,
-        );
-      } on Object {
-        judgeResult = null;
+      if (updateMode == TrackerUpdateMode.strict) {
+        try {
+          judgeResult = await _judgeTrackerState(
+            config: config,
+            cardJson: character.cardJson,
+            variables: processed.finalVariables ?? localVariables,
+            userText: '',
+            assistantText: processed.displayText,
+            cancellationToken: cancellationToken,
+            mainPatch: processed.patch,
+          );
+        } on Object {
+          judgeResult = null;
+        }
       }
       final judgePatch = judgeResult?.$1;
-      final judgeNarrative = judgeResult?.$2 ?? const <String, String>{};
+      final judgeNarrative =
+          updateMode == TrackerUpdateMode.strict
+              ? (judgeResult?.$2 ?? processed.narrative)
+              : processed.narrative;
       final assistantNode = await ChatDatabaseService.instance
           .appendAssistantMessage(
         sessionId: session.id,
@@ -1017,6 +1118,24 @@ class ChatService {
         ),
         beforeVariables: localVariables,
       );
+      // v66：后台模式——裁判后台补算（令牌防旧裁判覆盖新状态）
+      if (updateMode == TrackerUpdateMode.background) {
+        unawaited(
+          _runTrackerJudgeInBackground(
+            turn: turn,
+            config: config,
+            cardJson: character.cardJson,
+            sessionId: session.id,
+            messageId: assistantNode.id,
+            processed: processed,
+            localVariables: localVariables,
+            protectedKeys: const {},
+            history: chatMessages,
+            userText: '',
+            assistantText: processed.displayText,
+          ),
+        );
+      }
 
       // 特别版：消息动作按钮（模型 choices）挂到该消息下
       if (processed.hasChoices) {
@@ -1359,6 +1478,12 @@ class ChatService {
         // 本轮处理后的最终变量表（含 setvar/patch 应用后的状态），
         // 供调用方生成该消息的规范状态快照（快照值=消息时最终状态）。
         finalVariables: variables,
+        // v66：主模型 narrative——快速模式直接使用（单次 API），
+        // 后台/严格模式作为裁判未返回时的兜底
+        narrative: TrackerRuntime.canonicalizeNarrative(
+          TrackerRuntime.extractNarrative(text),
+          config,
+        ),
       );
     }
     return ProcessedAssistantOutput(
@@ -1366,6 +1491,11 @@ class ChatService {
       patch: patch,
       choices: choices,
       specialStatusHtml: specialStatusHtml,
+      // v66：主模型 narrative（无副作用路径也提取——正文可能带协议块）
+      narrative: TrackerRuntime.canonicalizeNarrative(
+        TrackerRuntime.extractNarrative(text),
+        config,
+      ),
     );
   }
 
@@ -1662,6 +1792,9 @@ class ChatService {
   /// 动态解读（narrative）。
   /// 返回 null 表示未启用 / 卡无 tracker / 请求失败（不影响主流程——
   /// 状态保持主模型 patch 结果）。
+  /// v66：[mainPatch] 为主模型本轮已输出的 patch——裁判不得重复叠加
+  /// 同一事件（主模型已更新字段裁判不得再加）；[userText]/[assistantText]
+  /// 会被裁剪（裁判只需判断状态变化，不需要读整篇长文）。
   Future<(StatePatch, Map<String, String>)?> _judgeTrackerState({
     required ResolvedApiConfig config,
     required Map<String, dynamic>? cardJson,
@@ -1669,6 +1802,7 @@ class ChatService {
     required String userText,
     required String assistantText,
     ChatCompletionCancelToken? cancellationToken,
+    StatePatch? mainPatch,
   }) async {
     if (!await isTrackerJudgeEnabled()) {
       return null;
@@ -1700,15 +1834,42 @@ class ChatService {
       'active' => '允许根据整体剧情主动调整状态',
       _ => '只从非常明确的剧情结果推断小幅变化；普通对话/心理描写/重复描述不更新',
     };
+    // v66：正文裁剪——裁判只需判断状态变化，不需要读整篇长文
+    // （用户消息最多 1000 字、角色回复最多 3000 字，命中语义关键词的
+    // 段落优先保留）
+    final trimmedUserText = TrackerRuntime.selectRelevantText(
+      userText,
+      config: trackerConfig,
+      maxChars: 1000,
+    );
+    final trimmedAssistantText = TrackerRuntime.selectRelevantText(
+      assistantText,
+      config: trackerConfig,
+      maxChars: 3000,
+    );
+    // v66：主模型已更新的字段——裁判不得重复叠加同一事件
+    final mainPatchKeys = <String>{
+      if (mainPatch != null) ...mainPatch.setValues.keys,
+      if (mainPatch != null) ...mainPatch.addValues.keys,
+    };
+    final mainPatchNote = mainPatchKeys.isEmpty
+        ? ''
+        : '主模型本轮已经通过 patch 更新了以下字段：'
+            '${mainPatchKeys.join('，')}。\n'
+            '这些字段的状态变化已经由主模型表达——裁判对它们'
+            '**不得再次增加**（避免同一事件叠加两次）；'
+            '若裁判认为主模型的更新方向/幅度不准确，可以对它们'
+            '使用 set 直接修正为最终值，或不再返回这些字段。\n';
     final prompt = '$stateText\n\n'
         '（你是状态裁判，只负责根据剧情判断状态变化并生成本轮解读。\n'
-        '本轮用户消息：\n$userText\n\n'
-        '本轮角色回复：\n$assistantText\n\n'
+        '本轮用户消息：\n$trimmedUserText\n\n'
+        '本轮角色回复：\n$trimmedAssistantText\n\n'
         '判断规则（mode=$mode）：$modeDesc。\n'
         '剧情明确表示某字段上升或下降时，即使没有具体数字，也必须按 '
         'qualitative 中最匹配的程度词输出增量（下降用负数）；'
         '每轮增量不超过 maxAutoDeltaPerTurn（未声明则不限制）；'
         '同一事件每轮最多更新一次，只有本轮新发生的事件才能触发变化。\n'
+        '$mainPatchNote'
         '语义提示（positive/negative/neutral）用于理解每个字段在剧情中的'
         '含义与通常影响方向——neutral 中列举的行为（普通闲聊/重复描写等）'
         '不得触发变化。\n'
@@ -1724,7 +1885,13 @@ class ChatService {
         '凡是状态值发生变化的字段，禁止省略 narrative，禁止返回空字符串。\n'
         'narrative 只能使用字段 key（禁止使用中文 label/别名）。';
     try {
-      final preset = await _resolvePreset(null);
+      // v66：裁判专用精简预设——maxTokens 256、temperature 0、关闭
+      // 思维链约束（裁判只需 JSON，不需要长篇回复或思考链）
+      final basePreset = await _resolvePreset(null);
+      final preset = basePreset.copyWith(
+        openaiMaxTokens: 256,
+        temperature: 0,
+      );
       final completion = await _createCompletionFromMessages(
         config,
         messages: [
@@ -1796,6 +1963,87 @@ class ChatService {
     );
     needCommit = true;
     return (finalVars, needCommit);
+  }
+
+  /// v66：后台状态裁判——正文已保存并显示后异步补算状态与解读。
+  ///
+  /// 流程：正文先显示（用户不等第二次请求）→ 后台调用裁判 → 完成后
+  /// 更新该消息的 v4 快照（state + narrative 合并）与当前会话变量。
+  /// 轮次令牌：[turn] 与当前 `_trackerJudgeTurn` 不一致（用户已发起
+  /// 下一轮）时，裁判结果**只更新旧消息快照**、不覆盖当前会话状态
+  /// （防旧裁判污染新剧情）。
+  Future<void> _runTrackerJudgeInBackground({
+    required int turn,
+    required ResolvedApiConfig config,
+    required Map<String, dynamic>? cardJson,
+    required String sessionId,
+    required String messageId,
+    required ProcessedAssistantOutput processed,
+    required Map<String, String> localVariables,
+    required Set<String> protectedKeys,
+    required List<ChatMessage> history,
+    required String userText,
+    required String assistantText,
+  }) async {
+    // 后台裁判失败/未启用不影响已显示的正文（状态保持主模型结果）
+    final judgeResult = await _judgeTrackerState(
+      config: config,
+      cardJson: cardJson,
+      variables: processed.finalVariables ?? localVariables,
+      userText: userText,
+      assistantText: assistantText,
+      mainPatch: processed.patch,
+    );
+    if (judgeResult == null) {
+      return;
+    }
+    final judgePatch = judgeResult.$1;
+    final judgeNarrative = judgeResult.$2;
+    final isCurrentTurn = turn == _trackerJudgeTurn;
+    if (isCurrentTurn) {
+      // 当前轮：裁判 patch 在候选状态上叠加 → 更新会话变量 + 快照
+      final (finalVars, needCommit) = _applyJudgePatch(
+        judgePatch: judgePatch,
+        processed: processed,
+        localVariables: localVariables,
+        cardJson: cardJson,
+        protectedKeys: protectedKeys,
+      );
+      if (needCommit) {
+        await ChatDatabaseService.instance.upsertSessionVariables(
+          sessionId,
+          finalVars,
+        );
+      }
+      await _persistMessageStatusHtml(
+        sessionId,
+        messageId,
+        cardJson,
+        finalVars,
+        narrative: judgeNarrative,
+        previousNarrative: _previousNarrativeFromHistory(history, localVariables),
+        beforeVariables: localVariables,
+      );
+      debugPrint(
+        '[TRACKER_JUDGE] 后台裁判完成（当前轮）：patch=$judgePatch '
+        'vars=$finalVars',
+      );
+    } else {
+      // 令牌过期（下一轮已开始）：只更新旧消息快照，不碰当前会话变量
+      await _persistMessageStatusHtml(
+        sessionId,
+        messageId,
+        cardJson,
+        processed.finalVariables ?? localVariables,
+        narrative: judgeNarrative,
+        previousNarrative: _previousNarrativeFromHistory(history, localVariables),
+        beforeVariables: localVariables,
+      );
+      debugPrint(
+        '[TRACKER_JUDGE] 后台裁判过期丢弃（turn=$turn 当前=$_trackerJudgeTurn）'
+        '：仅更新旧消息快照',
+      );
+    }
   }
 
   Future<Preset> _resolvePreset(String? presetId) async {
