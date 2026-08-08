@@ -62,8 +62,19 @@ class ChatViewModel extends ChangeNotifier {
     _presetChangeNotifier = getIt<PresetService>().changeNotifier;
     apiConfigsNotifier.addListener(onApiConfigsChanged);
     selectedApiModelIdNotifier.addListener(onApiConfigsChanged);
-    _chatDbChangeNotifier.addListener(onChatDatabaseChanged);
+    // v68：ValueNotifier 的 addListener 需要无参 VoidCallback——事件值
+    // 从 notifier.value 读取（onChatDatabaseChanged 内部取 change 参数）
+    _chatDbChangeNotifier.addListener(_onDbChangedBroadcast);
     _presetChangeNotifier.addListener(onPresetsChanged);
+  }
+
+  /// v68：ValueNotifier 无参回调适配——读取最新事件值分派给
+  /// [onChatDatabaseChanged]（带类型分流）。
+  void _onDbChangedBroadcast() {
+    final change = _chatDbChangeNotifier.value;
+    if (change != null) {
+      unawaited(onChatDatabaseChanged(change));
+    }
   }
 
   /// 来自 [ChatPage] 的初始会话偏好 ID。
@@ -90,7 +101,8 @@ class ChatViewModel extends ChangeNotifier {
   String? get effectiveDraftStatusHtml => _draftOpeningStatusHtml;
 
   /// 缓存构造时获取的 notifier，用于 dispose 时安全移除监听。
-  late final ValueNotifier<int> _chatDbChangeNotifier;
+  /// v68：带类型的数据变化事件（kind 分流用）。
+  late final ValueNotifier<ChatDatabaseChange?> _chatDbChangeNotifier;
   late final ValueNotifier<int> _presetChangeNotifier;
 
   /// 去空白/脚本：开场 HTML 直接来自角色卡（可含 ```html 包裹），
@@ -695,8 +707,10 @@ class ChatViewModel extends ChangeNotifier {
   /// 全局 API 配置或选中模型变化时刷新 API 状态。
   Future<void> onApiConfigsChanged() => _refreshSelectedApiStatus();
 
-  /// 聊天数据库变化时重新加载当前会话。
-  Future<void> onChatDatabaseChanged() async {
+  /// 聊天数据库变化时按类型分流：messages/session 重载会话；
+  /// variables 只刷新变量缓存（不重载消息树——后台状态裁判写入
+  /// 快照时禁止触发跳底）；choices 只刷新该消息动作按钮。
+  Future<void> onChatDatabaseChanged(ChatDatabaseChange change) async {
     if (_isDraftSession) {
       return;
     }
@@ -704,7 +718,24 @@ class ChatViewModel extends ChangeNotifier {
     if (sessionId == null || _isLoading || _isSwitchingSession || _isSending) {
       return;
     }
-    await _loadSession(preferredSessionId: sessionId);
+    switch (change.kind) {
+      case ChatDatabaseChangeKind.variables:
+        // v68：Tracker 变量/状态快照更新——只刷新变量缓存与状态面板，
+        // 不重载消息树（后台裁判写入发生在正文显示后，重载会跳底）
+        await _refreshSessionVariables(
+          change.sessionId ?? sessionId,
+        );
+        return;
+      case ChatDatabaseChangeKind.choices:
+        // v68：choices 更新——消息动作按钮由 FutureBuilder 按 messageId
+        // 加载，变量缓存刷新即可触发重建（无需重载会话）
+        await _refreshSessionVariables(sessionId);
+        return;
+      case ChatDatabaseChangeKind.messages:
+      case ChatDatabaseChangeKind.session:
+        await _loadSession(preferredSessionId: sessionId);
+        return;
+    }
   }
 
   /// 预设列表变化时重新加载预设摘要。
@@ -2260,7 +2291,7 @@ class ChatViewModel extends ChangeNotifier {
     _isDisposed = true;
     apiConfigsNotifier.removeListener(onApiConfigsChanged);
     selectedApiModelIdNotifier.removeListener(onApiConfigsChanged);
-    _chatDbChangeNotifier.removeListener(onChatDatabaseChanged);
+    _chatDbChangeNotifier.removeListener(_onDbChangedBroadcast);
     _presetChangeNotifier.removeListener(onPresetsChanged);
     _activeCompletionCancelToken?.cancel();
     super.dispose();
