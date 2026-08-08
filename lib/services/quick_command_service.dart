@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
+
 import '../models/quick_command.dart';
 import 'storage_service.dart';
 
@@ -8,7 +10,9 @@ import 'storage_service.dart';
 /// 负责快捷指令的持久化储存和管理。数据存储为单文件
 /// `quick_commands.json`（结构 `{version, commands[]}`），
 /// 模式与 UserSettingsService 一致。
-class QuickCommandService {
+/// v74：继承 [ChangeNotifier]——add/update/delete 后通知监听者
+/// （聊天页等缓存列表的地方及时重载，否则新指令要等下次进页面才显示）。
+class QuickCommandService extends ChangeNotifier {
   QuickCommandService._();
 
   static final QuickCommandService instance = QuickCommandService._();
@@ -125,6 +129,8 @@ class QuickCommandService {
     final commands = await loadAll();
     commands.add(command);
     await saveAll(commands);
+    // v74：通知监听者（聊天页快捷指令栏及时重载）
+    notifyListeners();
   }
 
   /// 更新快捷指令。
@@ -134,6 +140,8 @@ class QuickCommandService {
     if (index != -1) {
       commands[index] = command;
       await saveAll(commands);
+      // v74：通知监听者
+      notifyListeners();
     }
   }
 
@@ -142,6 +150,8 @@ class QuickCommandService {
     final commands = await loadAll();
     commands.removeWhere((c) => c.id == id);
     await saveAll(commands);
+    // v74：通知监听者
+    notifyListeners();
     return commands;
   }
 
