@@ -104,6 +104,15 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.64',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】消息长按菜单架构重构：从"每条消息一个 OverlayPortalController + 全局 owner + 下一帧延迟显示"改为 **showMenu() Navigator 路由**——旧方案的排队回调在菜单关闭后仍会执行（偶尔不弹/弹过一次后要等几秒才能再弹），且菜单附着在列表消息组件上、列表重建时 Overlay 状态竞争；现在菜单由 Navigator 管理，不随消息组件重建，菜单外点击由路由自带关闭，关闭后下一次长按立即可用',
+                    '【特别版】长按菜单防重入：`_openingActionMenu` 标志 + finally 释放——showMenu 弹出期间忽略同消息的重复长按请求，任何异常也不会卡死后续长按',
+                    '【特别版】保留输入框 TapRegion 组：点击菜单项（复制/编辑/删除）不收起输入框键盘',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.63',
                   date: '2026-08-08',
                   changes: [
