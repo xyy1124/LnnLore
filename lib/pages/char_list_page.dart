@@ -409,6 +409,9 @@ class _CharListPageState extends State<CharListPage> {
         characterName: summary.name,
         userName: userName,
       ),
+      // v71：传卡 JSON 剥离开场消息末尾的纯文本状态栏
+      // （first_mes 自带"场景：…\n好感：30/100"时正文不再残留）
+      cardJson: record.cardJson,
     );
     final openingMessages = opening.messages;
     final openingStatusHtml = opening.specialStatusHtml;
