@@ -27,6 +27,7 @@ import '../pages/chat_sidebar_page.dart';
 import '../pages/preset_edit_page.dart';
 import '../pages/user_settings_page.dart';
 import '../pages/world_book_edit_page.dart';
+import '../services/chat_database_service.dart';
 import '../services/preset_service.dart';
 import '../services/quick_command_service.dart';
 import '../services/world_book_service.dart';
@@ -713,7 +714,10 @@ class _ChatPageState extends State<ChatPage> {
     );
     if (!mounted) return;
     if (jumpedTo != null || _viewModel.activeSession?.id == session.id) {
-      await _viewModel.onChatDatabaseChanged();
+      // v68：记忆管理器可能新增消息/记忆——按 messages 变化重载会话
+      await _viewModel.onChatDatabaseChanged(
+        const ChatDatabaseChange(kind: ChatDatabaseChangeKind.messages),
+      );
     }
   }
 
