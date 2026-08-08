@@ -234,6 +234,7 @@ class TrackerFieldSchema {
     this.presentation,
     this.aliases = const [],
     this.updatePolicy,
+    this.allowCustomValues = true,
   });
 
   /// 'string' | 'number'
@@ -253,6 +254,11 @@ class TrackerFieldSchema {
 
   /// v60：自主更新策略（程度词量化规则）。
   final TrackerUpdatePolicy? updatePolicy;
+
+  /// v65：string 字段是否允许模型自创未声明状态值——false 时只允许
+  /// presentation.states 中的枚举值（有限状态字段），自由组合字段
+  /// （服装状态"乳贴脱落、衣物凌乱"）保持 true。默认 true（旧卡兼容）。
+  final bool allowCustomValues;
 
   bool get isNumber => type == 'number';
 
@@ -285,6 +291,8 @@ class TrackerFieldSchema {
       updatePolicy: rawPolicy == null
           ? null
           : TrackerUpdatePolicy.fromJson(rawPolicy),
+      allowCustomValues:
+          json['allowCustomValues'] is bool ? json['allowCustomValues'] as bool : true,
     );
   }
 }
