@@ -1444,7 +1444,12 @@ class ChatService {
     /// 决定，避免两个状态写入者重复增加/冲突）。
     bool allowInlineTrackerProtocol = true,
   }) async {
-    final calls = ChatVariableService.parseSetVarCalls(text);
+    // v75：setvar 受 allowInlineTrackerProtocol 控制——后台/严格模式
+    // 主模型偷偷输出 {{setvar::}} 时不得修改状态（之前无条件解析，
+    // 主模型可绕过裁判改状态/重复增加）
+    final calls = allowInlineTrackerProtocol
+        ? ChatVariableService.parseSetVarCalls(text)
+        : const <(String, String)>[];
     final config = TrackerConfig.fromCardJson(cardJson);
     // v70：提取 <TRACKER_UPDATE> 标记块——正文在标记之前正常输出
     // （不再把长篇剧情塞进 JSON reply），标记内是短状态协议
@@ -1696,7 +1701,9 @@ class ChatService {
         // v55：回写统一走 reducer（canonicalize + clamp）——之前直接
         // variables[e.key] = e.value，模型输出"烙印值：999/100"会把
         // 999 绕过 min/max 直接入库。
-        if (config.isEnabled) {
+        // v75：HTML 面板回写仅快速模式允许——后台/严格模式主模型
+        // 的面板值不得参与状态（状态由裁判决定），只保留 HTML 供显示
+        if (config.isEnabled && allowInlineTrackerProtocol) {
           final protectedKeys = <String>{
             for (final (k, _) in calls) k,
             ...patch.setValues.keys,
