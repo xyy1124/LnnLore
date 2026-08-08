@@ -724,14 +724,20 @@ class ChatViewModel extends ChangeNotifier {
     if (sessionId == null || _isLoading || _isSwitchingSession) {
       return;
     }
+    // v75：非当前会话的事件直接忽略——后台裁判完成会话 A 的写入时，
+    // 若当前在查看会话 B，刷新 B 的变量会把 A 的状态串进来
+    // （之前 variables 分支直接用 change.sessionId，切换会话后状态栏
+    // 短暂显示另一张卡的数值）
+    if (change.sessionId != null && change.sessionId != sessionId) {
+      return;
+    }
     switch (change.kind) {
       case ChatDatabaseChangeKind.variables:
         // v68/v69：Tracker 变量/状态快照更新——只刷新变量缓存与状态
         // 面板，不重载消息树（后台裁判写入发生在正文显示后，重载会
         // 跳底；发送中也要刷新，否则状态栏显示旧值）
-        await _refreshSessionVariables(
-          change.sessionId ?? sessionId,
-        );
+        // v75：只刷新当前活动会话（事件已过滤非当前会话）
+        await _refreshSessionVariables(sessionId);
         return;
       case ChatDatabaseChangeKind.choices:
         // v68：choices 更新——消息动作按钮由 FutureBuilder 按 messageId
