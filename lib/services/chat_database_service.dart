@@ -10,11 +10,39 @@ import '../models/chat_memory.dart';
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 
+/// v68：聊天数据库变化类型——ViewModel 按类型分流，避免"任何变化都
+/// 重载整个会话"（后台状态裁判写入变量/快照时重载消息树导致跳底）。
+enum ChatDatabaseChangeKind {
+  /// 消息树变化（新增/编辑/删除消息）——需要重载消息列表。
+  messages,
+  /// 会话元数据变化（标题/选中预设等）——需要重载会话。
+  session,
+  /// 会话变量/状态快照变化（Tracker 后台更新等）——只刷新变量缓存，
+  /// 不重载消息树（禁止触发跳底）。
+  variables,
+  /// 消息动作按钮（choices）变化——只刷新该消息的 choices。
+  choices,
+}
+
+/// v68：带类型的数据库变化事件。
+class ChatDatabaseChange {
+  const ChatDatabaseChange({
+    required this.kind,
+    this.sessionId,
+    this.messageId,
+  });
+
+  final ChatDatabaseChangeKind kind;
+  final String? sessionId;
+  final String? messageId;
+}
+
 class ChatDatabaseService {
   ChatDatabaseService._();
 
   static final ChatDatabaseService instance = ChatDatabaseService._();
-  final ValueNotifier<int> changeNotifier = ValueNotifier<int>(0);
+  final ValueNotifier<ChatDatabaseChange?> changeNotifier =
+      ValueNotifier<ChatDatabaseChange?>(null);
 
   static const int _dbVersion = 8;
   static const String _dbName = 'pocket_inn_chat.db';
@@ -759,7 +787,12 @@ class ChatDatabaseService {
         );
       }
     });
-    _notifyChanged();
+    // v68：变量变化只刷变量缓存，不重载消息树（后台状态裁判写入
+    // 时禁止触发跳底）
+    _notifyChanged(
+      kind: ChatDatabaseChangeKind.variables,
+      sessionId: sessionId,
+    );
   }
 
   /// v51：替换会话变量——先删除 [replaceKeys] 指定的旧值再写入 [variables]
@@ -791,7 +824,11 @@ class ChatDatabaseService {
         );
       }
     });
-    _notifyChanged();
+    // v68：变量变化只刷变量缓存，不重载消息树
+    _notifyChanged(
+      kind: ChatDatabaseChangeKind.variables,
+      sessionId: sessionId,
+    );
   }
 
   // ---- 消息动作按钮（模型 choices，v8）----
@@ -831,7 +868,11 @@ class ChatDatabaseService {
         );
       }
     });
-    _notifyChanged();
+    // v68：choices 变化只刷该消息按钮，不重载消息树
+    _notifyChanged(
+      kind: ChatDatabaseChangeKind.choices,
+      messageId: messageId,
+    );
   }
 
   /// 读取一条消息的 choices。
@@ -1243,12 +1284,26 @@ class ChatDatabaseService {
     _notifyChanged();
   }
 
-  void notifyDataChanged() {
-    changeNotifier.value++;
+  /// v68：带类型的数据变化通知——ViewModel 据此分流（messages/session
+  /// 重载消息树；variables 只刷变量缓存；choices 只刷该消息按钮）。
+  void notifyDataChanged({
+    ChatDatabaseChangeKind kind = ChatDatabaseChangeKind.messages,
+    String? sessionId,
+    String? messageId,
+  }) {
+    changeNotifier.value = ChatDatabaseChange(
+      kind: kind,
+      sessionId: sessionId,
+      messageId: messageId,
+    );
   }
 
-  void _notifyChanged() {
-    notifyDataChanged();
+  void _notifyChanged({
+    ChatDatabaseChangeKind kind = ChatDatabaseChangeKind.messages,
+    String? sessionId,
+    String? messageId,
+  }) {
+    notifyDataChanged(kind: kind, sessionId: sessionId, messageId: messageId);
   }
 
   Future<List<String>> _loadSessionWorldBookIds(String sessionId) async {
