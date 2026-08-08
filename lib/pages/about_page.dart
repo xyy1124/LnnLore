@@ -104,6 +104,14 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.71',
+                  date: '2026-08-08',
+                  changes: [
+                    '【特别版】注入剥离增强（11 张卡全兼容）：stripPanelTemplates 现在覆盖卡的所有写法——① "每一次回复的末尾都必须输出状态面板""随后必须输出 HTML 状态面板"等任意语序（输出类词+状态栏词+必须类词同行即剥）；② {{setvar::}} 变量更新指令行（App 模式模型不需要输出宏，ST 兼容由正则/QR 承担）；③ 裸 <details> 旧面板与代码块旧面板（不在 <!--panel--> 块内、含中文占位符，模型看到会模仿输出）；④ 【强制输出规则】孤儿标题与"按下文模板"等引用条款——模型不再收到任何"输出状态栏"指令',
+                    '【特别版】全部 11 张角色卡补齐 tracker.template：从各自 <!--panel--> 块提取（含 getvar 变量、卡主题色/emoji）——App 渲染状态面板优先用卡模板，不再回退内置兜底样式',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.70',
                   date: '2026-08-08',
                   changes: [
