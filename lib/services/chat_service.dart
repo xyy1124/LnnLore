@@ -1980,9 +1980,9 @@ class ChatService {
     ChatCompletionCancelToken? cancellationToken,
     StatePatch? mainPatch,
   }) async {
-    if (!await isTrackerJudgeEnabled()) {
-      return null;
-    }
+    // v68：不再检查旧 tracker_judge_enabled 总开关——是否调用裁判已由
+    // TrackerUpdateMode（quick/background/strict）决定，隐藏旧开关不能
+    // 拥有第二次否决权（旧开关曾关闭的升级用户，后台/严格模式会失效）。
     final trackerConfig = TrackerConfig.fromCardJson(cardJson);
     if (!trackerConfig.isEnabled) {
       return null;
@@ -2050,10 +2050,22 @@ class ChatService {
         '含义与通常影响方向——neutral 中列举的行为（普通闲聊/重复描写等）'
         '不得触发变化。\n'
         '输出格式（只输出 JSON 代码块，不要任何解释文字）：\n'
-        '```json\n{"patch":{"set":{},"add":{"字段key":数值变化}},'
-        '"narrative":{"字段key":"本轮剧情下该字段的动态解读（一句话，结合本轮实际发生的事件；数值没变但剧情有实质进展也可以更新；没有新事件则省略该字段）"},'
-        '"consequence":{"字段key":"该状态下一轮应如何影响角色行为（一句话；持续存在的状态如服装/伤势/关系/位置必须说明保持要求，除非剧情发生明确反转）"}}\n```\n'
-        '没有实质变化时输出 {"patch":{"set":{},"add":{}}}，可只带 narrative/consequence。）\n'
+        '```json\n'
+        '{\n'
+        '  "patch": {\n'
+        '    "set": {},\n'
+        '    "add": {}\n'
+        '  },\n'
+        '  "narrative": {},\n'
+        '  "consequence": {}\n'
+        '}\n'
+        '```\n'
+        'number 字段增减写入 add（例如 "add":{"字段key":2}）；'
+        'string 字段变化写入 set（例如 "set":{"字段key":"新状态"}）。\n'
+        'narrative 是"当前状态为什么形成"的解读；consequence 是"该状态'
+        '下一轮应如何影响角色行为"（持续状态的保持要求/反转条件）。\n'
+        '没有实质变化时输出 {"patch":{"set":{},"add":{}}}，可只带 '
+        'narrative/consequence。）\n'
         '【v65 强制规则】narrative 必须包含以下字段：\n'
         '1. patch.set 中的全部字段；\n'
         '2. patch.add 中的全部字段；\n'
@@ -2065,45 +2077,77 @@ class ChatService {
         'narrative 解释状态为什么形成，consequence 说明下一轮正文应如何'
         '持续体现该状态（行动限制/心理反应/连续状态保持/反转条件）。';
     try {
-      // v66：裁判专用精简预设——maxTokens 256、temperature 0、关闭
-      // 思维链约束（裁判只需 JSON，不需要长篇回复或思考链）
+      // v66：裁判专用精简预设——temperature 0、关闭思维链约束
+      // （裁判只需 JSON，不需要长篇回复或思考链）。
+      // v68：maxTokens 动态分配——patch+narrative+consequence 三件套
+      // 在字段多时 256 tokens 会被截断（isPartial → 直接 null → 模式
+      // 失效）；按字段数分配 (384 + 字段数*128)，钳到 512-1024。
       final basePreset = await _resolvePreset(null);
+      final judgeMaxTokens =
+          (384 + trackerConfig.stateSchema.length * 128).clamp(512, 1024);
       final preset = basePreset.copyWith(
-        openaiMaxTokens: 256,
+        openaiMaxTokens: judgeMaxTokens,
         temperature: 0,
       );
-      final completion = await _createCompletionFromMessages(
-        config,
-        messages: [
-          {'role': 'system', 'content': prompt},
-          {'role': 'user', 'content': '根据以上规则输出状态 patch 与解读。'},
-        ],
-        preset: preset,
-        useStreaming: false,
-        cancellationToken: cancellationToken,
-        enforceThinkingChain: false,
-      );
-      if (completion.isPartial) {
-        return null;
+      // v68：截断/解析失败补救一次——第一次被 maxTokens 截断时，
+      // 第二次要求压缩并重新输出合法 JSON；仍失败才保留主模型结果
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final completion = await _createCompletionFromMessages(
+          config,
+          messages: [
+            {'role': 'system', 'content': prompt},
+            if (attempt > 0)
+              {
+                'role': 'user',
+                'content': '上次输出被截断或不是合法 JSON。'
+                    '请只输出一个完整的 JSON 代码块，压缩文字，'
+                    '确保 "patch"/"narrative"/"consequence" 都在同一个 '
+                    'JSON 对象内且 JSON 语法合法。',
+              }
+            else
+              {'role': 'user', 'content': '根据以上规则输出状态 patch 与解读。'},
+          ],
+          preset: preset,
+          useStreaming: false,
+          cancellationToken: cancellationToken,
+          enforceThinkingChain: false,
+        );
+        if (completion.isPartial && attempt == 0) {
+          debugPrint(
+            '[TRACKER_JUDGE] 裁判输出被截断（maxTokens=$judgeMaxTokens），'
+            '重试压缩输出…',
+          );
+          continue; // 截断 → 第二次重试
+        }
+        final patch = TrackerRuntime.extractPatch(completion.text);
+        // v65：narrative key 规范化——模型可能用中文 label/别名作键，
+        // 统一映射回真实 key（patch 规范化与 narrative 规范化同一映射）
+        final narrative = TrackerRuntime.canonicalizeNarrative(
+          TrackerRuntime.extractNarrative(completion.text),
+          trackerConfig,
+        );
+        // v67：consequence 同样规范化（narrative 与 consequence 共用
+        // canonicalizeNarrative——都是"字段 → 文本"映射）
+        final consequence = TrackerRuntime.canonicalizeNarrative(
+          TrackerRuntime.extractConsequence(completion.text),
+          trackerConfig,
+        );
+        debugPrint(
+          '[TRACKER_JUDGE] mode=$mode attempt=${attempt + 1} '
+          'patch=$patch narrative=$narrative consequence=$consequence',
+        );
+        // v68：无协议（patch 未检测到）也视为失败——第二次重试
+        if (!patch.protocolDetected && attempt == 0) {
+          debugPrint('[TRACKER_JUDGE] 裁判未输出合法协议，重试…');
+          continue;
+        }
+        return (patch, narrative, consequence);
       }
-      final patch = TrackerRuntime.extractPatch(completion.text);
-      // v65：narrative key 规范化——模型可能用中文 label/别名作键，
-      // 统一映射回真实 key（patch 规范化与 narrative 规范化同一映射）
-      final narrative = TrackerRuntime.canonicalizeNarrative(
-        TrackerRuntime.extractNarrative(completion.text),
-        trackerConfig,
-      );
-      // v67：consequence 同样规范化（narrative 与 consequence 共用
-      // canonicalizeNarrative——都是"字段 → 文本"映射）
-      final consequence = TrackerRuntime.canonicalizeNarrative(
-        TrackerRuntime.extractConsequence(completion.text),
-        trackerConfig,
-      );
       debugPrint(
-        '[TRACKER_JUDGE] mode=$mode patch=$patch narrative=$narrative '
-        'consequence=$consequence',
+        '[TRACKER_JUDGE] 裁判两次尝试均失败（截断/非法 JSON），'
+        '保留主模型结果',
       );
-      return (patch, narrative, consequence);
+      return null;
     } on Object catch (error) {
       // 裁判失败不影响主流程（状态保持主模型 patch 结果）
       debugPrint('[TRACKER_JUDGE] 裁判请求失败（忽略）: $error');
