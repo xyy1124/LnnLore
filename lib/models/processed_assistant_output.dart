@@ -13,6 +13,9 @@ import 'package:pocket_inn/services/tracker_runtime.dart';
 ///   快照（快照数值 = 该消息时的最终状态，不随后续轮次漂移）。
 /// - [narrative]：v66 主模型输出的动态解读（快速模式直接使用，不再
 ///   等待独立状态裁判；后台/严格模式作为裁判未返回时的兜底基线）。
+/// - [consequence]：v67 主模型输出的下一轮剧情影响指令（与 narrative
+///   同构：narrative 解释状态为什么形成，consequence 说明下一轮应如何
+///   持续体现该状态）。
 class ProcessedAssistantOutput {
   const ProcessedAssistantOutput({
     required this.displayText,
@@ -21,6 +24,7 @@ class ProcessedAssistantOutput {
     this.specialStatusHtml,
     this.finalVariables,
     this.narrative = const {},
+    this.consequence = const {},
   });
 
   final String displayText;
@@ -29,6 +33,7 @@ class ProcessedAssistantOutput {
   final String? specialStatusHtml;
   final Map<String, String>? finalVariables;
   final Map<String, String> narrative;
+  final Map<String, String> consequence;
 
   bool get hasChoices => choices.isNotEmpty;
 }
