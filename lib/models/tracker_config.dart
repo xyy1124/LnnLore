@@ -207,10 +207,19 @@ class TrackerSemanticHints {
   final List<String> neutralSignals;
 
   factory TrackerSemanticHints.fromJson(Map<String, dynamic> json) {
+    // v76：信号列表兼容字符串写法（"双修/做爱/内射" 斜杠分隔）——
+    // 部分卡用字符串而非数组，之前会被整组忽略。
     List<String> listOf(String key) {
       final raw = json[key];
       if (raw is List) {
         return raw.whereType<String>().map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      }
+      if (raw is String) {
+        return raw
+            .split(RegExp(r'[/、,，|;\n]+'))
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
       }
       return const [];
     }
@@ -269,6 +278,20 @@ class TrackerFieldSchema {
     final rawPolicy = CharacterCardExtensionsReader.asMap(
       json['updatePolicy'],
     );
+    // v76：兼容 semanticHints 放错层级——部分卡把 semanticHints 写在
+    // 字段顶层（updatePolicy 外面），App 只读 updatePolicy.semanticHints，
+    // 导致 meaning/positive/negative/neutral 全部静默失效。这里把顶层
+    // semanticHints 合并进 updatePolicy（policy 内已声明时以 policy 为准）。
+    final siblingHints = CharacterCardExtensionsReader.asMap(
+      json['semanticHints'],
+    );
+    Map<String, dynamic>? policyJson;
+    if (rawPolicy != null || siblingHints != null) {
+      policyJson = Map<String, dynamic>.from(rawPolicy ?? const {});
+      if (siblingHints != null && policyJson['semanticHints'] == null) {
+        policyJson['semanticHints'] = siblingHints;
+      }
+    }
     final rawAliases = json['aliases'];
     final aliases = <String>[];
     if (rawAliases is List) {
@@ -288,9 +311,9 @@ class TrackerFieldSchema {
           ? null
           : TrackerFieldPresentation.fromJson(rawPresentation),
       aliases: aliases,
-      updatePolicy: rawPolicy == null
+      updatePolicy: policyJson == null
           ? null
-          : TrackerUpdatePolicy.fromJson(rawPolicy),
+          : TrackerUpdatePolicy.fromJson(policyJson),
       allowCustomValues:
           json['allowCustomValues'] is bool ? json['allowCustomValues'] as bool : true,
     );
