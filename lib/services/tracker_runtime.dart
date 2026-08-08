@@ -573,6 +573,41 @@ class TrackerRuntime {
         break;
       }
     }
+    // v77：兜底清洗——tracker.template 可能混入 PHI 指令文本残留
+    // （"带 <!--panel--> 标记；数值用 {{getvar}} 引用，不得编造）：" 前缀
+    // + <!--panel--> 块——9 张卡批量补 template 时把说明尾巴带进来了），
+    // 直接整段渲染会把指令文本显示在状态栏里。清洗两步：
+    // ① 有独占整行 <!--panel--> 块 → 提取块内 HTML（与
+    //    postHistoryPanelTemplate 同边界，防说明句里的假标记）；
+    // ② 剥离无 ::key 的裸 {{getvar}}/{{gettitle}} 等引用（渲染残留）。
+    if (template != null) {
+      final panelMatch = _panelBlockPattern.firstMatch(template);
+      if (panelMatch != null) {
+        final inner = panelMatch.group(1)?.trim() ?? '';
+        if (_isValidStatusTemplate(inner)) {
+          template = inner;
+        }
+      }
+      // 无 panel 块时兜底提取 <details>…</details>（模板里的说明行
+      // 与面板本体混在一起时只保留面板）。
+      if (template.contains('<details>')) {
+        final ds = template.indexOf('<details>');
+        final de = template.lastIndexOf('</details>');
+        if (de > ds) {
+          final inner = template.substring(ds, de + '</details>'.length).trim();
+          if (_isValidStatusTemplate(inner)) {
+            template = inner;
+          }
+        }
+      }
+      template = template.replaceAll(
+        RegExp(
+          r'\{\{\s*get(var|title|text|color|percent|narrative)\s*\}\}',
+          caseSensitive: false,
+        ),
+        '',
+      );
+    }
     // v58：模板来源诊断日志——手机上确认读到的是哪个模板
     debugPrint(
       '[TRACKER_RENDER] source=$templateSource '
