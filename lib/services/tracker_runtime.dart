@@ -262,6 +262,15 @@ class TrackerRuntime {
     final next = Map<String, dynamic>.from(current);
     // set：绝对值覆盖
     patch.setValues.forEach((key, value) {
+      // v65：string 字段 allowCustomValues=false 时，只接受 presentation.states
+      // 中声明的枚举值——模型自创未声明状态被拒绝（保持原值）。
+      final schema = config.stateSchema[key];
+      if (schema != null && !schema.isNumber && !schema.allowCustomValues) {
+        final states = schema.presentation?.states;
+        if (states != null && !states.containsKey('$value')) {
+          return; // 拒绝写入，保留当前值
+        }
+      }
       final validated = _validate(key, value, config);
       if (validated != null) {
         next[key] = validated;
@@ -498,7 +507,18 @@ class TrackerRuntime {
           final key = m.group(2)!.trim();
           switch (kind) {
             case 'gettitle':
-              return _htmlEscape(stageInfo(key, valueOf(key), config)?.title ?? '');
+              // v65：string 字段未匹配 presentation.states 时回退原始值
+              // ——模型自创自由组合状态（"乳贴脱落、衣物凌乱"）也能显示
+              // 标题，不再留下"· 空"。
+              final stage = stageInfo(key, valueOf(key), config);
+              if (stage?.title.trim().isNotEmpty == true) {
+                return _htmlEscape(stage!.title.trim());
+              }
+              final schema = config.stateSchema[key];
+              if (schema != null && !schema.isNumber) {
+                return _htmlEscape(valueOf(key) ?? '');
+              }
+              return '';
             case 'gettext':
               return _htmlEscape(stageInfo(key, valueOf(key), config)?.text ?? '');
             case 'getcolor':
@@ -508,14 +528,21 @@ class TrackerRuntime {
             case 'getpercent':
               return _htmlEscape(_percentText(key, valueOf(key), config));
             case 'getnarrative':
-              // v63：本轮动态解读优先，无则回退静态阶段描述
+              // v63：本轮动态解读优先，无则回退静态阶段描述。
+              // v65：string 未匹配时回退原始值（不留下空解读）。
               final n = narrative?[key];
               if (n != null && n.trim().isNotEmpty) {
                 return _htmlEscape(n.trim());
               }
-              return _htmlEscape(
-                stageInfo(key, valueOf(key), config)?.text ?? '',
-              );
+              final stage = stageInfo(key, valueOf(key), config);
+              if (stage?.text.trim().isNotEmpty == true) {
+                return _htmlEscape(stage!.text.trim());
+              }
+              final schema = config.stateSchema[key];
+              if (schema != null && !schema.isNumber) {
+                return _htmlEscape(valueOf(key) ?? '');
+              }
+              return '';
             default:
               return _htmlEscape(valueOf(key) ?? '');
           }
@@ -1103,6 +1130,15 @@ class TrackerRuntime {
           : '';
       final type = schema?.type ?? 'string';
       var line = '- key=$key | label=$label | type=$type$range | current=$value';
+      // v65：string 有限枚举字段（allowCustomValues=false）注入允许值
+      // 列表——模型不得自创未声明状态
+      if (schema != null &&
+          !schema.isNumber &&
+          !schema.allowCustomValues &&
+          schema.presentation?.states != null &&
+          schema.presentation!.states.isNotEmpty) {
+        line += '\n  allowedValues=${schema.presentation!.states.keys.join('|')}';
+      }
       // v60：注入定性规则（程度词量化 + 每轮上限）——"好感提升一点"
       // 模型据此确定性输出增量
       final policy = schema?.updatePolicy;
@@ -1166,6 +1202,120 @@ class TrackerRuntime {
   /// 直接丢弃（避免被 reducer 当成新变量保存、污染变量表）。
   /// 返回 (规范化 patch, 被丢弃的字段列表)。
   /// 卡未启用 tracker（无 schema）时原样返回——自定义 patch 变量宽松保留。
+  /// v65：把字段口语名/中文 label/别名规范化为真实 key——patch 与
+  /// narrative 共用同一映射（模型输出中文 label 或别名作键时都能对上）。
+  /// 匹配优先级：真实 key > label > aliases（含 trim 容错）。找不到返回 null。
+  static String? canonicalTrackerKey(
+    String raw,
+    TrackerConfig config,
+  ) {
+    final value = raw.trim();
+    if (value.isEmpty || !config.isEnabled) {
+      return null;
+    }
+    if (config.stateSchema.containsKey(value)) {
+      return value;
+    }
+    for (final entry in config.stateSchema.entries) {
+      final schema = entry.value;
+      if (schema.label.trim() == value ||
+          schema.aliases.any((alias) => alias.trim() == value)) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
+  /// v65：narrative key 规范化——模型可能用中文 label/别名作键，
+  /// 统一映射回真实 key；空文本与无法识别的键丢弃。
+  static Map<String, String> canonicalizeNarrative(
+    Map<String, String> narrative,
+    TrackerConfig config,
+  ) {
+    final result = <String, String>{};
+    for (final entry in narrative.entries) {
+      final key = canonicalTrackerKey(entry.key, config);
+      final text = entry.value.trim();
+      if (key != null && text.isNotEmpty) {
+        result[key] = text;
+      }
+    }
+    return result;
+  }
+
+  /// v65：比较前后变量表，返回本轮发生变化的字段 key 集合——
+  /// number 按数值比较（"20" vs 20 视为相同），string 按文本比较。
+  static Set<String> changedKeys({
+    required Map<String, String> before,
+    required Map<String, String> after,
+    required TrackerConfig config,
+  }) {
+    final changed = <String>{};
+    for (final key in config.stateSchema.keys) {
+      final schema = config.stateSchema[key];
+      final beforeValue = before[key];
+      final afterValue = after[key];
+      if (afterValue == null) {
+        continue;
+      }
+      if (schema != null && schema.isNumber) {
+        final beforeNum = num.tryParse(beforeValue ?? '');
+        final afterNum = num.tryParse(afterValue);
+        if (beforeNum != null && afterNum != null) {
+          if (beforeNum != afterNum) {
+            changed.add(key);
+          }
+          continue;
+        }
+      }
+      if (beforeValue != afterValue) {
+        changed.add(key);
+      }
+    }
+    return changed;
+  }
+
+  /// v65：合并完整 narrative——规则（审查 v65 四层修复第 3 层）：
+  /// - 未变化字段且裁判没有新解读：继承上一轮 narrative；
+  /// - 已变化字段且裁判有新解读：使用新解读；
+  /// - 已变化字段但裁判漏写：不得继承旧描述，先用新阶段静态描述；
+  /// - 连静态描述也没有：生成确定性兜底，不允许空白。
+  static Map<String, String> mergeNarrative({
+    required Map<String, String> previousNarrative,
+    required Map<String, String> judgeNarrative,
+    required Map<String, String> beforeVariables,
+    required Map<String, String> afterVariables,
+    required TrackerConfig config,
+  }) {
+    final changed = changedKeys(
+      before: beforeVariables,
+      after: afterVariables,
+      config: config,
+    );
+    final merged = Map<String, String>.from(previousNarrative)
+      ..addAll(judgeNarrative);
+    for (final key in changed) {
+      if (judgeNarrative[key]?.trim().isNotEmpty == true) {
+        continue; // 已变化字段裁判已给新解读
+      }
+      // 已变化字段但裁判漏写：移除旧解读（旧剧情说明不再适用），
+      // 回退新阶段静态描述；连静态描述也没有则确定性兜底
+      merged.remove(key);
+      final stage = stageInfo(key, afterVariables[key], config);
+      if (stage?.text.trim().isNotEmpty == true) {
+        merged[key] = stage!.text.trim();
+        continue;
+      }
+      final schema = config.stateSchema[key];
+      final label = schema?.label.trim().isNotEmpty == true
+          ? schema!.label.trim()
+          : key;
+      merged[key] =
+          '$label已变为“${afterVariables[key]}”，具体表现以本轮剧情为准。';
+    }
+    return merged;
+  }
+
   static (StatePatch, List<String>) canonicalizePatch(
     StatePatch patch,
     TrackerConfig config,
@@ -1174,18 +1324,7 @@ class TrackerRuntime {
       return (patch, const []);
     }
     final dropped = <String>[];
-    String? canonical(String raw) {
-      final value = raw.trim();
-      if (config.stateSchema.containsKey(value)) {
-        return value;
-      }
-      for (final entry in config.stateSchema.entries) {
-        if (entry.value.label.trim() == value) {
-          return entry.key;
-        }
-      }
-      return null;
-    }
+    String? canonical(String raw) => canonicalTrackerKey(raw, config);
 
     final setValues = <String, dynamic>{};
     final addValues = <String, num>{};
