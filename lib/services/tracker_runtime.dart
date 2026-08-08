@@ -663,6 +663,8 @@ class TrackerRuntime {
   /// narrative，不再需要第二次裁判请求）。
   /// v68：示例改为**合法 JSON**（不再用"字段key/数值变化"等无法解析的
   /// 中文占位值——模型照抄示例会导致 jsonDecode 失败、patch 提取不到）。
+  /// v69：明确禁止在 reply 中输出 HTML/纯文本状态栏——面板由 App 按
+  /// 最终状态自动渲染，模型只输出剧情 JSON。
   static const String kTrackerProtocolSuffix =
       '（本条回复末尾必须用 JSON 代码块输出结构化状态更新，格式：\n'
       '```json\n'
@@ -676,18 +678,23 @@ class TrackerRuntime {
       '  "consequence": {}\n'
       '}\n'
       '```\n'
-      'number 字段增减写入 add，例如对实际字段 key 增加 2：'
-      '"add":{"字段key":2}。\n'
-      'string 字段变化写入 set，例如将实际字段 key 设为新状态：'
-      '"set":{"字段key":"新状态"}。\n'
-      'reply 为本轮剧情正文，patch 只使用上方列出的 key（set 为直接赋值，'
-      'add 为增减量）。状态有变化就如实输出；没有变化也必须输出空 patch'
-      '（"patch":{"set":{},"add":{}}）。\n'
+      '【字段更新方式】number 字段增减写入 add（例如某好感字段增加 2 时写 '
+      '"add":{"该字段key":2}）；string 字段变化写入 set（例如某状态字段变为'
+      '新状态时写 "set":{"该字段key":"新状态"}）。JSON 中禁止使用'
+      '"字段key""数值变化"等占位文字。\n'
+      'reply 只写剧情正文；patch 只使用上方列出的 key。状态有变化就如实'
+      '输出；没有变化也必须输出空 patch（"patch":{"set":{},"add":{}}）。\n'
       'narrative 中凡是 patch 修改过的字段都必须给出解读（一句话，结合本轮'
       '实际发生的事件；只能使用字段 key，禁止中文 label）。\n'
       'consequence 与 narrative 覆盖相同字段——说明该状态下一轮应如何'
       '影响角色行为（持续状态的保持要求/反转条件）。\n'
-      '不要输出状态面板模板本身，面板由系统自动渲染。）';
+      '【v69 最高优先级规则】\n'
+      '- reply 只写剧情正文。\n'
+      '- 禁止在 reply 中输出任何状态栏。\n'
+      '- 禁止输出 <details>、<summary>、<!--panel-->、状态栏 HTML。\n'
+      '- 禁止输出"当前状态：""状态面板：""状态栏："等纯文本状态栏。\n'
+      '- 状态栏由 App 根据最终状态自动渲染。\n'
+      '- patch、narrative、consequence 必须放在同一个 JSON 对象中。）';
 
   /// v67：状态对剧情的约束指令（固定尾部）——让状态成为"下一轮剧情的
   /// 驱动器"而非"剧情后的记录器"：模型不只读到数值标签，还被要求把
@@ -806,8 +813,100 @@ class TrackerRuntime {
   /// 与 [postHistoryPanelTemplate] 共用 [_panelBlockPattern]（独占整行
   /// 标记），保证提取与清理对面板边界的判定一致——说明句里嵌着的
   /// 字面 `<!--panel-->` 不会被误删。
+  /// v69：同时剥离面板外的"要求模型输出状态栏"指令句——这些句子
+  /// 与 App 的"只输出 JSON patch、面板由 App 渲染"冲突（模型收到两套
+  /// 互相矛盾的要求，会把面板/状态栏混进正文）。保留字段含义/变化
+  /// 规则/行为约束等非输出指令。
   static String stripPanelTemplates(String text) {
-    return text.replaceAll(_panelBlockPattern, '');
+    var result = text.replaceAll(_panelBlockPattern, '');
+    // v69：剥离"输出状态栏/面板"指令句（行级匹配，中文标点容错）
+    result = result.replaceAll(
+      RegExp(
+        r'^[^\n]*?(?:每次回复|回复末尾|每轮回复|必须在|需要|请|要)[^\n]*?(?:输出|附带|显示|附带输出)[^\n]*?(?:状态栏|状态面板|状态条|面板)[^\n]*$',
+        multiLine: true,
+      ),
+      '',
+    );
+    // 常见独立短句（无动词前缀）
+    result = result.replaceAll(
+      RegExp(
+        r'^[^\n]*?(?:状态栏|状态面板|状态条)[^\n]*?(?:必须|需要|记得)[^\n]*?(?:输出|显示|更新)[^\n]*$',
+        multiLine: true,
+      ),
+      '',
+    );
+    // 清理剥离后产生的多余空行
+    result = result.replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+    return result;
+  }
+
+  /// v69：识别并剥离正文末尾的**纯文本状态栏**——模型可能输出
+  /// "状态栏：\n堕落进度：27/100\n当前状态：压制中" 这类无 HTML 的
+  /// 状态栏（HTML 变体由显示层清洗器处理）。
+  ///
+  /// 识别规则（防误删剧情正文）：
+  /// - 出现在文本末尾；
+  /// - 至少 2 行命中 tracker label（"label：值"或"label: 值"格式）；
+  /// - 每行含冒号（中文或英文）。
+  ///
+  /// 返回剥离后的正文（不带状态栏）；同时通过 [plainPanelValues] 回传
+  /// 解析出的 label→值（调用方可作为兼容状态来源回写变量）。
+  static String stripTrailingPlainTrackerPanel(
+    String text,
+    TrackerConfig config, {
+    Map<String, String>? plainPanelValues,
+  }) {
+    final labels = config.stateSchema.values
+        .map((schema) => schema.label.trim())
+        .where((label) => label.isNotEmpty)
+        .toSet();
+    if (labels.isEmpty) {
+      return text.trim();
+    }
+    final lines = text.split('\n');
+    var matched = 0;
+    var start = -1;
+    final values = <String, String>{};
+
+    for (var i = lines.length - 1; i >= 0; i--) {
+      final line = lines[i].trim();
+      if (line.isEmpty) {
+        continue;
+      }
+      final matchedLabel = labels
+          .where((label) => line.startsWith('$label：') || line.startsWith('$label:'))
+          .toList();
+      if (matchedLabel.isNotEmpty) {
+        matched++;
+        start = i;
+        // 解析值（label：值，值取冒号后）
+        final value = line
+            .substring(matchedLabel.first.length + 1)
+            .trim();
+        if (value.isNotEmpty) {
+          values[matchedLabel.first] = value;
+        }
+        continue;
+      }
+      // 状态栏标题行（"状态栏"/"状态面板"/"📊"）——只有已匹配到
+      // 状态行时才作为标题纳入剥离范围
+      if (matched >= 2 &&
+          (line.contains('状态栏') ||
+              line.contains('状态面板') ||
+              line.startsWith('📊'))) {
+        start = i;
+        continue;
+      }
+      break;
+    }
+
+    if (matched >= 2 && start >= 0) {
+      if (plainPanelValues != null) {
+        plainPanelValues.addAll(values);
+      }
+      return lines.take(start).join('\n').trim();
+    }
+    return text.trim();
   }
 
   /// 用卡的 initialState 初始化状态（仅补缺失字段，不覆盖已有值）。
