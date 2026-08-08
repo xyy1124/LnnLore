@@ -5,6 +5,7 @@ import '../models/chat_message.dart';
 import '../models/prompt_assembly.dart';
 import '../models/preset.dart';
 import '../models/world_book.dart';
+import 'chat_display_sanitizer.dart';
 import 'chat_memory_service.dart';
 import 'chat_variable_service.dart';
 import 'tracker_runtime.dart';
@@ -491,12 +492,16 @@ class PromptAssembler {
     String source,
   ) {
     // 快捷指令消息的 modelText 为实际提示词，text 仅为界面显示
-    final content = _replaceVariables(
-      (chatMessage.modelText?.isNotEmpty == true
-              ? chatMessage.modelText!
-              : chatMessage.text),
-      context,
-    ).trim();
+    var raw = chatMessage.modelText?.isNotEmpty == true
+        ? chatMessage.modelText!
+        : chatMessage.text;
+    // v70：历史 assistant 消息入模前清洗——旧版本已入库的 HTML/纯文本
+    // 状态栏、状态协议块必须从模型上下文移除（模型看到历史每轮都输出
+    // 面板就会继续模仿；清洗后历史只保留剧情正文）
+    if (!chatMessage.isMe) {
+      raw = ChatDisplaySanitizer.stripStoredMessageForDisplay(raw);
+    }
+    final content = _replaceVariables(raw, context).trim();
     // 特别版：群聊历史消息带发言人名字前缀（模型区分谁在说话，
     // 避免"轮到谁，所有角色都变成谁"）
     var contentWithSpeaker = content;
