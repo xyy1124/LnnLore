@@ -1500,8 +1500,15 @@ class ChatService {
             : rawExtracted.displayText;
     // v70：<TRACKER_UPDATE> 标记前的正文优先（新协议——正文在标记外，
     // 不经过 JSON 转义，解析成功率更高）
+    // v78：标记前正文按入库口径清洗后再覆盖——模型可能混输出旧协议
+    // 残留（{"reply":...} JSON 块 / <details> 面板 / {{setvar::}}），
+    // 此前原文前缀直接覆盖清洗结果，残留原样入库并可见、历史注入再
+    // 次诱导模型输出面板。
     if (markerDisplayText.trim().isNotEmpty) {
-      displayText = markerDisplayText;
+      final markerExtracted = ChatDisplaySanitizer.extract(markerDisplayText);
+      if (markerExtracted.displayText.trim().isNotEmpty) {
+        displayText = markerExtracted.displayText;
+      }
     }
 
     // extract 是破坏性拆解器。若误判导致正文为空，遍历候选源
@@ -2160,15 +2167,10 @@ class ChatService {
 
   // ---- v60：状态裁判（双阶段剧情自主判断）----
 
-  /// 裁判开关设置键（默认开启）。
-  static const String kJudgeEnabledKey = 'tracker_judge_enabled';
   /// 裁判模式设置键：explicit | conservative | active（默认 conservative）。
+  /// v78：旧的裁判总开关（tracker_judge_enabled）已删除——是否调用裁判
+  /// 由"状态更新模式"（快速/后台精确/严格）决定，总开关自 v68 起无读取方。
   static const String kJudgeModeKey = 'tracker_judge_mode';
-
-  static Future<bool> isTrackerJudgeEnabled() async {
-    final saved = StorageService.instance.getBool(kJudgeEnabledKey);
-    return saved ?? true;
-  }
 
   static Future<String> getTrackerJudgeMode() async {
     final saved = StorageService.instance.getString(kJudgeModeKey);
@@ -2972,9 +2974,12 @@ class ChatService {
   }
 
   List<ChatMessage> _truncateChatMessages(List<ChatMessage> messages) {
-    return ChatMemoryService.truncateToRecentRounds(
+    // v78：截断仅属于"长期记忆"功能——未启用记忆时发送完整历史。
+    // 此前无条件按 recentRounds 截断（默认 10 轮会让模型忘记更早
+    // 剧情），且调节入口藏在记忆开关之后不可见。
+    return ChatMemoryService.truncateForSending(
       messages,
-      memoryExtractionNotifier.value.recentRounds,
+      memoryExtractionNotifier.value,
     );
   }
 
