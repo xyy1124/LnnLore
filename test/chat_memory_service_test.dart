@@ -74,6 +74,33 @@ void main() {
     });
   });
 
+  group('v78 ChatMemoryService.truncateForSending', () {
+    test('记忆未启用时不截断（发送完整历史）', () {
+      final messages = List.generate(30, (i) => _assistant('a$i'));
+      expect(
+        ChatMemoryService.truncateForSending(
+          messages,
+          const MemoryExtractionConfig(enabled: false, recentRounds: 10),
+        ),
+        same(messages),
+      );
+    });
+
+    test('记忆启用时按 recentRounds 截断', () {
+      final messages = [
+        _user('u1'),
+        _assistant('a1'),
+        _user('u2'),
+        _assistant('a2'),
+      ];
+      final result = ChatMemoryService.truncateForSending(
+        messages,
+        const MemoryExtractionConfig(enabled: true, recentRounds: 1),
+      );
+      expect(result.map((m) => m.text), ['u2', 'a2']);
+    });
+  });
+
   group('ChatMemoryService.parseMemoryPoints', () {
     test('空字符串返回空列表', () {
       expect(ChatMemoryService.parseMemoryPoints(''), isEmpty);
