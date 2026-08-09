@@ -118,6 +118,23 @@ class AppBackupService {
   }) async {
     onStep?.call(RestoreStep.validating);
     _validateArchive(archive);
+
+    // v78：恢复前必须确认归档内含数据库文件——此前不校验，一个只有
+    // manifest/preferences 的"合法"zip 会通过校验，随后清空全部数据
+    // 并恢复成空聊天库（静默丢数据）。当前导出把 DB 放在 data/ 段
+    // （dataDir 递归收走），旧版备份可能在 database/ 段，两种都认。
+    final hasDatabaseFile = archive.files.any((file) {
+      if (!file.isFile) {
+        return false;
+      }
+      final path = p.posix.normalize(file.name);
+      return path.endsWith('.db') || p.posix.isWithin(_databaseRoot, path);
+    });
+    if (!hasDatabaseFile) {
+      throw const FormatException(
+        '备份缺少数据库文件，已取消恢复（现有数据未被清除）',
+      );
+    }
     final manifest = _readJsonFileFromArchive(
       archive,
       _manifestPath,
