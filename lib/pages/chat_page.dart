@@ -930,6 +930,12 @@ class _ChatPageState extends State<ChatPage> {
       await _viewModel.sendMessage(text, modelText: expanded);
     } catch (error) {
       if (!mounted) return;
+      // v78：发送失败把草稿写回输入框（此前先清空再发，失败时用户
+      // 输入的长消息无法找回）
+      _textController.text = text;
+      _textController.selection = TextSelection.fromPosition(
+        TextPosition(offset: text.length),
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(error.toString().replaceFirst('Exception: ', '')),
