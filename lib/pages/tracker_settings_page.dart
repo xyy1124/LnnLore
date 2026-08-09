@@ -3,11 +3,12 @@ import 'package:flutter/material.dart';
 import '../services/chat_service.dart';
 import '../services/storage_service.dart';
 
-/// v60：状态更新设置——剧情自主状态判断（状态裁判）开关与三档模式。
+/// v60：状态更新设置——状态裁判判断模式。
 ///
-/// - 状态裁判：剧情生成后独立调用一次状态判断请求（只输出 JSON
-///   patch）——剧情模型专心写剧情，状态由裁判按规则确定性判断。
-/// - 模式：仅明确指令 / 保守剧情判断（默认）/ 积极剧情判断。
+/// 说明：v68 起是否调用状态裁判由"通用设置 → 状态更新模式"（快速 /
+/// 后台精确 / 严格）决定，本页只保留裁判的**判断模式**（仅明确指令 /
+/// 保守剧情判断 / 积极剧情判断）。v78 移除了旧的"状态裁判"总开关——
+/// 该开关自 v68 起已无运行时读取方（写了也不生效，是死 UI）。
 class TrackerSettingsPage extends StatefulWidget {
   const TrackerSettingsPage({super.key});
 
@@ -16,7 +17,6 @@ class TrackerSettingsPage extends StatefulWidget {
 }
 
 class _TrackerSettingsPageState extends State<TrackerSettingsPage> {
-  bool _judgeEnabled = true;
   String _mode = 'conservative';
   bool _loaded = false;
 
@@ -27,21 +27,14 @@ class _TrackerSettingsPageState extends State<TrackerSettingsPage> {
   }
 
   Future<void> _load() async {
-    final enabled = await ChatService.isTrackerJudgeEnabled();
     final mode = await ChatService.getTrackerJudgeMode();
     if (!mounted) {
       return;
     }
     setState(() {
-      _judgeEnabled = enabled;
       _mode = mode;
       _loaded = true;
     });
-  }
-
-  Future<void> _setJudgeEnabled(bool value) async {
-    setState(() => _judgeEnabled = value);
-    await StorageService.instance.setBool(ChatService.kJudgeEnabledKey, value);
   }
 
   Future<void> _setMode(String value) async {
@@ -59,17 +52,6 @@ class _TrackerSettingsPageState extends State<TrackerSettingsPage> {
           ? ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                SwitchListTile(
-                  title: const Text('状态裁判（双阶段判断）'),
-                  subtitle: const Text(
-                    '剧情生成后独立调用一次状态判断请求，只输出 JSON patch——'
-                    '剧情明确表示状态变化时（即使没有具体数字）也会按规则更新，'
-                    '不再依赖剧情模型在长篇回复末尾顺便输出协议',
-                  ),
-                  value: _judgeEnabled,
-                  onChanged: _setJudgeEnabled,
-                ),
-                const SizedBox(height: 8),
                 Text(
                   '剧情自主更新模式',
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
@@ -83,27 +65,21 @@ class _TrackerSettingsPageState extends State<TrackerSettingsPage> {
                   subtitle: const Text('只处理明确状态描述（（好感度+2）/好感提升一点），不因剧情自行推断'),
                   value: 'explicit',
                   groupValue: _mode,
-                  onChanged: _judgeEnabled
-                      ? (v) => _setMode(v!)
-                      : null,
+                  onChanged: (v) => _setMode(v!),
                 ),
                 RadioListTile<String>(
                   title: const Text('保守剧情判断（推荐）'),
                   subtitle: const Text('除明确指令外，允许从非常明确的剧情结果推断小幅变化（她接受道歉、戒备明显放松 → +1）；普通对话/心理描写/重复描述不更新'),
                   value: 'conservative',
                   groupValue: _mode,
-                  onChanged: _judgeEnabled
-                      ? (v) => _setMode(v!)
-                      : null,
+                  onChanged: (v) => _setMode(v!),
                 ),
                 RadioListTile<String>(
                   title: const Text('积极剧情判断'),
                   subtitle: const Text('允许根据整体剧情主动调整（共同战斗/赠送礼物/发生冲突等都可能触发变化）'),
                   value: 'active',
                   groupValue: _mode,
-                  onChanged: _judgeEnabled
-                      ? (v) => _setMode(v!)
-                      : null,
+                  onChanged: (v) => _setMode(v!),
                 ),
                 const SizedBox(height: 16),
                 Container(
