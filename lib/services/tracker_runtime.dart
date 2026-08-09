@@ -375,7 +375,14 @@ class TrackerRuntime {
     });
     // add：数值叠加（仅 number 字段；字符串字段忽略）。
     // 变量表值为 TEXT（SQLite），当前值可能是字符串数字，需 tryParse 后叠加。
+    // v78：与 v73 裁判路径一致——同一字段 set 与 add 同时出现时忽略 add
+    // （v73 只修了裁判 finalState 路径，快速模式主模型 marker 内
+    // {"set":30,"add":5} 会双计成 35）。
+    final setKeys = patch.setValues.keys.toSet();
     patch.addValues.forEach((key, delta) {
+      if (setKeys.contains(key)) {
+        return;
+      }
       final schema = config.stateSchema[key];
       if (schema != null && !schema.isNumber) {
         return; // 字符串字段忽略 add
@@ -464,8 +471,18 @@ class TrackerRuntime {
           );
         }
       }
-      // ranges 无匹配（如全部区间都有 lt 且值越界）→ 最后一段兜底
+      // v78：双向越界兜底——值低于所有区间下限取第一段（最低阶段），
+      // 高于所有区间上限取最后一段（最高阶段）。此前无匹配一律取
+      // 最后一段，数值低于首段 gte 时阶段标题/描述完全颠倒。
       if (presentation.ranges.isNotEmpty) {
+        final first = presentation.ranges.first;
+        if (first.gte != null && numValue < first.gte!) {
+          return TrackerStageInfo(
+            title: first.title,
+            color: first.color,
+            text: first.text,
+          );
+        }
         final last = presentation.ranges.last;
         return TrackerStageInfo(
           title: last.title,
@@ -1841,7 +1858,9 @@ class TrackerRuntime {
       if (schema.isNumber) {
         final numValue = value is num ? value : num.tryParse('$value');
         if (numValue == null) {
-          return value; // 非数字值保留（宽松）
+          // v78：number 字段拒绝非数字值（此前宽松保留会让"很多"等
+          // 字符串写入变量表，后续 add/百分比/进度条全部失效且不自愈）
+          return null;
         }
         if (!numValue.isFinite) {
           return null; // Infinity/NaN 拒绝写入
