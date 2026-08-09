@@ -51,6 +51,19 @@ class ChatMemoryService {
     return '$header\n${memories.map((m) => '- $m').join('\n')}';
   }
 
+  /// v78：发送历史截断入口——长期记忆**未启用**时不截断（发送完整
+  /// 历史，避免模型默认只看到最近 10 轮而忘记更早剧情）；启用时按
+  /// `recentRounds` 截断（控制上下文体积，与记忆摘要配合）。
+  static List<ChatMessage> truncateForSending(
+    List<ChatMessage> messages,
+    MemoryExtractionConfig config,
+  ) {
+    if (!config.enabled) {
+      return messages;
+    }
+    return truncateToRecentRounds(messages, config.recentRounds);
+  }
+
   /// 按 `recentRounds` 截断消息列表，保留最后 N 轮对话（1 个用户消息 + 1 个助手回复）。
   ///
   /// 从末尾向前数 `recentRounds` 个助手消息，包含其前导用户消息。
