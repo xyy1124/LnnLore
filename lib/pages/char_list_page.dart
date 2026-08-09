@@ -83,6 +83,31 @@ class _CharListPageState extends State<CharListPage> {
     }
   }
 
+  /// v78：同名角色覆盖确认框——导入将覆盖同名角色的卡内容、头像与
+  /// 内嵌世界书（聊天记录保留），用户确认后才继续。
+  Future<bool?> _confirmOverwriteSameName(List<String> names) {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('检测到同名角色'),
+        content: Text(
+          '以下角色已存在，继续导入将覆盖其卡内容、头像与内嵌世界书'
+          '（聊天记录保留）：\n\n${names.join('、')}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('覆盖导入'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 文件夹直接导入（Android SAF）。
   Future<void> _onImportFolder() async {
     try {
@@ -95,6 +120,15 @@ class _CharListPageState extends State<CharListPage> {
       final expanded = await ArchiveImportService.instance.expandArchives(
         folderResult.files,
       );
+      // v78：同名角色覆盖确认（覆盖卡内容/头像/内嵌世界书，聊天记录保留）
+      final conflicts = await CharacterService.instance
+          .findSameNameConflicts(expanded);
+      if (conflicts.isNotEmpty) {
+        final proceed = await _confirmOverwriteSameName(conflicts);
+        if (proceed != true || !mounted) {
+          return; // 用户取消，不导入
+        }
+      }
       final batch = await CharacterService.instance.importBatch(
         files: expanded,
         // 文件夹通读只收角色卡：世界书走角色卡内嵌的 character_book
@@ -112,7 +146,8 @@ class _CharListPageState extends State<CharListPage> {
       ];
       var message = '导入完成：${parts.isEmpty ? '0 个' : parts.join('、')}';
       if (batch.skippedCharacterCount > 0) {
-        message += '，跳过同名 ${batch.skippedCharacterCount} 个';
+        // v78：同名行为是覆盖（保留聊天记录），文案与真实行为一致
+        message += '，更新同名角色 ${batch.skippedCharacterCount} 个';
       }
       if (folderResult.truncated) {
         message += '，内容过多已截断';
@@ -155,6 +190,15 @@ class _CharListPageState extends State<CharListPage> {
                 ? await File(picked.path!).readAsBytes()
                 : null);
         if (bytes == null) return;
+        // v78：同名角色覆盖确认（覆盖卡内容/头像/内嵌世界书，聊天记录保留）
+        final conflicts = await CharacterService.instance
+            .findSameNameConflicts([(name: picked.name, bytes: bytes)]);
+        if (conflicts.isNotEmpty) {
+          final proceed = await _confirmOverwriteSameName(conflicts);
+          if (proceed != true || !mounted) {
+            return; // 用户取消，不导入
+          }
+        }
         final single = await CharacterService.instance.importBatch(
           files: [(name: picked.name, bytes: bytes)],
         );
@@ -163,7 +207,7 @@ class _CharListPageState extends State<CharListPage> {
         if (single.characterCount == 1) {
           AppTopNotice.show(context, '已导入角色：${picked.name}');
         } else if (single.skippedCharacterCount > 0) {
-          AppTopNotice.show(context, '已存在同名角色，已跳过');
+          AppTopNotice.show(context, '已更新同名角色：${picked.name}');
         } else if (single.worldBookCount == 1) {
           AppTopNotice.show(context, '已导入世界书：${picked.name}');
         } else if (single.failures.isNotEmpty) {
@@ -189,6 +233,15 @@ class _CharListPageState extends State<CharListPage> {
       final expanded = await ArchiveImportService.instance.expandArchives(
         pickedEntries,
       );
+      // v78：同名角色覆盖确认（覆盖卡内容/头像/内嵌世界书，聊天记录保留）
+      final conflicts = await CharacterService.instance
+          .findSameNameConflicts(expanded);
+      if (conflicts.isNotEmpty) {
+        final proceed = await _confirmOverwriteSameName(conflicts);
+        if (proceed != true || !mounted) {
+          return; // 用户取消，不导入
+        }
+      }
       final batch = await CharacterService.instance.importBatch(
         files: expanded,
         // 与文件夹导入一致：只收角色卡，世界书走角色卡内嵌的
@@ -204,7 +257,8 @@ class _CharListPageState extends State<CharListPage> {
       ];
       var message = '导入完成：${parts.isEmpty ? '0 个' : parts.join('、')}';
       if (batch.skippedCharacterCount > 0) {
-        message += '，跳过同名 ${batch.skippedCharacterCount} 个';
+        // v78：同名行为是覆盖（保留聊天记录），文案与真实行为一致
+        message += '，更新同名角色 ${batch.skippedCharacterCount} 个';
       }
       if (batch.failures.isNotEmpty) {
         message += '，失败 ${batch.failures.length} 个';
