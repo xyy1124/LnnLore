@@ -341,6 +341,48 @@ class CharacterService {
   ///
   /// [includeStandaloneWorldBooks] 为 false 时（文件夹通读场景）只导入
   /// 角色卡文件，不再尝试把独立 json 当作世界书导入——避免把备份/配置
+  /// v78：导入前预检——返回 [files] 中与现有角色**同名**的角色名列表
+  /// （用于 UI 覆盖确认：同名导入实际会覆盖卡内容/头像/内嵌世界书，
+  /// 聊天记录保留）。
+  Future<List<String>> findSameNameConflicts(
+    List<ImportFileEntry> files,
+  ) async {
+    final conflicts = <String>{};
+    for (final entry in files) {
+      final ext = ArchiveImportService.extensionOf(entry.name);
+      Map<String, dynamic>? cardJson;
+      if (ext == 'png') {
+        if (!ArchiveImportService.hasSafePngDimensions(entry.bytes)) {
+          continue;
+        }
+        final embedded = PngCharacterCardCodec.decodeCard(entry.bytes);
+        if (embedded != null) {
+          cardJson = tryNormalizeCharacterCardJson(embedded);
+        }
+      } else if (ext == 'json') {
+        final json = ArchiveImportService.tryDecodeJson(
+          utf8.decode(entry.bytes, allowMalformed: true),
+        );
+        if (json != null && looksLikeCharacterCardJson(json)) {
+          cardJson = json;
+        }
+      }
+      if (cardJson == null) {
+        continue;
+      }
+      final name = _characterNameFromCard(cardJson);
+      if (name.isEmpty) {
+        continue;
+      }
+      final existing = await _findSameNameCharacter(name);
+      if (existing != null) {
+        conflicts.add(name);
+      }
+    }
+    final sorted = conflicts.toList()..sort();
+    return sorted;
+  }
+
   /// 等无关 json 误导入；角色卡内嵌的 character_book 世界书不受影响，
   /// 仍由 [_prepareCardForStorage] 自动创建并关联（与单文件导入一致）。
   Future<BatchImportResult> importBatch({
@@ -787,8 +829,23 @@ class CharacterService {
     Map<String, dynamic> characterBook,
   ) {
     final entries = Map<String, dynamic>.from(characterBook['entries'] as Map);
+    // v78：key 排序兼容非数字字符串（UUID/entry_x 等第三方工具导出）——
+    // 此前强制 int.parse 会抛 FormatException 导致整卡导入失败。
     final sortedKeys = entries.keys.toList()
-      ..sort((a, b) => int.parse(a).compareTo(int.parse(b)));
+      ..sort((a, b) {
+        final an = int.tryParse(a);
+        final bn = int.tryParse(b);
+        if (an != null && bn != null) {
+          return an.compareTo(bn);
+        }
+        if (an != null) {
+          return -1;
+        }
+        if (bn != null) {
+          return 1;
+        }
+        return a.compareTo(b);
+      });
 
     return [
       for (final key in sortedKeys)
