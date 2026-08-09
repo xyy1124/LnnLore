@@ -1336,13 +1336,6 @@ class ChatViewModel extends ChangeNotifier {
       // 用户主动终止，不弹错误提示。
     } finally {
       _resetPendingMessages();
-      if (!_isDisposed) {
-        // 特别版：发送状态复位必须在 await 前——_loadSession 抛异常
-        // 也不会锁死发送状态
-        _isSending = false;
-        // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
-        _activeCompletionCancelToken = null;
-      }
       final reloadSessionId = persistedSession?.id;
       // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
       // 再加载产生多次中间重建、流式结束后视口跳动
@@ -1352,6 +1345,15 @@ class ChatViewModel extends ChangeNotifier {
         }
       } finally {
         _unfreezeMessages();
+      }
+      if (!_isDisposed) {
+        // v78：发送状态在重载完成后复位——此前先复位再 await 重载，
+        // 用户可在重载完成前的窗口立刻再发，第二条消息拿到旧会话
+        // （currentLeafMessageId 未更新）入库成兄弟分支，上一轮对话
+        // 从主链消失。重载抛异常也会走到这里复位，不会锁死。
+        _isSending = false;
+        // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
+        _activeCompletionCancelToken = null;
       }
       if (!_isDisposed) {
         notifyListeners();
@@ -1465,13 +1467,6 @@ class ChatViewModel extends ChangeNotifier {
       // 用户主动终止，不弹错误提示。
     } finally {
       _resetPendingMessages();
-      if (!_isDisposed) {
-        // 特别版：发送状态复位必须在 await 前——_loadSession 抛异常
-        // 也不会锁死发送状态
-        _isSending = false;
-        // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
-        _activeCompletionCancelToken = null;
-      }
       final reloadSessionId = persistedSession?.id;
       // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
       // 再加载产生多次中间重建、流式结束后视口跳动
@@ -1481,6 +1476,15 @@ class ChatViewModel extends ChangeNotifier {
         }
       } finally {
         _unfreezeMessages();
+      }
+      if (!_isDisposed) {
+        // v78：发送状态在重载完成后复位——此前先复位再 await 重载，
+        // 用户可在重载完成前的窗口立刻再发，第二条消息拿到旧会话
+        // （currentLeafMessageId 未更新）入库成兄弟分支，上一轮对话
+        // 从主链消失。重载抛异常也会走到这里复位，不会锁死。
+        _isSending = false;
+        // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
+        _activeCompletionCancelToken = null;
       }
       if (!_isDisposed) {
         notifyListeners();
@@ -1584,19 +1588,18 @@ class ChatViewModel extends ChangeNotifier {
       rethrow;
     } finally {
       _resetPendingMessages();
-      if (!_isDisposed) {
-        // 特别版：发送状态复位必须在 await 前——_loadSession 抛异常
-        // 也不会锁死发送状态
-        _isSending = false;
-        // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
-        _activeCompletionCancelToken = null;
-      }
       // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
       // 再加载产生多次中间重建、流式结束后视口跳动
       try {
         await _loadSession(preferredSessionId: session.id);
       } finally {
         _unfreezeMessages();
+      }
+      if (!_isDisposed) {
+        // v78：发送状态在重载完成后复位（重载抛异常也会走到这里复位）
+        _isSending = false;
+        // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
+        _activeCompletionCancelToken = null;
       }
       if (!_isDisposed) {
         notifyListeners();
@@ -1702,19 +1705,18 @@ class ChatViewModel extends ChangeNotifier {
       rethrow;
     } finally {
       _resetPendingMessages();
-      if (!_isDisposed) {
-        // 特别版：发送状态复位必须在 await 前——_loadSession 抛异常
-        // 也不会锁死发送状态
-        _isSending = false;
-        // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
-        _activeCompletionCancelToken = null;
-      }
       // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
       // 再加载产生多次中间重建、流式结束后视口跳动
       try {
         await _loadSession(preferredSessionId: session.id);
       } finally {
         _unfreezeMessages();
+      }
+      if (!_isDisposed) {
+        // v78：发送状态在重载完成后复位（重载抛异常也会走到这里复位）
+        _isSending = false;
+        // 无条件清空：全员回复链中途会替换 token，identical 检查会漏
+        _activeCompletionCancelToken = null;
       }
       if (!_isDisposed) {
         notifyListeners();
