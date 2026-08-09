@@ -191,4 +191,61 @@ void main() {
       expect(result.failures, isNotEmpty);
     });
   });
+
+  group('v78 character_book 非数字 key 兼容', () {
+    test('entries 用 UUID 字符串 key 不崩溃且正常导入', () async {
+      final card = jsonDecode(_charCardJson) as Map<String, dynamic>;
+      final data = card['data'] as Map<String, dynamic>;
+      data['character_book'] = {
+        'name': '测试书',
+        'entries': {
+          'entry_abc': {
+            'keys': ['关键词1'],
+            'content': '条目内容1',
+            'enabled': true,
+          },
+          'entry_def': {
+            'keys': ['关键词2'],
+            'content': '条目内容2',
+            'enabled': true,
+          },
+        },
+      };
+      final result = await CharacterService.instance.importBatch(
+        files: [(name: 'UUID书.json', bytes: _bytes(jsonEncode(card)))],
+      );
+      expect(result.characterCount, 1);
+      expect(result.failures, isEmpty);
+      // 内嵌世界书自动创建（2 条非数字 key 条目全部保留）
+      final summaries = await CharacterService.instance.loadAllSummaries();
+      final record = await CharacterService.instance.loadById(summaries.single.id);
+      expect(record, isNotNull);
+      final worldBooks = await WorldBookService.instance.loadAll();
+      expect(
+        worldBooks.where((b) => b.entries.length == 2),
+        isNotEmpty,
+      );
+    });
+  });
+
+  group('v78 findSameNameConflicts 同名预检', () {
+    test('已存在同名角色时返回冲突名单', () async {
+      await CharacterService.instance.importBatch(
+        files: [(name: '角色A.json', bytes: _bytes(_charCardJson))],
+      );
+      final conflicts = await CharacterService.instance.findSameNameConflicts(
+        [(name: '角色A副本.json', bytes: _bytes(_charCardJson))],
+      );
+      expect(conflicts, ['测试角色']);
+    });
+
+    test('无同名角色时返回空列表', () async {
+      final otherCard = jsonDecode(_charCardJson) as Map<String, dynamic>;
+      (otherCard['data'] as Map<String, dynamic>)['name'] = '另一个角色';
+      final conflicts = await CharacterService.instance.findSameNameConflicts(
+        [(name: '新卡.json', bytes: _bytes(jsonEncode(otherCard)))],
+      );
+      expect(conflicts, isEmpty);
+    });
+  });
 }
