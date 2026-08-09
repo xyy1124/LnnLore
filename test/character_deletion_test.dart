@@ -43,6 +43,10 @@ void main() {
   });
 
   setUp(() async {
+    // v78：先关闭数据库连接释放 Windows 文件锁——此前 setUp 直接清目录，
+    // SQLite 连接仍持有 DB 文件导致 PathAccessException（errno 32），
+    // 本文件两个测试从未真正执行过断言（删除级联/头像清理无测试覆盖）。
+    await ChatDatabaseService.instance.close();
     await StorageService.instance.clearAllData();
     await WorldBookService.instance.clearAllData();
     await CharacterService.instance.clearAllData();
