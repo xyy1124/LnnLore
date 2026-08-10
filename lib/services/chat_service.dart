@@ -72,6 +72,22 @@ class ChatService {
   int _currentTrackerJudgeTurn(String sessionId) =>
       _trackerJudgeTurns[sessionId] ?? 0;
 
+  /// v80：会话状态代次——切分支/删分支/重置/删会话时递增，使进行中
+  /// 的后台裁判**整体过期**（旧裁判不得再提交变量、也不得重建已删
+  /// 消息的快照）。轮次令牌只覆盖"新一轮发送"，覆盖不了这些破坏性
+  /// 操作（切分支后旧裁判仍视为 current，把旧分支状态写进新分支）。
+  final Map<String, int> _sessionStateGenerations = {};
+
+  int _currentStateGeneration(String sessionId) =>
+      _sessionStateGenerations[sessionId] ?? 0;
+
+  /// v80：使该会话所有进行中的后台裁判过期（切分支/删分支/重置/
+  /// 删会话前调用）。
+  void invalidatePendingJudges(String sessionId) {
+    _sessionStateGenerations[sessionId] =
+        (_sessionStateGenerations[sessionId] ?? 0) + 1;
+  }
+
   /// v70：每会话的后台裁判任务队列——开始新一轮前 await 上一轮结算，
   /// 保证"正文先显示、状态稍后更新，但用户下次发送前上一轮状态必须
   /// 结算完成"（不丢状态、不覆盖）。
@@ -2498,6 +2514,10 @@ class ChatService {
     required String userText,
     required String assistantText,
   }) async {
+    // v80：启动时记录状态代次——切分支/删分支/重置/删会话会使
+    // 代次递增，提交前校验不一致则整体丢弃（旧裁判既不能提交
+    // 变量，也不能重建已删消息的快照/写孤儿数据）
+    final stateGeneration = _currentStateGeneration(sessionId);
     // 后台裁判失败/未启用不影响已显示的正文（状态保持主模型结果）
     final judgeResult = await _judgeTrackerState(
       config: config,
@@ -2508,6 +2528,14 @@ class ChatService {
       mainPatch: processed.patch,
     );
     if (judgeResult == null) {
+      return;
+    }
+    // v80：提交前校验状态代次（await 期间可能切分支/删分支/重置）
+    if (stateGeneration != _currentStateGeneration(sessionId)) {
+      debugPrint(
+        '[TRACKER_JUDGE] 状态代次已变更（切分支/删分支/重置），'
+        '丢弃过期裁判结果',
+      );
       return;
     }
     final judgePatch = judgeResult.$1;
