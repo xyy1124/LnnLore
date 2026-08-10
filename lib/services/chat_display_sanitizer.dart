@@ -134,25 +134,47 @@ class ChatDisplaySanitizer {
       return hasHtmlTag && looksLikeStatus(value);
     }
 
-    bool attrsLookLikeStatus(String attrs) {
+    bool divLooksLikeStatus(String attrs, String body) {
       final hasStatusClass = RegExp(
         "class\\s*=\\s*[\"'][^\"']*(?:status|tracker|panel|状态|面板)[^\"']*[\"']",
         caseSensitive: false,
       ).hasMatch(attrs);
-      final hasStatusStyle = RegExp(
+      if (hasStatusClass) {
+        return true;
+      }
+      // v79：background 样式不再单独判定状态面板——叙事排版常用
+      // <div style="background:...">正文</div> 包裹段落，单凭背景样式
+      // 会被当面板剥掉，且块外有正文时恢复链不触发（v78 marker 清洗
+      // 引入的正文丢失回归）。需同时命中内容强特征（状态栏/面板/
+      // 变量引用/状态字段词）才认。
+      final hasBackgroundStyle = RegExp(
         "style\\s*=\\s*[\"'][^\"']*(?:background|background-color)[^\"']*[\"']",
         caseSensitive: false,
       ).hasMatch(attrs);
-      return hasStatusClass || hasStatusStyle;
-    }
-
-    bool divLooksLikeStatus(String attrs, String body) {
-      if (!attrsLookLikeStatus(attrs)) {
+      if (!hasBackgroundStyle) {
         return false;
       }
-      // 有 status/panel class 或 background 样式可放宽；
-      // 仅 border（attrsLookLikeStatus 已排除）不单独作数。
-      return true;
+      final lower = body.toLowerCase();
+      if (lower.contains('status') ||
+          lower.contains('tracker') ||
+          lower.contains('状态：') ||
+          lower.contains('状态:') ||
+          lower.contains('状态栏') ||
+          lower.contains('状态面板') ||
+          lower.contains('面板') ||
+          lower.contains('{{getvar') ||
+          lower.contains('烙印值') ||
+          lower.contains('服装状态') ||
+          lower.contains('黑丝状态')) {
+        return true;
+      }
+      // 短 "label：值" 形态（如"地点：森林"）——状态面板 div 内容
+      // 通常是单行短文本；叙事背景 div 包裹的正文段落明显更长。
+      // 以 60 字符为界，长正文不判为面板（v79 防误删的核心场景）。
+      if (body.length <= 60 && body.contains('：')) {
+        return true;
+      }
+      return false;
     }
 
     void addStatus(String? value) {
