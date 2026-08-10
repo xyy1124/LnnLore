@@ -2,13 +2,18 @@ package com.adoretes.pocketinn
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.net.Uri
+import android.os.Build
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.util.Base64
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -18,10 +23,16 @@ import kotlin.concurrent.thread
 /// 通过 ACTION_OPEN_DOCUMENT_TREE 选择文件夹，在后台线程递归读取
 /// json/png/zip 文件，以 base64 返回给 Dart 层做自动分辨导入。
 /// 防护：单文件 30MB、总量 50MB，隐藏文件与无关类型跳过。
+///
+/// v81：应用内自更新安装（PackageInstaller）——接收 Dart 侧下载好的
+/// APK 路径，创建安装会话写入并提交，SessionCallback 回调结果；
+/// Android 8+ 未授权"安装未知应用"时引导去设置页。
 class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "pocket_inn/folder_import"
+        private const val INSTALL_CHANNEL = "pocket_inn/app_installer"
         private const val REQUEST_OPEN_TREE = 7401
+        private const val REQUEST_INSTALL_PERMISSION = 7402
         private const val MAX_FILE_BYTES = 30L * 1024 * 1024
         // 总量上限 50MB：base64 传输会膨胀约 3-4 倍峰值内存，
         // 角色导入场景足够，避免低内存设备 OOM。
@@ -32,12 +43,31 @@ class MainActivity : FlutterActivity() {
     private val picking = AtomicBoolean(false)
     private val destroyed = AtomicBoolean(false)
 
+    // v81：安装状态（与文件夹选择共用 destroyed 标记）
+    private var pendingInstallResult: MethodChannel.Result? = null
+    private val installing = AtomicBoolean(false)
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "pickFolderAndReadFiles" -> pickFolderAndReadFiles(result)
+                    else -> result.notImplemented()
+                }
+            }
+        // v81：应用内自更新安装通道
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, INSTALL_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "installApk" -> {
+                        val path = call.argument<String>("path")
+                        if (path == null) {
+                            result.error("bad_args", "missing apk path", null)
+                        } else {
+                            installApk(path, result)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -53,32 +83,39 @@ class MainActivity : FlutterActivity() {
             picking.set(false)
             result.error("cancelled", "folder picker cancelled", null)
         }
+        // v81：安装期间 Activity 被销毁：回复 cancelled
+        val installResult = pendingInstallResult
+        if (installResult != null) {
+            pendingInstallResult = null
+            installing.set(false)
+            installResult.error("cancelled", "install cancelled", null)
+        }
         super.onDestroy()
     }
 
-    private fun pickFolderAndReadFiles(result: MethodChannel.Result) {
-        if (picking.getAndSet(true)) {
-            result.error("busy", "folder picker already active", null)
-            return
-        }
-        pendingResult = result
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            addFlags(
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-            )
-        }
-        try {
-            startActivityForResult(intent, REQUEST_OPEN_TREE)
-        } catch (e: Exception) {
-            picking.set(false)
-            pendingResult = null
-            result.error("intent", "cannot open folder picker: ${e.message}", null)
-        }
-    }
+    // ---- v81：应用内自更新安装 ----
 
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == REQUEST_INSTALL_PERMISSION) {
+            // 从"安装未知应用"设置页返回：重新检查授权
+            val result = pendingInstallResult
+            pendingInstallResult = null
+            installing.set(false)
+            if (result == null) {
+                return
+            }
+            val authorized = Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+                packageManager.canRequestPackageInstalls()
+            if (authorized) {
+                // 重新触发安装（授权后返回的 intent 不带 apk 路径，用挂起字段）
+                installApkPath?.let { installApk(it, result) }
+                    ?: result.error("install_failed", "missing apk path", null)
+            } else {
+                result.error("not_authorized", "unknown app sources not authorized", null)
+            }
+            return
+        }
         if (requestCode != REQUEST_OPEN_TREE) {
             super.onActivityResult(requestCode, resultCode, data)
             return
@@ -129,6 +166,117 @@ class MainActivity : FlutterActivity() {
                 picking.set(false)
                 if (!destroyed.get()) {
                     result.error("read", "failed to read folder: ${e.message}", null)
+                }
+            }
+        }
+    }
+
+    /// 授权流程中挂起的 apk 路径（从设置页返回后重新发起安装用）。
+    private var installApkPath: String? = null
+
+    private fun installApk(path: String, result: MethodChannel.Result) {
+        if (installing.getAndSet(true)) {
+            result.error("busy", "install already active", null)
+            return
+        }
+        // Android 8.0+ 需要"安装未知应用"授权
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            installing.set(false)
+            pendingInstallResult = result
+            installApkPath = path
+            try {
+                startActivityForResult(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:$packageName")
+                    ),
+                    REQUEST_INSTALL_PERMISSION
+                )
+            } catch (e: Exception) {
+                pendingInstallResult = null
+                installApkPath = null
+                result.error("not_authorized", "cannot open install settings: ${e.message}", null)
+            }
+            return
+        }
+        startInstallSession(path, result)
+    }
+
+    private fun startInstallSession(path: String, result: MethodChannel.Result) {
+        pendingInstallResult = result
+        installApkPath = path
+        val apkFile = File(path)
+        if (!apkFile.exists()) {
+            pendingInstallResult = null
+            installApkPath = null
+            installing.set(false)
+            result.error("install_failed", "apk not found: $path", null)
+            return
+        }
+        thread {
+            try {
+                val packageInstaller = packageManager.packageInstaller
+                val params = PackageInstaller.SessionParams(
+                    PackageInstaller.SessionParams.MODE_FULL_INSTALL
+                )
+                val sessionId = packageInstaller.createSession(params)
+                val session = packageInstaller.openSession(sessionId)
+                val input = FileInputStream(apkFile)
+                val output = session.openWrite("lnnlore_update", 0, apkFile.length())
+                try {
+                    input.use { inputStream ->
+                        output.use { out ->
+                            val buffer = ByteArray(256 * 1024)
+                            while (true) {
+                                val read = inputStream.read(buffer)
+                                if (read < 0) break
+                                out.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    session.abandon()
+                    throw e
+                }
+                // 注册会话回调拿安装结果（commit 不传 IntentSender，
+                // 结果由 SessionCallback.onSessionFinished 提供）
+                val callback = object : PackageInstaller.SessionCallback() {
+                    override fun onSessionSealed(id: Int) {}
+                    override fun onSessionFinished(id: Int, success: Boolean) {
+                        if (id != sessionId) return
+                        packageInstaller.unregisterSessionCallback(this)
+                        runOnUiThread {
+                            val r = pendingInstallResult
+                            pendingInstallResult = null
+                            installApkPath = null
+                            installing.set(false)
+                            if (success) {
+                                r?.success(true)
+                            } else {
+                                r?.error(
+                                    "install_failed",
+                                    "package install failed（签名不一致或安装被拒绝）",
+                                    null
+                                )
+                            }
+                        }
+                    }
+
+                    override fun onSessionActive(id: Int) {}
+                    override fun onSessionBadgingChanged(id: Int) {}
+                    override fun onSessionProgressChanged(id: Int, progress: Float) {}
+                }
+                packageInstaller.registerSessionCallback(callback)
+                session.commit(null)
+            } catch (e: Exception) {
+                runOnUiThread {
+                    val r = pendingInstallResult
+                    pendingInstallResult = null
+                    installApkPath = null
+                    installing.set(false)
+                    r?.error("install_failed", "install failed: ${e.message}", null)
                 }
             }
         }
