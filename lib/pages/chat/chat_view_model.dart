@@ -1109,7 +1109,19 @@ class ChatViewModel extends ChangeNotifier {
     }
     _isSwitchingSession = true;
     notifyListeners();
-    _loadSession(preferredSessionId: sessionId);
+    // v79：加载异常必须复位切换锁——此前 unawaited 无 catch，
+    // _loadSession 任一 DB/解析异常都会让 _isSwitchingSession 停在
+    // true，发送按钮永久禁用（只能退出聊天页重进）。
+    unawaited(
+      _loadSession(preferredSessionId: sessionId).catchError((Object error) {
+        debugPrint('selectSession load failed: $error');
+        if (!_isDisposed) {
+          _isSwitchingSession = false;
+          _unfreezeMessages();
+          notifyListeners();
+        }
+      }),
+    );
     return true;
   }
 
@@ -1339,10 +1351,16 @@ class ChatViewModel extends ChangeNotifier {
       final reloadSessionId = persistedSession?.id;
       // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
       // 再加载产生多次中间重建、流式结束后视口跳动
+      // v79：重载异常必须吞掉——Dart 语义下内层 finally 只解冻，异常
+      // 传播会跳过外层 finally 剩余的 _isSending 复位（v78 曾因此把
+      // 发送状态永久锁死）；重载失败不阻塞状态清理，原始异常仍由
+      // 外层 catch/rethrow 处理。
       try {
         if (reloadSessionId != null || !_isDraftSession) {
           await _loadSession(preferredSessionId: reloadSessionId ?? session.id);
         }
+      } on Object {
+        // 重载失败静默：下次发送/切会话会重新加载
       } finally {
         _unfreezeMessages();
       }
@@ -1470,10 +1488,16 @@ class ChatViewModel extends ChangeNotifier {
       final reloadSessionId = persistedSession?.id;
       // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
       // 再加载产生多次中间重建、流式结束后视口跳动
+      // v79：重载异常必须吞掉——Dart 语义下内层 finally 只解冻，异常
+      // 传播会跳过外层 finally 剩余的 _isSending 复位（v78 曾因此把
+      // 发送状态永久锁死）；重载失败不阻塞状态清理，原始异常仍由
+      // 外层 catch/rethrow 处理。
       try {
         if (reloadSessionId != null || !_isDraftSession) {
           await _loadSession(preferredSessionId: reloadSessionId ?? session.id);
         }
+      } on Object {
+        // 重载失败静默：下次发送/切会话会重新加载
       } finally {
         _unfreezeMessages();
       }
@@ -1590,8 +1614,12 @@ class ChatViewModel extends ChangeNotifier {
       _resetPendingMessages();
       // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
       // 再加载产生多次中间重建、流式结束后视口跳动
+      // v79：重载异常必须吞掉（见 sendMessage 同款注释），防止异常
+      // 传播跳过 _isSending 复位导致发送状态永久锁死
       try {
         await _loadSession(preferredSessionId: session.id);
+      } on Object {
+        // 重载失败静默：下次发送/切会话会重新加载
       } finally {
         _unfreezeMessages();
       }
@@ -1707,8 +1735,12 @@ class ChatViewModel extends ChangeNotifier {
       _resetPendingMessages();
       // v51：先加载（保持冻结，一次性更新消息）再解冻——避免先解冻
       // 再加载产生多次中间重建、流式结束后视口跳动
+      // v79：重载异常必须吞掉（见 sendMessage 同款注释），防止异常
+      // 传播跳过 _isSending 复位导致发送状态永久锁死
       try {
         await _loadSession(preferredSessionId: session.id);
+      } on Object {
+        // 重载失败静默：下次发送/切会话会重新加载
       } finally {
         _unfreezeMessages();
       }
