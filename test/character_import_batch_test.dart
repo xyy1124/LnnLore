@@ -247,5 +247,39 @@ void main() {
       );
       expect(conflicts, isEmpty);
     });
+
+    test('v79 同批次两张同名新卡 → 冲突列表包含该名（防止静默覆盖）', () async {
+      final conflicts = await CharacterService.instance.findSameNameConflicts([
+        (name: 'A.json', bytes: _bytes(_charCardJson)),
+        (name: 'B.json', bytes: _bytes(_charCardJson)),
+      ]);
+      // 预检时两者都未持久化，但批内同名必须计入冲突
+      expect(conflicts, ['测试角色']);
+    });
+  });
+
+  group('v79 独立世界书非数字 key 兼容', () {
+    test('UUID/字符串 key 的独立世界书导入不崩溃', () async {
+      final wb = {
+        'name': '独立世界书',
+        'entries': {
+          'entry_abc': {
+            'keys': ['关键词1'],
+            'content': '条目内容1',
+            'enabled': true,
+          },
+          'entry_def': {
+            'keys': ['关键词2'],
+            'content': '条目内容2',
+            'enabled': true,
+          },
+        },
+      };
+      final result = await CharacterService.instance.importBatch(
+        files: [(name: '独立.json', bytes: _bytes(jsonEncode(wb)))],
+      );
+      expect(result.worldBookCount, 1);
+      expect(result.failures, isEmpty);
+    });
   });
 }
