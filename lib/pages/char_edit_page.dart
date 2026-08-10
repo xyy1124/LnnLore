@@ -96,7 +96,60 @@ class _RoleEditPageState extends State<RoleEditPage> {
     tags = List<String>.from(data['tags'] as List? ?? const []);
     _selectedWorldBookId = widget.initialWorldBookId;
     _initialBackgroundImage = _imageProviderForPath(widget.imagePath);
+    // v80：未保存修改保护——监听全部编辑 controller，任一内容变化
+    // 标记 dirty；返回/系统返回时弹确认（此前手滑返回整页修改白丢）
+    _dirtyControllers
+      ..addAll([
+        nameController,
+        descriptionController,
+        personalityController,
+        scenarioController,
+        firstMesController,
+        mesExampleController,
+        creatorNotesController,
+        systemPromptController,
+        postHistoryInstructionsController,
+        _newTagController,
+        ..._greetingControllers,
+      ])
+      ..forEach((c) => c.addListener(_markDirty));
     _loadWorldBooks();
+  }
+
+  /// v80：编辑内容是否有未保存修改。
+  bool _dirty = false;
+  final List<TextEditingController> _dirtyControllers = [];
+
+  void _markDirty() {
+    _dirty = true;
+  }
+
+  /// v80：返回前检查未保存修改——有修改弹确认，避免白丢。
+  Future<void> _handleBackPressed() async {
+    if (!_dirty) {
+      Navigator.maybePop(context);
+      return;
+    }
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('有未保存的修改'),
+        content: const Text('当前编辑内容尚未保存，确定离开吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('继续编辑'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('放弃修改'),
+          ),
+        ],
+      ),
+    );
+    if (leave == true && mounted) {
+      Navigator.maybePop(context);
+    }
   }
 
   Future<void> _loadWorldBooks() async {
@@ -113,6 +166,9 @@ class _RoleEditPageState extends State<RoleEditPage> {
 
   @override
   void dispose() {
+    for (final controller in _dirtyControllers) {
+      controller.removeListener(_markDirty);
+    }
     nameController.dispose();
     descriptionController.dispose();
     personalityController.dispose();
@@ -199,6 +255,8 @@ class _RoleEditPageState extends State<RoleEditPage> {
     });
 
     if (!mounted) return;
+    // v80：保存成功清除未保存标记
+    _dirty = false;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('角色已保存')));
@@ -353,23 +411,32 @@ class _RoleEditPageState extends State<RoleEditPage> {
   void _removeCurrentGreeting() {
     if (_greetingControllers.isEmpty) return;
     setState(() {
-      _greetingControllers[_currentGreetingIndex].dispose();
+      _greetingControllers[_currentGreetingIndex]
+        ..removeListener(_markDirty)
+        ..dispose();
       _greetingControllers.removeAt(_currentGreetingIndex);
       alternateGreetings.removeAt(_currentGreetingIndex);
       if (_greetingControllers.isEmpty) {
         alternateGreetings = [''];
-        _greetingControllers = [TextEditingController()];
+        final fresh = TextEditingController();
+        _dirtyControllers.add(fresh);
+        fresh.addListener(_markDirty);
+        _greetingControllers = [fresh];
         _currentGreetingIndex = 0;
       } else if (_currentGreetingIndex >= _greetingControllers.length) {
         _currentGreetingIndex = _greetingControllers.length - 1;
       }
+      _markDirty();
     });
   }
 
   void _addNewGreeting() {
     setState(() {
       alternateGreetings.add('');
-      _greetingControllers.add(TextEditingController());
+      final fresh = TextEditingController();
+      _dirtyControllers.add(fresh);
+      fresh.addListener(_markDirty);
+      _greetingControllers.add(fresh);
       _currentGreetingIndex = _greetingControllers.length - 1;
     });
   }
@@ -419,7 +486,17 @@ class _RoleEditPageState extends State<RoleEditPage> {
     final surface = colorScheme.surface;
     final hasPortrait = _hasPortrait;
 
-    return Scaffold(
+    // v80：系统返回键/手势也走未保存检查（AppBar 返回按钮走
+    // _handleBackPressed，这里兜住其余返回路径）
+    return PopScope(
+      canPop: !_dirty,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) {
+          return;
+        }
+        await _handleBackPressed();
+      },
+      child: Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -436,7 +513,8 @@ class _RoleEditPageState extends State<RoleEditPage> {
               ),
             ],
           ),
-          onPressed: () => Navigator.maybePop(context),
+          // v80：返回前检查未保存修改
+          onPressed: _handleBackPressed,
         ),
         title: TextField(
           controller: nameController,
@@ -878,6 +956,7 @@ class _RoleEditPageState extends State<RoleEditPage> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
