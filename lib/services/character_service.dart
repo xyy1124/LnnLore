@@ -348,6 +348,10 @@ class CharacterService {
     List<ImportFileEntry> files,
   ) async {
     final conflicts = <String>{};
+    // v79：批内同名也计入冲突——同批次两张同名新卡时，预检阶段两者
+    // 都未持久化（旧逻辑查不到已有角色），导入时第二张会静默覆盖
+    // 第一张，绕过覆盖确认。
+    final seenInBatch = <String>{};
     for (final entry in files) {
       final ext = ArchiveImportService.extensionOf(entry.name);
       Map<String, dynamic>? cardJson;
@@ -375,9 +379,10 @@ class CharacterService {
         continue;
       }
       final existing = await _findSameNameCharacter(name);
-      if (existing != null) {
+      if (existing != null || seenInBatch.contains(name)) {
         conflicts.add(name);
       }
+      seenInBatch.add(name);
     }
     final sorted = conflicts.toList()..sort();
     return sorted;
