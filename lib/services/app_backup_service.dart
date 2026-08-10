@@ -123,12 +123,17 @@ class AppBackupService {
     // manifest/preferences 的"合法"zip 会通过校验，随后清空全部数据
     // 并恢复成空聊天库（静默丢数据）。当前导出把 DB 放在 data/ 段
     // （dataDir 递归收走），旧版备份可能在 database/ 段，两种都认。
+    // v79：收紧为精确匹配主数据库文件路径——旧实现 endsWith('.db')
+    // 不限位置（根目录 decoy.db 可绕过）、isWithin(database/) 不查
+    // 扩展名（database/readme.txt、-wal/-shm 可绕过），坏 zip 仍可
+    // 清空用户数据。
     final hasDatabaseFile = archive.files.any((file) {
       if (!file.isFile) {
         return false;
       }
       final path = p.posix.normalize(file.name);
-      return path.endsWith('.db') || p.posix.isWithin(_databaseRoot, path);
+      return path == '$_dataRoot/pocket_inn_chat.db' ||
+          path == '$_databaseRoot/pocket_inn_chat.db';
     });
     if (!hasDatabaseFile) {
       throw const FormatException(
