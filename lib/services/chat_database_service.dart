@@ -459,11 +459,18 @@ class ChatDatabaseService {
           messageIds.length,
           '?',
         ).join(',');
+        // v80：拆分双条件删除（同 deleteMessageBranch 的 v80 修复）——
+        // 旧实现双份绑定消息 ID，500+ 条消息时超 SQLite 999 变量上限，
+        // 整笔删除事务回滚（长会话删除失败）。
         await tx.delete(
           'chat_branch_state',
-          where:
-              'parent_message_id IN ($messagePlaceholders) OR active_child_message_id IN ($messagePlaceholders)',
-          whereArgs: [...messageIds, ...messageIds],
+          where: 'parent_message_id IN ($messagePlaceholders)',
+          whereArgs: messageIds,
+        );
+        await tx.delete(
+          'chat_branch_state',
+          where: 'active_child_message_id IN ($messagePlaceholders)',
+          whereArgs: messageIds,
         );
       }
 
@@ -942,11 +949,18 @@ class ChatDatabaseService {
       final parentId = messageRow['parent_id'] as String?;
 
       final placeholders = List.filled(subtreeIds.length, '?').join(',');
+      // v80：拆分双条件删除——旧实现把 subtreeIds 双份绑定（parent +
+      // active_child），SQLite 999 变量上限下约 500 条消息即超限、
+      // 整笔事务回滚（长分支/大会话删除失败）。拆成两条各绑一份。
       await tx.delete(
         'chat_branch_state',
-        where:
-            'parent_message_id IN ($placeholders) OR active_child_message_id IN ($placeholders)',
-        whereArgs: [...subtreeIds, ...subtreeIds],
+        where: 'parent_message_id IN ($placeholders)',
+        whereArgs: subtreeIds,
+      );
+      await tx.delete(
+        'chat_branch_state',
+        where: 'active_child_message_id IN ($placeholders)',
+        whereArgs: subtreeIds,
       );
 
       await tx.delete(
@@ -1171,11 +1185,18 @@ class ChatDatabaseService {
           messageIds.length,
           '?',
         ).join(',');
+        // v80：拆分双条件删除（同 deleteMessageBranch 的 v80 修复）——
+        // 旧实现双份绑定消息 ID，500+ 条消息时超 SQLite 999 变量上限，
+        // 整笔删除事务回滚（长会话删除失败）。
         await tx.delete(
           'chat_branch_state',
-          where:
-              'parent_message_id IN ($messagePlaceholders) OR active_child_message_id IN ($messagePlaceholders)',
-          whereArgs: [...messageIds, ...messageIds],
+          where: 'parent_message_id IN ($messagePlaceholders)',
+          whereArgs: messageIds,
+        );
+        await tx.delete(
+          'chat_branch_state',
+          where: 'active_child_message_id IN ($messagePlaceholders)',
+          whereArgs: messageIds,
         );
       }
 
