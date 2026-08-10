@@ -3,7 +3,9 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/error_handler.dart';
+import '../models/app_update_info.dart';
 import '../services/version_check_service.dart';
+import '../widgets/update_dialog.dart';
 
 class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
@@ -103,6 +105,15 @@ class _AboutPageState extends State<AboutPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                _UpdateLogItem(
+                  version: 'v1.4.0-special.81',
+                  date: '2026-08-10',
+                  changes: [
+                    '【特别版】应用内自更新（国内直连）：设置 → 关于 → 检查更新发现新版本后可直接在应用内下载并安装，不再需要跳浏览器下载 APK；下载自动走国内加速镜像回退（GitHub 直连 → ghfast.top → ghproxy.net → gh-proxy.com），无需代理；启动时自动检查发现新版也会弹出更新对话框',
+                    '【特别版】安装流程：下载显示进度条（可取消）→ 系统安装确认（PackageInstaller）→ 安装结果明确提示（签名不一致等错误可读）',
+                    '【测试】新增 5 项回归测试（更新信息解析 4 项/镜像回退链 1 项），全量 644 项通过',
+                  ],
+                ),
                 _UpdateLogItem(
                   version: 'v1.4.0-special.80',
                   date: '2026-08-10',
@@ -968,6 +979,9 @@ class _VersionCheckCardState extends State<_VersionCheckCard> {
   bool _checking = false;
   String? _resultText;
 
+  // v81：检查到的新版本信息（有值时显示"立即更新"按钮）
+  AppUpdateInfo? _pendingUpdate;
+
   // v57：检查更新需要与本地安装版本比较
   late final Future<PackageInfo> _packageInfoFuture;
 
@@ -1005,19 +1019,23 @@ class _VersionCheckCardState extends State<_VersionCheckCard> {
     setState(() {
       _checking = true;
       _resultText = null;
+      _pendingUpdate = null;
     });
     try {
-      final latestTag = await service.fetchLatestTag();
+      // v81：改用 fetchLatestUpdate 拿完整更新信息（含 APK 下载地址），
+      // 检查到新版可直接应用内更新
+      final update = await service.fetchLatestUpdate();
       if (!mounted) {
         return;
       }
-      if (latestTag == null) {
+      if (update == null) {
         setState(() {
           _checking = false;
           _resultText = '未获取到远程版本信息（网络问题或仓库无 release）';
         });
         return;
       }
+      final latestTag = update.tagName;
       // v57：默认仓库为自己的发布仓库——比较本地安装版本与最新 tag；
       // 仅当发布仓库配置回上游时走上游锚点比较。
       final packageInfo = await _packageInfoFuture;
@@ -1038,8 +1056,9 @@ class _VersionCheckCardState extends State<_VersionCheckCard> {
           _resultText = '已是最新版本（最新 $latestTag，当前 '
               '${packageInfo.version}）';
         } else {
+          _pendingUpdate = update;
           _resultText = '发现新版本：$latestTag（当前 '
-              '${packageInfo.version}），可前往 GitHub 查看更新说明并获取新版本';
+              '${packageInfo.version}）';
         }
       });
     } catch (error) {
@@ -1051,6 +1070,23 @@ class _VersionCheckCardState extends State<_VersionCheckCard> {
         _resultText = '检查失败：$error';
       });
     }
+  }
+
+  /// v81：应用内直接更新（下载 + 安装）。
+  Future<void> _startUpdate() async {
+    final update = _pendingUpdate;
+    if (update == null) {
+      return;
+    }
+    final packageInfo = await _packageInfoFuture;
+    if (!mounted) {
+      return;
+    }
+    await UpdateDialog.show(
+      context,
+      update: update,
+      currentVersion: packageInfo.version,
+    );
   }
 
   Future<void> _editConfig() async {
@@ -1154,6 +1190,15 @@ class _VersionCheckCardState extends State<_VersionCheckCard> {
           Text(
             _resultText!,
             style: const TextStyle(fontSize: 13, height: 1.4),
+          ),
+        ],
+        // v81：检查到新版时显示"立即更新"（应用内下载 + 安装）
+        if (_pendingUpdate != null) ...[
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: _startUpdate,
+            icon: const Icon(Icons.download, size: 18),
+            label: const Text('立即更新'),
           ),
         ],
         const SizedBox(height: 8),
