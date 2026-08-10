@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_inn/services/character_service.dart';
+import 'package:pocket_inn/services/chat_database_service.dart';
 import 'package:pocket_inn/services/storage_service.dart';
 import 'package:pocket_inn/services/world_book_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -65,6 +66,9 @@ void main() {
   });
 
   tearDownAll(() async {
+    // v80：删除角色会初始化 ChatDatabaseService，先关 DB 释放文件锁，
+    // 否则 tearDownAll 删 tempDir 时 Windows 报 errno 32
+    await ChatDatabaseService.instance.close();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_pathProviderChannel, null);
     if (await tempDir.exists()) {
@@ -280,6 +284,45 @@ void main() {
       );
       expect(result.worldBookCount, 1);
       expect(result.failures, isEmpty);
+    });
+  });
+
+  group('v80 世界书引用检查', () {
+    Map<String, dynamic> _cardWithBook() {
+      final card = jsonDecode(_charCardJson) as Map<String, dynamic>;
+      final data = card['data'] as Map<String, dynamic>;
+      data['character_book'] = {
+        'name': '测试书',
+        'entries': {
+          '0': {'keys': ['k'], 'content': '内容', 'enabled': true},
+        },
+      };
+      return card;
+    }
+
+    test('被角色使用的世界书禁止直接删除', () async {
+      await CharacterService.instance.importBatch(
+        files: [(name: '带书.json', bytes: _bytes(jsonEncode(_cardWithBook())))],
+      );
+      final books = await WorldBookService.instance.loadAll();
+      expect(books, hasLength(1));
+      await expectLater(
+        WorldBookService.instance.delete(books.single.id),
+        throwsA(isA<FormatException>()),
+      );
+      // 世界书仍在
+      final after = await WorldBookService.instance.loadAll();
+      expect(after, hasLength(1));
+    });
+
+    test('删除引用角色后私有世界书随之删除', () async {
+      await CharacterService.instance.importBatch(
+        files: [(name: '带书.json', bytes: _bytes(jsonEncode(_cardWithBook())))],
+      );
+      final summaries = await CharacterService.instance.loadAllSummaries();
+      await CharacterService.instance.delete(summaries.single.id);
+      final books = await WorldBookService.instance.loadAll();
+      expect(books, isEmpty);
     });
   });
 }
