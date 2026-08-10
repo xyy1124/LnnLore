@@ -474,8 +474,25 @@ class TrackerRuntime {
       // v78：双向越界兜底——值低于所有区间下限取第一段（最低阶段），
       // 高于所有区间上限取最后一段（最高阶段）。此前无匹配一律取
       // 最后一段，数值低于首段 gte 时阶段标题/描述完全颠倒。
+      // v79：按 gte 升序排序后再取首尾（gte null 视为负无穷）——
+      // 卡声明 ranges 乱序时数组首尾可能不是最低/最高阶段。
       if (presentation.ranges.isNotEmpty) {
-        final first = presentation.ranges.first;
+        final sorted = List<TrackerRangeDescription>.of(presentation.ranges)
+          ..sort((a, b) {
+            final ag = a.gte;
+            final bg = b.gte;
+            if (ag == null && bg == null) {
+              return 0;
+            }
+            if (ag == null) {
+              return -1;
+            }
+            if (bg == null) {
+              return 1;
+            }
+            return ag.compareTo(bg);
+          });
+        final first = sorted.first;
         if (first.gte != null && numValue < first.gte!) {
           return TrackerStageInfo(
             title: first.title,
@@ -483,7 +500,7 @@ class TrackerRuntime {
             text: first.text,
           );
         }
-        final last = presentation.ranges.last;
+        final last = sorted.last;
         return TrackerStageInfo(
           title: last.title,
           color: last.color,
