@@ -104,6 +104,22 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.79',
+                  date: '2026-08-10',
+                  changes: [
+                    '【特别版】修复 v78 引入的发送状态锁死回归：重载会话异常时内层 finally 只解冻、异常传播跳过 _isSending 复位——发送键永久禁用；4 条发送路径统一吞掉重载异常，保证状态必然复位',
+                    '【特别版】修复 v78 引入的正文误删回归：叙事排版用的 <div style="background:..."> 长段落曾被当状态面板剥掉（marker 清洗路径）——背景样式不再单独判定面板，需配合状态特征词或短 label：值 形态',
+                    '【特别版】会话切换异常不再锁死：selectSession 加载失败时复位切换锁并提示（此前 DB/解析异常会让发送按钮永久禁用）',
+                    '【特别版】批内同名覆盖确认补齐：同一批次两张同名新卡也会触发覆盖确认（此前预检只查已存在角色，批内第二张静默覆盖第一张）',
+                    '【特别版】备份恢复校验收紧：只认 data/pocket_inn_chat.db 或 database/pocket_inn_chat.db 主文件——根目录 decoy.db、database/readme.txt、-wal/-shm 不再能通过校验（坏 zip 清空数据路径彻底堵死）',
+                    '【特别版】独立世界书非数字 key 兼容：UUID/字符串 key 的 entries 不再导入崩溃（角色卡内嵌路径 v78 已修，独立世界书路径漏了，现已统一）',
+                    '【特别版】状态阶段乱序兼容：卡声明 ranges 顺序与数值不一致时，越界兜底按 gte 排序取真实最低/最高阶段（此前取数组首尾会颠倒）',
+                    '【特别版】快捷指令发送统一错误提示：失败不再静默吞掉，询问型指令的补充内容会写回输入框',
+                    '【特别版】JSON 落盘原子写：先写临时文件再替换，崩溃/断电不再留下半截索引（此前索引损坏后下次保存以空重建，角色/世界书从列表消失）',
+                    '【测试】新增 9 项回归测试（叙事 div 保护/备份绕过 3 例/批内同名/独立世界书 UUID key/stageInfo 乱序），全量 635 项通过',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.78',
                   date: '2026-08-10',
                   changes: [
