@@ -446,5 +446,26 @@ void main() {
       expect(result.displayText, '正文结束。');
       expect(result.specialStatusHtml, contains('烙印值'));
     });
+
+    test('v79 叙事背景 div（长正文段落）不被当面板剥掉', () {
+      const text =
+          '「我们走吧。」\n'
+          '<div style="background:#f5f0e8;padding:16px;">月光洒在石板路上，'
+          '她伸手接住一片飘落的樱花，说这里的春天总是来得太早，'
+          '话音未落便笑出了声。</div>\n'
+          '她走在前头。';
+      final result = ChatDisplaySanitizer.extract(text);
+      // 长正文 + background 样式 ≠ 状态面板：正文完整保留
+      expect(result.displayText, contains('月光洒在石板路上'));
+      expect(result.displayText, contains('她走在前头'));
+      expect(result.specialStatusHtml, isNull);
+    });
+
+    test('v79 短 label：值 的 background div 仍是面板', () {
+      const text = '正文。\n<div style="background:#1a1a2e;">地点：森林</div>';
+      final result = ChatDisplaySanitizer.extract(text);
+      expect(result.displayText.trim(), '正文。');
+      expect(result.specialStatusHtml, contains('森林'));
+    });
   });
 }
