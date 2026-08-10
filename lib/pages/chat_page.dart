@@ -1194,10 +1194,21 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _onImpersonate() async {
+    // v80：点帮答时输入框已有草稿 → 不自动填充（此前生成结果整体
+    // 覆盖草稿）；生成期间用户手动输入 → 停止填充（不再覆盖）。
+    final hadDraft = _textController.text.trim().isNotEmpty;
+    var lastWritten = '';
     try {
       final reply = await _viewModel.generateUserReply(
         onProgress: (text) {
-          if (!mounted) return;
+          if (!mounted || hadDraft) {
+            return;
+          }
+          // 用户中途自己输入/修改过就不再自动填充
+          if (_textController.text != lastWritten) {
+            return;
+          }
+          lastWritten = text;
           _textController.text = text;
           _textController.selection = TextSelection.fromPosition(
             TextPosition(offset: text.length),
@@ -1205,6 +1216,23 @@ class _ChatPageState extends State<ChatPage> {
         },
       );
       if (reply == null || reply.isEmpty || !mounted) {
+        return;
+      }
+      if (hadDraft) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('输入框已有内容，帮答结果未填入（清空后重新点击即可）'),
+          ),
+        );
+        return;
+      }
+      // 用户生成期间输入过内容：不覆盖
+      if (_textController.text != lastWritten) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('生成期间你已输入内容，帮答结果未覆盖'),
+          ),
+        );
         return;
       }
       _textController.text = reply;
