@@ -71,10 +71,62 @@ class _PresetEditPageState extends State<PresetEditPage> {
     _fixedRole = _preset.extra['fixed_prompts_role'] as String? ?? 'system';
     _enableReasoning = _preset.extra['enable_reasoning'] as bool? ?? false;
     _reasoningEffort = _preset.extra['reasoning_effort'] as String? ?? 'high';
+    // v80：未保存修改保护——controller 变化标记 dirty，返回时确认
+    _dirtyControllers
+      ..addAll([
+        _nameController,
+        _temperatureController,
+        _contextController,
+        _maxTokensController,
+        _continueNudgeController,
+        _impersonationController,
+        _newChatPromptController,
+        _newExampleChatController,
+      ])
+      ..forEach((c) => c.addListener(_markDirty));
+  }
+
+  /// v80：编辑内容是否有未保存修改。
+  bool _dirty = false;
+  final List<TextEditingController> _dirtyControllers = [];
+
+  void _markDirty() {
+    _dirty = true;
+  }
+
+  /// v80：返回前检查未保存修改——有修改弹确认，避免白丢。
+  Future<void> _handleBackPressed() async {
+    if (!_dirty) {
+      Navigator.maybePop(context);
+      return;
+    }
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('有未保存的修改'),
+        content: const Text('当前编辑内容尚未保存，确定离开吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('继续编辑'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('放弃修改'),
+          ),
+        ],
+      ),
+    );
+    if (leave == true && mounted) {
+      Navigator.maybePop(context);
+    }
   }
 
   @override
   void dispose() {
+    for (final controller in _dirtyControllers) {
+      controller.removeListener(_markDirty);
+    }
     _nameController.dispose();
     _temperatureController.dispose();
     _contextController.dispose();
@@ -129,6 +181,8 @@ class _PresetEditPageState extends State<PresetEditPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('预设已保存')));
+    // v80：保存成功清除未保存标记
+    _dirty = false;
     Navigator.pop(context, true);
   }
 
@@ -202,12 +256,22 @@ class _PresetEditPageState extends State<PresetEditPage> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Scaffold(
+    // v80：系统返回键/手势也走未保存检查
+    return PopScope(
+      canPop: !_dirty,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) {
+          return;
+        }
+        await _handleBackPressed();
+      },
+      child: Scaffold(
       backgroundColor: colorScheme.surface,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.maybePop(context),
+          // v80：返回前检查未保存修改
+          onPressed: _handleBackPressed,
         ),
         title: TextField(
           controller: _nameController,
@@ -240,6 +304,7 @@ class _PresetEditPageState extends State<PresetEditPage> {
         ],
       ),
       body: _buildPromptList(),
+      ),
     );
   }
 
