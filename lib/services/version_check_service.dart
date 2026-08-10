@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../models/app_update_info.dart';
 import 'storage_service.dart';
 
 /// 特别版：GitHub 新版本检查服务。
@@ -104,6 +105,41 @@ class VersionCheckService {
       }
       await _setLastChecked(DateTime.now());
       return tag;
+    } on Object {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// v81：查询最新 release 的完整更新信息（tag + APK 下载地址 + 大小
+  /// + 更新说明），供应用内自更新使用。返回 null 表示无 release /
+  /// 无 .apk asset / 网络或解析失败。
+  Future<AppUpdateInfo?> fetchLatestUpdate() async {
+    final owner = await getOwner();
+    final repo = await getRepo();
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+    try {
+      final request = await client.getUrl(
+        Uri.parse('https://api.github.com/repos/$owner/$repo/releases/latest'),
+      );
+      request.headers.set(HttpHeaders.acceptHeader, 'application/vnd.github+json');
+      request.headers.set(HttpHeaders.userAgentHeader, 'PocketInn-Special');
+      final response = await request.close().timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) {
+        return null;
+      }
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 15));
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      final update = AppUpdateInfo.fromLatestReleaseJson(decoded);
+      if (update == null) {
+        return null;
+      }
+      await _setLastChecked(DateTime.now());
+      return update;
     } on Object {
       return null;
     } finally {
