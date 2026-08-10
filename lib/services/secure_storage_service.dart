@@ -25,6 +25,17 @@ class SecureStorageService {
     await _storage.delete(key: '$_apiKeyPrefix$configId');
   }
 
+  /// v80：清理全部 API key（重置/清空数据时调用）——secure storage
+  /// 无法按前缀列举，先 readAll 再按前缀删除。
+  Future<void> clearApiKeys() async {
+    final all = await _storage.readAll();
+    for (final key in all.keys) {
+      if (key.startsWith(_apiKeyPrefix)) {
+        await _storage.delete(key: key);
+      }
+    }
+  }
+
   Future<void> saveSecret(String key, String value) async {
     if (value.trim().isEmpty) {
       await _storage.delete(key: key);
