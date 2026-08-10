@@ -326,7 +326,17 @@ class CharacterService {
         await _deleteIfExists(File(record.thumbnailPath));
       }
       if (record.worldBookId != null && record.worldBookId!.isNotEmpty) {
-        await WorldBookService.instance.delete(record.worldBookId!);
+        // v80：共享世界书不误删——只有不再被其他角色引用时才删除
+        // （此前无条件删 worldBookId 关联的世界书，多个角色共享时
+        // 会误伤其他角色的世界书）
+        final referencing = await WorldBookService.instance
+            .findReferencingCharacters(
+          record.worldBookId!,
+          exceptCharacterId: id,
+        );
+        if (referencing.isEmpty) {
+          await WorldBookService.instance.delete(record.worldBookId!);
+        }
       }
     }
 
