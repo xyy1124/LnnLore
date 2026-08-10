@@ -196,8 +196,24 @@ abstract class WorldBook with _$WorldBook {
     }
 
     final entries = <WorldBookEntry>[];
+    // v79：key 排序兼容非数字字符串（UUID/entry_abc 等第三方工具导出）
+    // ——此前强制 int.parse 会抛 FormatException 导致独立世界书导入
+    // 失败（角色卡内嵌路径 v78 已修，此路径漏了）。
     final sortedKeys = entriesData.keys.toList()
-      ..sort((a, b) => int.parse(a).compareTo(int.parse(b)));
+      ..sort((a, b) {
+        final an = int.tryParse(a);
+        final bn = int.tryParse(b);
+        if (an != null && bn != null) {
+          return an.compareTo(bn);
+        }
+        if (an != null) {
+          return -1;
+        }
+        if (bn != null) {
+          return 1;
+        }
+        return a.compareTo(b);
+      });
 
     for (final key in sortedKeys) {
       final entryJson = entriesData[key] as Map<String, dynamic>;
