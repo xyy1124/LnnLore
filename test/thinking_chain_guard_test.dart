@@ -83,6 +83,30 @@ void main() {
       expect(result, contains('步骤'));
     });
 
+    test('v80 步骤标题轻微改写（关键词容错）仍通过', () {
+      // "1. 前文文风分析"（去掉"与格式"）、"12. 回复规划（色情向）"
+      // （加后缀）——此前精确包含不命中会判违规触发最多 10 次整段
+      // 重发（烧 token）
+      final text = '<think>\n1. 前文文风分析：直白高密度。\n'
+          '2. 状态栏变化：衣物需要更新。\n3. 人物关系：角色与用户。\n'
+          '4. 姿势与动作：身体接触升级。\n5. 场景分析：深夜卧室。\n'
+          '6. 输入分析：推进互动。\n7. 外部知识：无。\n8. 前文伏笔：无。\n'
+          '9. 当前人物设定：性格。\n10. 认知局限：角色视角。\n'
+          '11. 心理模拟：分析。\n12. 回复规划（色情向）：长回复。\n'
+          '</think>\n正文';
+      expect(ThinkingChainGuard.validateComplete(text), isNull);
+    });
+
+    test('v80 无步骤标记的自由发挥仍判违规（不放宽到不思考）', () {
+      final freeform = '<think>\n让我先看看场景，角色现在穿着很性感的衣服，'
+          '气氛很暧昧，我觉得应该描写她的胸部、臀部和腿，还有衣服被汗湿透的'
+          '样子，然后加一些呻吟声，最后强调她的羞耻感，状态面板也要更新，'
+          '用长回复来表现这一切，突出身体的诚实反应和内心的抗拒，'
+          '语言要露骨直接，把她的沉沦过程完整写出来。\n</think>\n正文';
+      final result = ThinkingChainGuard.validateComplete(freeform);
+      expect(result, isNotNull);
+    });
+
     test('未以 <think> 开头判违规', () {
       final text = '直接输出正文，没有思考';
       final result = ThinkingChainGuard.validateComplete(text);
