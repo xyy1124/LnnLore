@@ -923,12 +923,21 @@ class ChatViewModel extends ChangeNotifier {
     // 这里，若 unawaited 则 UI 可能在变量刷新完成前渲染（状态栏显示
     // 旧值直到下一次 notify）。await 保证气泡拿到的是数据库最终值。
     await _refreshSessionVariables(bundle.session.id);
+    // v80：await 后重新校验——快速连续切会话时旧加载链的 continuation
+    // 不得在变量刷新后继续覆盖新会话的字段（k3 审查发现：generation
+    // 检查只在 await 前，刷新后旧链仍会覆盖缓存/活动会话/设置）
+    if (_isDisposed || loadGeneration != _sessionLoadGeneration) {
+      return;
+    }
     // v51：分支状态恢复——切换分支/删除分支/重新打开会话后，把 tracker
     // 状态恢复到当前分支最后一条角色消息的时刻（v3 快照），否则全局
     // 变量停留在旧分支推进后的状态。仅当最后一条不是用户消息时恢复
     // （用户消息后无回复时旁白已实时落地、无快照可回，强回滚会丢旁白）。
     if (_messages.isNotEmpty && !_messages.last.isMe) {
       await _restoreTrackerBaseline();
+      if (_isDisposed || loadGeneration != _sessionLoadGeneration) {
+        return;
+      }
     }
     // 特别版：会话切换/加载时清空上一次的接口真实用量
     _lastRealUsage = null;
@@ -1101,7 +1110,9 @@ class ChatViewModel extends ChangeNotifier {
 
   /// 从侧边栏选择一个会话。返回是否已开始切换（false 表示当前正在发送）。
   bool selectSession(String sessionId) {
-    if (_isSending || _isImpersonating) {
+    // v80：切换进行中拒绝重叠切换——旧加载链的 continuation 可能
+    // 覆盖新会话状态（快速连点多个会话时界面/设置错乱）
+    if (_isSending || _isImpersonating || _isSwitchingSession) {
       return false;
     }
     if (sessionId == _activeSession?.id) {
@@ -1926,6 +1937,9 @@ class ChatViewModel extends ChangeNotifier {
       return;
     }
 
+    // v80：删除分支前使进行中的后台裁判过期——否则裁判返回后按旧
+    // messageId 重建已删消息快照（孤儿变量）、污染当前会话状态
+    getIt<ChatService>().invalidatePendingJudges(session.id);
     await getIt<ChatDatabaseService>().deleteMessageBranch(
       sessionId: session.id,
       messageId: message!.id!,
@@ -1967,6 +1981,10 @@ class ChatViewModel extends ChangeNotifier {
       return;
     }
 
+    // v80：切分支前使进行中的后台裁判过期——否则旧分支裁判返回时
+    // 仍被视为 current（切分支不改变轮次令牌），把旧分支状态写进
+    // 新分支的会话变量（状态栏显示错分支数值）
+    getIt<ChatService>().invalidatePendingJudges(session.id);
     await getIt<ChatDatabaseService>().switchActiveBranch(
       sessionId: session.id,
       parentMessageId: message.parentId,
@@ -2082,6 +2100,9 @@ class ChatViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // v80：重置会话前使进行中的后台裁判过期——否则旧裁判返回后
+      // 会把旧分支状态写回清空后的会话（污染新开局）
+      getIt<ChatService>().invalidatePendingJudges(session.id);
       await getIt<ChatDatabaseService>().resetSession(
         sessionId: session.id,
         title: nextTitle,
