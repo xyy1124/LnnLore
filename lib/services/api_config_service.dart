@@ -99,6 +99,25 @@ class ApiConfigService {
 
   Future<void> saveAll(List<ApiConfig> configs, String? selectedModelId) async {
     _checkInitialized();
+    // v80：先清理已删除配置的残留 key——secure storage 的 key 按
+    // config.id 存储，删除配置后旧 key 一直残留（deleteApiKey 存在
+    // 但业务代码从未调用），凭据长期留在设备。读现有文件里的旧 ID
+    // 列表，与新列表做差集后逐个删除。
+    final existing = await StorageService.instance.readJsonMap(_filename);
+    if (existing != null) {
+      final oldItems = existing['items'];
+      if (oldItems is List) {
+        final oldIds = oldItems
+            .whereType<Map>()
+            .map((m) => m['id'] as String? ?? '')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        final newIds = configs.map((c) => c.id).toSet();
+        for (final staleId in oldIds.difference(newIds)) {
+          await SecureStorageService.instance.deleteApiKey(staleId);
+        }
+      }
+    }
     // 先同步 apiKey 到安全存储
     for (final config in configs) {
       await SecureStorageService.instance.saveApiKey(
@@ -136,6 +155,9 @@ class ApiConfigService {
   Future<void> resetToDefaults() async {
     _checkInitialized();
     await StorageService.instance.deleteJsonFile(_filename);
+    // v80：重置配置时清理全部残留 API key（此前只删 JSON，secure
+    // storage 里的 api_key_* 一直残留成有效凭据）
+    await SecureStorageService.instance.clearApiKeys();
     await _bootstrapDefaultsIfNeeded();
   }
 
