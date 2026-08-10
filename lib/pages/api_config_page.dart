@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -352,6 +353,28 @@ class _OpenAICompatibleConfigPageState
   }
 
   Future<void> _deleteModel(ApiConfig item, ApiModel model) async {
+    // v80：删除模型前确认（此前无确认直接改草稿，与删除配置的
+    // 持久化行为不一致）
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除模型'),
+        content: Text('确定删除模型 "${model.id}" 吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
     final itemIndex = _configItems.indexWhere((i) => i.id == item.id);
     if (itemIndex < 0) return;
     _disposeModelControllers(model.id);
@@ -363,6 +386,31 @@ class _OpenAICompatibleConfigPageState
   }
 
   Future<void> _deleteConfigItem(ApiConfig item) async {
+    // v80：删除整个配置（含全部模型）前确认——此前无确认立即持久化，
+    // 误点即不可恢复
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除配置'),
+        content: Text(
+          '确定删除配置 "${item.name}" 吗？'
+          '该配置下的全部模型（${item.models.length} 个）将一并删除，此操作不可恢复。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
     for (final m in item.models) {
       _disposeModelControllers(m.id);
     }
@@ -372,6 +420,55 @@ class _OpenAICompatibleConfigPageState
       _disposeControllersForItem(item.id);
     });
     await _persistConfigs(successMessage: '已删除配置: ${item.name}');
+  }
+
+  /// v80：是否有未保存修改——草稿与已保存（notifier）对比。
+  bool get _hasUnsavedChanges {
+    final current = jsonEncode(_configItems.map((c) => c.toJson()).toList());
+    final saved = jsonEncode(
+      apiConfigsNotifier.value.map((c) => c.toJson()).toList(),
+    );
+    return current != saved;
+  }
+
+  /// v80：返回前检查未保存修改——有修改时三选（保存并退出/放弃/取消）。
+  Future<void> _handleBackPressed() async {
+    if (!_hasUnsavedChanges) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('有未保存的修改'),
+        content: const Text('当前配置修改尚未保存，要如何处理？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'cancel'),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'discard'),
+            child: const Text('放弃修改'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'save'),
+            child: const Text('保存并退出'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    if (choice == 'discard') {
+      Navigator.of(context).pop();
+    } else if (choice == 'save') {
+      await _persistConfigs();
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    }
   }
 
   void _reorderConfigs(int oldIndex, int newIndex) {
@@ -437,12 +534,22 @@ class _OpenAICompatibleConfigPageState
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    // v80：系统返回键/手势也走未保存检查
+    return PopScope(
+      canPop: !_hasUnsavedChanges,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) {
+          return;
+        }
+        await _handleBackPressed();
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: const Text('API 配置'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
+          // v80：返回前检查未保存修改
+          onPressed: _handleBackPressed,
         ),
         actions: [
           if (_isSaving)
@@ -482,6 +589,7 @@ class _OpenAICompatibleConfigPageState
                 return _buildConfigCard(item);
               },
             ),
+      ),
     );
   }
 
