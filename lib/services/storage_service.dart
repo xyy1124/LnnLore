@@ -160,11 +160,26 @@ class StorageService {
   ///
   /// [filename] 文件名（不含路径）
   /// [content] 文件内容字符串
+  ///
+  /// v79：原子写——先落临时文件再替换。直接 writeAsString 在进程
+  /// 崩溃/断电时可能留下半截 JSON：索引解析失败返回空 → 下次任意
+  /// save 以空列表重建索引，角色/世界书/预设等从列表消失（实体文件
+  /// 仍在但不可见）。先 delete 再 rename 是 dart:io 在 Windows 上
+  /// 不允许 rename 覆盖已存在文件的限制。
   Future<void> writeJsonFile(String filename, String content) async {
     _checkInitialized();
 
+    final dir = Directory(_dataDir);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
     final file = File('$_dataDir/$filename');
-    await file.writeAsString(content);
+    final tmpFile = File('$_dataDir/$filename.tmp');
+    await tmpFile.writeAsString(content, flush: true);
+    if (await file.exists()) {
+      await file.delete();
+    }
+    await tmpFile.rename(file.path);
   }
 
   /// 读取 JSON 文件并解析为 Map
