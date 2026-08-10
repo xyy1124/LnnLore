@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../core/errors.dart';
 import '../models/api/openai_chat_completion_chunk.dart';
 import '../models/api/openai_chat_completion_response.dart';
 import '../models/api/openai_models_response.dart';
@@ -294,6 +295,9 @@ class OpenAICompatibleApiService implements IOpenAiApiService {
     }
     cancellationToken?.throwIfCancelled();
 
+    // v80：请求前输入预算校验（见 _checkInputBudget）
+    _checkInputBudget(config, messages, defaults);
+
     final endpoint = _buildUri(config.baseUrl, 'chat/completions');
     final requestBody = config.buildRequestBody(
       messages: messages,
@@ -400,6 +404,9 @@ class OpenAICompatibleApiService implements IOpenAiApiService {
     }
     cancellationToken?.throwIfCancelled();
 
+    // v80：请求前输入预算校验（见 _checkInputBudget）
+    _checkInputBudget(config, messages, defaults);
+
     final client = HttpClient();
     cancellationToken?._attach(client);
     final stopwatch = Stopwatch()..start();
@@ -458,13 +465,43 @@ class OpenAICompatibleApiService implements IOpenAiApiService {
       await for (final line in lineStream.timeout(_streamIdleTimeout)) {
         cancellationToken?.throwIfCancelled();
         final trimmedLine = line.trimRight();
-        if (trimmedLine.isEmpty) {
-          final eventPayload = dataLines.join('\n').trim();
-          dataLines.clear();
-          if (eventPayload.isEmpty) {
-            continue;
+        // v80：事件间不发送空行的服务——新的 data: 行到来且已有
+        // 累积帧时，先尝试把旧帧作为独立事件结算（整体 parse 成功
+        // 才算；多行 data: 拆分中的半帧继续累积，下次再试）
+        final isDataLine = trimmedLine.startsWith('data:');
+        if (isDataLine && dataLines.isNotEmpty) {
+          final standalone = _parseFrame(dataLines);
+          if (standalone != null) {
+            dataLines.clear();
+            if (standalone.textDelta.isNotEmpty) {
+              responseTextBuffer.write(standalone.textDelta);
+            }
+            if (standalone.thinkingDelta.isNotEmpty) {
+              reasoningBuffer.write(standalone.thinkingDelta);
+            }
+            yield standalone;
+            if (standalone.done) {
+              await ApiRequestLogService.instance.append(
+                configName: config.name,
+                model: config.model,
+                method: 'POST',
+                endpoint: endpoint.toString(),
+                success: true,
+                durationMs: stopwatch.elapsedMilliseconds,
+                statusCode: statusCode,
+                requestBody: sanitizedBody,
+                responseBody: _buildStreamingLogResponse(
+                  responseTextBuffer.toString(),
+                  reasoningBuffer.toString(),
+                ),
+              );
+              return;
+            }
           }
-          final progress = _parseStreamingEvent(eventPayload);
+        }
+        if (trimmedLine.isEmpty) {
+          final progress = _parseFrame(dataLines);
+          dataLines.clear();
           if (progress == null) {
             continue;
           }
@@ -495,13 +532,13 @@ class OpenAICompatibleApiService implements IOpenAiApiService {
           continue;
         }
 
-        if (trimmedLine.startsWith('data:')) {
+        if (isDataLine) {
           dataLines.add(trimmedLine.substring(5).trimLeft());
         }
       }
 
       if (dataLines.isNotEmpty) {
-        final progress = _parseStreamingEvent(dataLines.join('\n').trim());
+        final progress = _parseFrame(dataLines);
         if (progress != null) {
           if (progress.textDelta.isNotEmpty) {
             responseTextBuffer.write(progress.textDelta);
@@ -685,11 +722,69 @@ class OpenAICompatibleApiService implements IOpenAiApiService {
     config.parseCustomBody();
   }
 
+  /// v80：请求前输入预算校验——估算总字符超模型上下文（减输出
+  /// 预留）时抛明确错误（此前记忆关闭后完整历史超限只能等远端
+  /// 400/413，报错不可读）。估算粗放：中文约 1 字符 ≈ 1 token，
+  /// 英文约 4 字符 1 token——按字符数取上限方向，偏保守安全。
+  /// 注：ResolvedApiConfig 不含模型 contextWindow（模型级字段），
+  /// 这里用与 ApiModel 默认一致的 128000 兜底，精度损失可接受。
+  void _checkInputBudget(
+    ResolvedApiConfig config,
+    List<Map<String, dynamic>> messages,
+    Map<String, dynamic>? defaults,
+  ) {
+    const window = 128000;
+    final rawMaxTokens = defaults?['max_tokens'];
+    final outputReserve = rawMaxTokens is num && rawMaxTokens > 0
+        ? rawMaxTokens.toInt()
+        : 4096;
+    var estimated = 0;
+    for (final m in messages) {
+      final content = m['content'];
+      if (content is String) {
+        estimated += content.length;
+      }
+    }
+    final budget = window - outputReserve;
+    if (budget > 0 && estimated > budget) {
+      throw UnknownException(
+        '上下文超限：估算约 $estimated tokens（可用约 $budget）。'
+        '请在通用设置中开启"长期记忆"或减少历史消息',
+      );
+    }
+  }
+
   String _truncate(String value, {int maxLength = 120}) {
     if (value.length <= maxLength) {
       return value;
     }
     return '${value.substring(0, maxLength)}...';
+  }
+
+  /// v80：解析一帧 SSE（可能多行 data: 拆分）。整体解析优先；整体
+  /// 失败时逐行尝试独立解析——部分服务把单个 JSON 拆成多行 data:
+  /// 或事件间不发送空行，旧实现整体 parse 失败即静默丢弃整帧
+  /// （回复缺字/整段丢且上层无法区分）。
+  ChatCompletionProgress? _parseFrame(List<String> dataLines) {
+    if (dataLines.isEmpty) {
+      return null;
+    }
+    final joined = dataLines.join('\n').trim();
+    final progress = _parseStreamingEvent(joined);
+    if (progress != null) {
+      return progress;
+    }
+    for (final part in dataLines) {
+      final trimmed = part.trim();
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      final p = _parseStreamingEvent(trimmed);
+      if (p != null) {
+        return p;
+      }
+    }
+    return null;
   }
 
   ChatCompletionProgress? _parseStreamingEvent(String data) {
