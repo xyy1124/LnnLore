@@ -1,5 +1,7 @@
 ﻿<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- v81：应用内自更新安装（Android 8+ 需要"安装未知应用"授权） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
         android:label="LnnLore"
         android:name="${applicationName}"
