@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 
 import '../models/world_book.dart';
+import 'character_service.dart';
 import 'storage_service.dart';
 
 /// 世界书服务
@@ -152,8 +153,23 @@ class WorldBookService {
   }
 
   /// 删除世界书
-  Future<void> delete(String id) async {
+  ///
+  /// v80：删除前做引用检查——正被角色使用的世界书禁止直接删除
+  /// （此前删除后角色的 worldBookId 悬空；且删角色时无条件删共享
+  /// 世界书会误伤其他角色）。[exceptCharacterId] 供删角色流程豁免
+  /// 自己（只删无人共享的私有世界书）。
+  Future<void> delete(String id, {String? exceptCharacterId}) async {
     _checkInitialized();
+
+    final referencing = await findReferencingCharacters(
+      id,
+      exceptCharacterId: exceptCharacterId,
+    );
+    if (referencing.isNotEmpty) {
+      throw FormatException(
+        '该世界书正被 ${referencing.join('、')} 使用，无法删除（请先解除关联）',
+      );
+    }
 
     // 删除数据文件
     final file = File('$_worldBooksPath/$id.json');
@@ -165,6 +181,26 @@ class WorldBookService {
     final infos = await loadAllIndexInfo();
     infos.removeWhere((info) => info.id == id);
     await _saveIndexInfo(infos);
+  }
+
+  /// v80：世界书引用检查——返回引用该世界书的角色名列表（排除
+  /// [exceptCharacterId]）。角色卡数量少，遍历加载开销可接受。
+  Future<List<String>> findReferencingCharacters(
+    String worldBookId, {
+    String? exceptCharacterId,
+  }) async {
+    final summaries = await CharacterService.instance.loadAllSummaries();
+    final names = <String>[];
+    for (final s in summaries) {
+      if (s.id == exceptCharacterId) {
+        continue;
+      }
+      final record = await CharacterService.instance.loadById(s.id);
+      if (record != null && record.worldBookId == worldBookId) {
+        names.add(s.name);
+      }
+    }
+    return names;
   }
 
   Future<void> clearAllData() async {
