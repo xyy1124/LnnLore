@@ -192,10 +192,37 @@ class ThinkingChainGuard {
     return '输出未以 <think> 标签开头（应先在 <think> 内按模板完成 12 步思考）';
   }
 
+  /// v80：步骤标题关键词——模型轻微改写标题（"1. 前文文风分析"、
+  /// "12. 回复规划（色情向）"）时按关键词容错命中，不再因归一化
+  /// 精确包含不命中而误判违规（此前触发最多 10 次整段重发烧 token）。
+  static const Map<String, String> _stepKeywords = {
+    '1. 前文文风与格式分析': '文风',
+    '2. 状态栏变化': '状态栏',
+    '3. 人物关系': '人物关系',
+    '4. 姿势与动作': '姿势',
+    '5. 场景分析': '场景',
+    '6. 输入分析': '输入分析',
+    '7. 外部知识': '外部知识',
+    '8. 前文伏笔': '伏笔',
+    '9. 当前人物设定': '人物设定',
+    '10. 认知局限': '认知',
+    '11. 心理模拟': '心理',
+    '12. 回复规划': '回复规划',
+  };
+
+  /// 步骤是否命中正文：关键词优先（未配置关键词的步骤回退精确包含）。
+  static bool _stepHit(String step, String normalizedBody) {
+    final keyword = _stepKeywords[step];
+    if (keyword != null) {
+      return normalizedBody.contains(keyword);
+    }
+    return normalizedBody.contains(_normalizeStepText(step));
+  }
+
   /// 完整校验：流结束或非流式完成后调用。
   ///
   /// 返回 null 表示合规，否则返回违规原因。
-  /// 正文 <think> 块采用严格校验：必须包含 12 步标记（容错匹配，
+  /// 正文 <think> 块采用严格校验：必须包含 12 步标记（关键词容错匹配，
   /// 至少 6 步且第 1/12 步必备），不按模板思考的输出会被退回；
   /// 完全不思考的输出（无 `<think>` 或无内容）同样拦截。
   static String? validateComplete(String fullText) {
@@ -213,16 +240,16 @@ class ThinkingChainGuard {
     if (body.length < minThinkingChainBodyLength) {
       return '思维链内容过短（仅 ${body.length} 字），请按模板完整思考后再回复';
     }
-    // 严格模式：正文 <think> 块必须按 12 步模板输出
+    // 严格模式：正文 <think> 块必须按 12 步模板输出（v80：关键词容错）
     final normalizedBody = _normalizeStepText(body);
     final missingMandatory = mandatoryStepMarkers
-        .where((marker) => !normalizedBody.contains(_normalizeStepText(marker)))
+        .where((marker) => !_stepHit(marker, normalizedBody))
         .toList(growable: false);
     if (missingMandatory.isNotEmpty) {
       return '缺少关键步骤：${missingMandatory.join('、')}（必须严格按 12 步模板思考）';
     }
     final presentCount = requiredStepMarkers
-        .where((marker) => normalizedBody.contains(_normalizeStepText(marker)))
+        .where((marker) => _stepHit(marker, normalizedBody))
         .length;
     if (presentCount < minStepMarkerCount) {
       return '思维链步骤过少（仅 $presentCount/12 步），必须严格按模板完整输出 12 步思考';
