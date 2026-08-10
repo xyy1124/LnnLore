@@ -67,4 +67,58 @@ void main() {
       ]),
     );
   });
+
+  test('v79 根目录 decoy.db 不能通过校验（绕过修复）', () async {
+    final bytes = _zipWith([
+      'manifest.json',
+      'preferences.json',
+      'decoy.db',
+    ]);
+    await expectLater(
+      AppBackupService.instance.restoreBackupArchiveBytes(bytes),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('数据库文件'),
+        ),
+      ),
+    );
+  });
+
+  test('v79 database/ 段非 db 文件不能通过校验（绕过修复）', () async {
+    final bytes = _zipWith([
+      'manifest.json',
+      'preferences.json',
+      'database/readme.txt',
+    ]);
+    await expectLater(
+      AppBackupService.instance.restoreBackupArchiveBytes(bytes),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('数据库文件'),
+        ),
+      ),
+    );
+  });
+
+  test('v79 -wal/-shm 文件不能通过校验（绕过修复）', () async {
+    final bytes = _zipWith([
+      'manifest.json',
+      'preferences.json',
+      'data/pocket_inn_chat.db-wal',
+    ]);
+    await expectLater(
+      AppBackupService.instance.restoreBackupArchiveBytes(bytes),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('数据库文件'),
+        ),
+      ),
+    );
+  });
 }
