@@ -132,6 +132,41 @@ void main() {
     });
   });
 
+  group('v79 stageInfo 乱序 ranges 兜底', () {
+    TrackerConfig shuffledConfig() {
+      return TrackerConfig(
+        schemaVersion: 1,
+        stateSchema: {
+          'dld': const TrackerFieldSchema(
+            type: 'number',
+            label: '堕落',
+            min: 0,
+            max: 100,
+            presentation: TrackerFieldPresentation(ranges: [
+              TrackerRangeDescription(gte: 80, title: '后期'),
+              TrackerRangeDescription(gte: 0, lt: 40, title: '初期'),
+              TrackerRangeDescription(gte: 40, lt: 80, title: '中期'),
+            ]),
+          ),
+        },
+        initialState: {'dld': 0},
+        uiOrder: ['dld'],
+      );
+    }
+
+    test('乱序声明时低于下限仍取最低阶段（初期）', () {
+      final info = TrackerRuntime.stageInfo('dld', 0, shuffledConfig());
+      expect(info, isNotNull);
+      expect(info!.title, '初期');
+    });
+
+    test('乱序声明时高于上限取最高阶段（后期）', () {
+      final info = TrackerRuntime.stageInfo('dld', 90, shuffledConfig());
+      expect(info, isNotNull);
+      expect(info!.title, '后期');
+    });
+  });
+
   group('v78 marker 前缀残留清洗能力', () {
     test('extract 拆解标记前正文中的旧 JSON 协议块（reply 提取、patch 不残留）', () {
       final prefix =
