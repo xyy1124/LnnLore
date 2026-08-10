@@ -948,6 +948,34 @@ class _ChatPageState extends State<ChatPage> {
     _viewModel.stopStreaming();
   }
 
+  /// v79：快捷指令发送统一带错误处理——此前 unawaited 无 catch，
+  /// 失败静默吞掉且成为未处理异步错误（普通发送有 SnackBar、快捷
+  /// 指令没有）；询问型失败时把补充内容写回输入框（弹窗已关内容
+  /// 原本会丢）。
+  Future<void> _sendQuickCommand(
+    QuickCommand command, {
+    String? extraText,
+  }) async {
+    try {
+      await _viewModel.sendQuickCommand(command, extraText: extraText);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      if (extraText != null && extraText.isNotEmpty) {
+        _textController.text = extraText;
+        _textController.selection = TextSelection.fromPosition(
+          TextPosition(offset: extraText.length),
+        );
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
+        ),
+      );
+    }
+  }
+
   /// 特别版：消息动作按钮（模型 choices）点击：把动作作为消息发送给模型。
   void _onChoicePressed(String label, String action) {
     final text = action.isNotEmpty ? action : label;
@@ -1449,10 +1477,10 @@ class _ChatPageState extends State<ChatPage> {
                         onStopGeneratingPressed: _onStopGeneratingPressed,
                         quickCommands: _quickCommands,
                         onQuickCommand: (command) {
-                          _viewModel.sendQuickCommand(command);
+                          _sendQuickCommand(command);
                         },
                         onQuickCommandWithExtra: (command, extra) {
-                          _viewModel.sendQuickCommand(command, extraText: extra);
+                          _sendQuickCommand(command, extraText: extra);
                         },
                         contextUsedTokens: _viewModel.lastContextTotal,
                         // v61：分母用安全输入上限（窗口-输出预留-余量）
