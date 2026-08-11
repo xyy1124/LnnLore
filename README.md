@@ -198,6 +198,10 @@ number 字段可声明 `updatePolicy`——把"模糊程度词"量化成数值�
 - Flutter / Dart 3
 - 构建：`flutter run`（调试） / `flutter build apk --release`（Android 安装包）
 
+## 🔗 相关项目
+
+- **[character-card-creator](https://github.com/xyy1124/character-card-creator)**：配合本应用的引导式角色卡制作技能（ZCode 技能）——输出 Chara Card V2 兼容角色卡，含本应用 tracker 状态协议（`data.extensions.tracker`）的规范与公共验证器 `scripts/verify_tracker_v76_v77.js`
+
 ## 🙏 致谢
 
 - **上游项目 [PocketInn](https://github.com/adoretes/PocketInn)**：本项目基于其源码改造，特别感谢上游作者的开源贡献——一切新增功能都建立在它的坚实基础之上
