@@ -26,6 +26,7 @@ import 'tracker_runtime.dart';
 import 'deepseek_balance_service.dart';
 import 'i_openai_api_service.dart';
 import 'openai_compatible_api_service.dart';
+import 'api_request_log_service.dart';
 import 'preset_service.dart';
 import 'prompt_assembler.dart';
 import 'thinking_chain_guard.dart';
@@ -369,6 +370,8 @@ class ChatService {
     final turn = _nextTrackerJudgeTurn(activeSession.id);
       (StatePatch, Map<String, String>, Map<String, String>)? judgeResult;
       if (updateMode == TrackerUpdateMode.strict) {
+        // v87 调试埋点：strict 模式进入裁判调用
+        await _debugTraceJudge('strict_entry');
         try {
           judgeResult = await _judgeTrackerState(
             config: config,
@@ -380,6 +383,7 @@ class ChatService {
             mainPatch: processed.patch,
           );
         } on Object {
+          await _debugTraceJudge('strict_catch_error');
           judgeResult = null;
         }
       }
@@ -2215,6 +2219,9 @@ class ChatService {
     // 拥有第二次否决权（旧开关曾关闭的升级用户，后台/严格模式会失效）。
     final trackerConfig = TrackerConfig.fromCardJson(cardJson);
     if (!trackerConfig.isEnabled) {
+      // v87 调试埋点：裁判被调用但卡 tracker 未启用（写入请求日志，
+      // 备份可读；排查"后台模式裁判不调用"问题）
+      await _debugTraceJudge('enter_isEnabled_false cardJson=${cardJson != null}');
       return null;
     }
     final trackerKeys = <String>{
@@ -2232,9 +2239,14 @@ class ChatService {
       config: trackerConfig,
     );
     if (stateText.isEmpty) {
+      // v87 调试埋点：裁判被调用但状态文本为空
+      await _debugTraceJudge('enter_stateText_empty');
       return null;
     }
     final mode = await getTrackerJudgeMode();
+    // v87 调试埋点：裁判真正进入（准备发请求）
+    await _debugTraceJudge(
+        'enter_judge mode=$mode fields=${trackerConfig.stateSchema.length} stateLen=$stateText.length');
     // v83：分阶段日志——started（裁判任务开始，含模式与字段数，
     // 不记录正文）
     print('[TRACKER_JUDGE] started mode=$mode fields=${trackerConfig.stateSchema.length} '
@@ -2374,6 +2386,11 @@ class ChatService {
           useStreaming: false,
           cancellationToken: cancellationToken,
           enforceThinkingChain: false,
+          // v87 根因修复：裁判禁用 DeepSeek 原生 thinking——
+          // max_tokens 仅 512-1024，max 级思考吃光预算 → 空回复
+          // → FormatException → 状态永不更新（实测 22:46 唯一成功
+          // 是思考恰好短的运气）。裁判只需 JSON 输出，无需推理。
+          forceDeepSeekThinkingMode: DeepSeekThinkingMode.disabled,
         );
         if (completion.isPartial && attempt == 0) {
           print('[TRACKER_JUDGE] response attempt=$attempt isPartial=true '
@@ -2447,9 +2464,30 @@ class ChatService {
       );
       return null;
     } on Object catch (error) {
+      // v87 调试埋点：裁判请求抛异常被吞（请求可能根本没发出）
+      final err = error.toString();
+      await _debugTraceJudge(
+          'catch_error ${err.length > 150 ? err.substring(0, 150) : err}');
       // 裁判失败不影响主流程（状态保持主模型 patch 结果）
       print('[TRACKER_JUDGE] 裁判请求失败（忽略）: $error');
       return null;
+    }
+  }
+
+  /// v87 调试埋点：把裁判链路各分支写入请求日志（备份可读，
+  /// 排查"后台模式裁判不调用"——vivo 过滤 logcat 无法看 print）。
+  Future<void> _debugTraceJudge(String stage) async {
+    try {
+      await ApiRequestLogService.instance.append(
+        configName: 'TRACKER_DEBUG',
+        model: '',
+        method: 'TRACE',
+        endpoint: stage,
+        success: true,
+        durationMs: 0,
+      );
+    } on Object {
+      // 埋点失败不影响主流程
     }
   }
 
@@ -2516,6 +2554,8 @@ class ChatService {
     required String userText,
     required String assistantText,
   }) async {
+    // v87 调试埋点：后台裁判任务入口（确认是否被调用）
+    await _debugTraceJudge('background_entry turn=$turn msg=$messageId');
     // v70：整个裁判任务注册进会话队列——下一轮发送前会被等待
     // v83：queued 日志（后台裁判入队，含轮次与队列状态）
     print('[TRACKER_JUDGE] queued turn=$turn session=${sessionId.length > 6 ? sessionId.substring(sessionId.length - 6) : sessionId} '
@@ -2794,13 +2834,19 @@ class ChatService {
     ChatCompletionCancelToken? cancellationToken,
     void Function(ChatCompletionProgress progress)? onStreamProgress,
     bool enforceThinkingChain = false,
+    // v87：裁判/结构化输出等场景强制禁用 DeepSeek 原生 thinking——
+    // max 级思考会吃光小 max_tokens 预算导致空回复（v87 实测根因：
+    // 裁判 max_tokens=896 + reasoning_effort=max → 空回复 → FormatException
+    // → 状态永不更新）。null = 跟随设置；非 null 覆盖。
+    DeepSeekThinkingMode? forceDeepSeekThinkingMode,
   }) async {
     final api = GetIt.instance<IOpenAiApiService>();
     // 特别版：DeepSeek 官方端点判断（host 精确匹配）
     final isDeepSeek = DeepSeekBalanceService.isDeepSeekEndpoint(config.baseUrl);
     // 特别版：DeepSeek 原生 thinking 开启时用宽松校验（自由推理不承诺 12 步标题），
     // 防止最多 10 次退回重试烧 token。
-    final deepSeekThinkingMode = appSettingsNotifier.value.deepSeekThinkingMode;
+    final deepSeekThinkingMode = forceDeepSeekThinkingMode ??
+        appSettingsNotifier.value.deepSeekThinkingMode;
     final nativeThinking =
         isDeepSeek && deepSeekThinkingMode != DeepSeekThinkingMode.disabled;
     if (!useStreaming) {
@@ -2944,6 +2990,8 @@ class ChatService {
     void Function(ChatCompletionProgress progress)? onStreamProgress,
     bool enforceThinkingChain = false,
     void Function(int attempt, String reason)? onThinkingChainRetry,
+    // v87：裁判等结构化输出场景强制禁用 DeepSeek 原生 thinking
+    DeepSeekThinkingMode? forceDeepSeekThinkingMode,
   }) async {
     if (!enforceThinkingChain) {
       return _createCompletionOnce(
@@ -2953,6 +3001,7 @@ class ChatService {
         useStreaming: useStreaming,
         cancellationToken: cancellationToken,
         onStreamProgress: onStreamProgress,
+        forceDeepSeekThinkingMode: forceDeepSeekThinkingMode,
       );
     }
     if (!appSettingsNotifier.value.enableThinkingChainGuard) {
@@ -2972,6 +3021,7 @@ class ChatService {
         useStreaming: useStreaming,
         cancellationToken: cancellationToken,
         onStreamProgress: onStreamProgress,
+        forceDeepSeekThinkingMode: forceDeepSeekThinkingMode,
       );
     }
 
@@ -2991,6 +3041,7 @@ class ChatService {
           cancellationToken: cancellationToken,
           onStreamProgress: onStreamProgress,
           enforceThinkingChain: true,
+          forceDeepSeekThinkingMode: forceDeepSeekThinkingMode,
         );
       } on ThinkingChainViolationException catch (error) {
         attempt++;
