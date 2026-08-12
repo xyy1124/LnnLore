@@ -1512,62 +1512,58 @@ class TrackerRuntime {
   static String selectRelevantText(
     String text, {
     required TrackerConfig config,
-    int maxChars = 3500,
+    int maxChars = 8000,
   }) {
     if (text.length <= maxChars) {
       return text;
     }
-    // 收集所有字段的提示关键词（semanticHints 三组 + label + aliases）
-    final keywords = <String>{};
-    for (final schema in config.stateSchema.values) {
-      if (schema.label.isNotEmpty) {
-        keywords.add(schema.label);
-      }
-      keywords.addAll(schema.aliases);
-      final hints = schema.updatePolicy?.semanticHints;
-      if (hints != null) {
-        keywords
-          ..addAll(hints.positiveSignals)
-          ..addAll(hints.negativeSignals)
-          ..addAll(hints.neutralSignals);
-      }
-    }
-    // 程度词（qualitativeDeltas 的键）也视为关键词
-    for (final schema in config.stateSchema.values) {
-      final deltas = schema.updatePolicy?.qualitativeDeltas.keys;
-      if (deltas != null) {
-        keywords.addAll(deltas);
-      }
-    }
-
-    // 按段落拆分，命中关键词的段落优先保留
+    // v86：不再按关键词筛选中段。旧实现只保留命中 label/aliases/
+    // semanticHints/qualitativeDeltas 的段落——v85 裁判已改成语义驱动，
+    // 但输入层仍是关键词字面命中："思维被重塑""套上那件薄纱"等语义
+    // 同义表达不命中"常识改写/深度洗脑"等整词，完成事件被确定性删除，
+    // 裁判看不到证据 → 空 patch（v85 xno_layer 不更新根因）。
+    // 改为段落均匀采样：首尾必保，中段按字符预算等距取段，任意位置
+    // 的事件都有同等机会进入裁判；配合调用方提高的 soft 阈值，常规
+    // 单轮正文完整传入，裁剪只作为 hard budget 降级手段。
     final paragraphs = text.split(RegExp(r'\n+'));
     final head = paragraphs.first;
     final tail = paragraphs.last;
-    final hitParagraphs = paragraphs
-        .where((p) => keywords.any((k) => k.isNotEmpty && p.contains(k)))
-        .toList();
-    // 开头 + 结尾保底——**无论有无关键词命中都保留首尾**（v82 修复：
-    // 旧实现无命中时只保留首段，长正文中后段的状态事件被裁掉，裁判
-    // 看不到证据返回空 patch——"首条成功后续失败"的直接原因）
     final result = StringBuffer();
     result.write('（开头）$head\n');
     if (head != tail && paragraphs.length > 1) {
-      if (hitParagraphs.isNotEmpty) {
-        // 命中段落按字符预算累积（v82：旧实现按 24 段上限再整体截断，
-        // 结尾常被砍掉；改为预算内保留，保证结尾不被裁）
-        final budget = maxChars - head.length - tail.length - 40;
-        var used = 0;
-        final kept = <String>[];
-        for (final para in hitParagraphs) {
-          if (used + para.length + 1 > budget) {
-            break;
+      final budget = maxChars - head.length - tail.length - 40;
+      if (budget > 0) {
+        final middle = paragraphs.sublist(1, paragraphs.length - 1);
+        if (middle.isNotEmpty) {
+          // 估算中段平均段长 → 预算可容纳的目标段数
+          final totalMiddle =
+              middle.fold<int>(0, (a, b) => a + b.length + 1);
+          final targetCount =
+              (budget / (totalMiddle / middle.length)).ceil().clamp(1, middle.length);
+          // 等距步长采样：第 0 段起每隔 stride 取一段，覆盖全文各位置
+          final stride = (middle.length / targetCount).ceil();
+          var used = 0;
+          final kept = <String>[];
+          for (var i = 0; i < middle.length && used < budget; i += stride) {
+            if (used + middle[i].length + 1 > budget) {
+              break;
+            }
+            kept.add(middle[i]);
+            used += middle[i].length + 1;
           }
-          kept.add(para);
-          used += para.length + 1;
-        }
-        if (kept.isNotEmpty) {
-          result.write('（中间）${kept.join('\n')}\n');
+          // 步长采样连一段都装不下（罕见）→ 退化为顺序取段
+          if (kept.isEmpty) {
+            for (final para in middle) {
+              if (used + para.length + 1 > budget) {
+                break;
+              }
+              kept.add(para);
+              used += para.length + 1;
+            }
+          }
+          if (kept.isNotEmpty) {
+            result.write('（中间）${kept.join('\n')}\n');
+          }
         }
       }
       result.write('（结尾）$tail');
