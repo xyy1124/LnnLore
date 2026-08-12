@@ -86,6 +86,21 @@ class ChatPage extends StatefulWidget {
 
   @override
   State<ChatPage> createState() => _ChatPageState();
+
+  /// v84：解冻后是否需要跳到新底部（而非恢复旧 pixels）。
+  /// 仅当解冻前旧快照**不可滚动**（内容不足一屏，滚动范围≈0）且
+  /// 视口处于逻辑底部时返回 true——此时旧 pixels（0）在新列表下
+  /// 只代表顶部，恢复会造成视窗跳动。epsilon 只容忍浮点误差，
+  /// 不把明显可滚动的小列表归入 underfilled。
+  @visibleForTesting
+  static bool shouldRestoreToNewBottomAfterUnfreeze({
+    required double minScrollExtent,
+    required double maxScrollExtent,
+    required double extentAfter,
+  }) {
+    final underfilled = (maxScrollExtent - minScrollExtent).abs() <= 0.5;
+    return underfilled && extentAfter <= 24;
+  }
 }
 
 class _ChatPageState extends State<ChatPage> {
@@ -489,12 +504,24 @@ class _ChatPageState extends State<ChatPage> {
   /// v59：解冻后恢复原像素位置——在解冻通知发生、新列表尚未布局前
   /// 取得当前 pixels，下一帧布局完成后 jumpTo 回去。用户在流式期间
   /// 手动滚动到哪里，完成后就停在哪里（不再依赖"尾部追加不会动"）。
+  /// v84：首条消息退化纠正——发送前列表只有短开场消息（不可滚动，
+  /// pixels=0 同时是顶部和底部），输出完成后列表变长，恢复旧 pixels=0
+  /// 会把视口钉在新列表**顶部**（视窗跳动）。此时（wasUnderfilled &&
+  /// wasAtBottom）改为对齐新底部（底部锚点 ensureVisible，不依赖
+  /// maxScrollExtent 估算）；已有可滚动历史仍恢复旧 pixels（第二、三
+  /// 轮行为不变）。
   void _preserveOffsetAfterUnfreeze() {
     if (!_scrollController.hasClients) {
       return;
     }
     final sessionId = _viewModel.activeSession?.id;
-    final pixels = _scrollController.position.pixels;
+    final position = _scrollController.position;
+    final pixels = position.pixels;
+    final restoreToBottom = ChatPage.shouldRestoreToNewBottomAfterUnfreeze(
+      minScrollExtent: position.minScrollExtent,
+      maxScrollExtent: position.maxScrollExtent,
+      extentAfter: position.extentAfter,
+    );
     final token = ++_viewportRestoreToken;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -504,11 +531,29 @@ class _ChatPageState extends State<ChatPage> {
           !_scrollController.hasClients) {
         return;
       }
-      final position = _scrollController.position;
+      final pos = _scrollController.position;
       _restoringScroll = true;
-      position.jumpTo(
-        pixels.clamp(position.minScrollExtent, position.maxScrollExtent),
-      );
+      if (restoreToBottom) {
+        // 底部纠正：对齐末尾真实锚点（ensureVisible 不依赖未构建
+        // item 的估算 maxScrollExtent，避免滚过头留白）
+        final anchorContext = _bottomAnchorKey.currentContext;
+        if (anchorContext != null) {
+          unawaited(
+            Scrollable.ensureVisible(
+              anchorContext,
+              alignment: 1.0,
+              alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+              duration: Duration.zero,
+            ),
+          );
+        } else {
+          pos.jumpTo(pos.maxScrollExtent);
+        }
+      } else {
+        pos.jumpTo(
+          pixels.clamp(pos.minScrollExtent, pos.maxScrollExtent),
+        );
+      }
       _restoringScroll = false;
     });
   }
