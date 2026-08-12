@@ -2239,6 +2239,12 @@ class ChatService {
       return null;
     }
     final mode = await getTrackerJudgeMode();
+    // v83：分阶段日志——started（裁判任务开始，含模式与字段数，
+    // 不记录正文）
+    debugPrint(
+      '[TRACKER_JUDGE] started mode=$mode fields=${trackerConfig.stateSchema.length} '
+      'stateText=${stateText.length}字',
+    );
     final modeDesc = switch (mode) {
       'explicit' => '只处理明确状态描述；不因剧情自行推断',
       'active' => '允许根据整体剧情主动调整状态',
@@ -2329,7 +2335,14 @@ class ChatService {
       );
       // v68：截断/解析失败补救一次——第一次被 maxTokens 截断时，
       // 第二次要求压缩并重新输出合法 JSON；仍失败才保留主模型结果
+      final stopwatch = Stopwatch()..start();
       for (var attempt = 0; attempt < 2; attempt++) {
+        // v83：request 日志（裁剪后文本长度与字段数，不记录正文）
+        debugPrint(
+          '[TRACKER_JUDGE] request attempt=$attempt '
+          'userText=${trimmedUserText.length}字 assistantText=${trimmedAssistantText.length}字 '
+          'maxTokens=$judgeMaxTokens',
+        );
         final completion = await _createCompletionFromMessages(
           config,
           messages: [
@@ -2352,11 +2365,21 @@ class ChatService {
         );
         if (completion.isPartial && attempt == 0) {
           debugPrint(
+            '[TRACKER_JUDGE] response attempt=$attempt isPartial=true '
+            '耗时=${stopwatch.elapsedMilliseconds}ms',
+          );
+          debugPrint(
             '[TRACKER_JUDGE] 裁判输出被截断（maxTokens=$judgeMaxTokens），'
             '重试压缩输出…',
           );
           continue; // 截断 → 第二次重试
         }
+        // v83：response 日志——返回状态与耗时（不记录正文）
+        debugPrint(
+          '[TRACKER_JUDGE] response attempt=$attempt '
+          '耗时=${stopwatch.elapsedMilliseconds}ms '
+          'chars=${completion.text.length}',
+        );
         var patch = TrackerRuntime.extractPatch(completion.text);
         // v70：裁判可选输出最终状态 "state" 字段——检测到则按最终值
         // 一次性 set（不再增量叠加，避免"主+裁判重复增加"）。
@@ -2395,11 +2418,23 @@ class ChatService {
           '[TRACKER_JUDGE] mode=$mode attempt=${attempt + 1} '
           'patch=$patch narrative=$narrative consequence=$consequence',
         );
+        // v83：parse 阶段日志——区分"无 tracker 块/空 patch/解析失败"
+        debugPrint(
+          '[TRACKER_JUDGE] parse blockFound=${patch.protocolDetected} '
+          'set=${patch.setValues.length} add=${patch.addValues.length} '
+          'narrativeKeys=${narrative.keys.length} '
+          '${!patch.protocolDetected ? 'no_tracker_block' : patch.setValues.isEmpty && patch.addValues.isEmpty ? 'empty_patch' : 'has_patch'}',
+        );
         // v68：无协议（patch 未检测到）也视为失败——第二次重试
         if (!patch.protocolDetected && attempt == 0) {
           debugPrint('[TRACKER_JUDGE] 裁判未输出合法协议，重试…');
           continue;
         }
+        // v83：done 日志（裁判判定完成，patch 已解析）
+        debugPrint(
+          '[TRACKER_JUDGE] done patchSet=${patch.setValues.keys} '
+          '总耗时=${stopwatch.elapsedMilliseconds}ms',
+        );
         return (patch, narrative, consequence);
       }
       debugPrint(
@@ -2478,6 +2513,11 @@ class ChatService {
     required String assistantText,
   }) async {
     // v70：整个裁判任务注册进会话队列——下一轮发送前会被等待
+    // v83：queued 日志（后台裁判入队，含轮次与队列状态）
+    debugPrint(
+      '[TRACKER_JUDGE] queued turn=$turn session=${sessionId.length > 6 ? sessionId.substring(sessionId.length - 6) : sessionId} '
+      'queueSize=${_pendingTrackerJudges.length}',
+    );
     final task = _runTrackerJudgeTask(
       turn: turn,
       config: config,
@@ -2554,10 +2594,20 @@ class ChatService {
         protectedKeys: protectedKeys,
       );
       if (needCommit) {
-        await ChatDatabaseService.instance.upsertSessionVariables(
-          sessionId,
-          finalVars,
+        // v83：persist 阶段日志——写库前记录待提交字段，写库后确认
+        debugPrint(
+          '[TRACKER_JUDGE] persist_started changedKeys=${finalVars.keys.length}',
         );
+        try {
+          await ChatDatabaseService.instance.upsertSessionVariables(
+            sessionId,
+            finalVars,
+          );
+          debugPrint('[TRACKER_JUDGE] persist_committed session=$sessionId');
+        } on Object catch (error) {
+          debugPrint('[TRACKER_JUDGE] persist_failed: $error');
+          return;
+        }
       }
       await _persistMessageStatusHtml(
         sessionId,
