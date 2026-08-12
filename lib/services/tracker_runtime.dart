@@ -1687,19 +1687,28 @@ class TrackerRuntime {
         line += '\n  mode=${policy.mode}';
       }
       // v63：注入语义提示（理解方向而非死规则）
+      // v83：hints 对 string 字段同样注入（卡侧补了 updatePolicy 后
+      // 裁判才能看到"何时 set 新值、新值自由概括"的规则）；加长度
+      // 上限防卡内超长文本撑爆裁判 prompt（截断不是拒绝，保主语义）
       final hints = policy?.semanticHints;
       if (hints != null) {
+        String clip(String s, [int max = 300]) =>
+            s.length <= max ? s : '${s.substring(0, max)}…';
+        final clipList = (List<String> items) => items
+            .map((e) => clip(e, 80))
+            .take(10)
+            .toList();
         if (hints.meaning.isNotEmpty) {
-          line += '\n  meaning=${hints.meaning}';
+          line += '\n  meaning=${clip(hints.meaning)}';
         }
         if (hints.positiveSignals.isNotEmpty) {
-          line += '\n  positive=${hints.positiveSignals.join('，')}';
+          line += '\n  positive=${clipList(hints.positiveSignals).join('，')}';
         }
         if (hints.negativeSignals.isNotEmpty) {
-          line += '\n  negative=${hints.negativeSignals.join('，')}';
+          line += '\n  negative=${clipList(hints.negativeSignals).join('，')}';
         }
         if (hints.neutralSignals.isNotEmpty) {
-          line += '\n  neutral=${hints.neutralSignals.join('，')}';
+          line += '\n  neutral=${clipList(hints.neutralSignals).join('，')}';
         }
       }
       fields.add(line);
