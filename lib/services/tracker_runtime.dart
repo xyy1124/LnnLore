@@ -99,6 +99,13 @@ class TrackerRuntime {
   static const String kTrackerUpdateOpenTag = '<TRACKER_UPDATE>';
   static const String kTrackerUpdateCloseTag = '</TRACKER_UPDATE>';
 
+  /// v82：标签匹配放宽——大小写不敏感、允许标签内空白（模型可能输出
+  /// `<tracker_update>`/`<TRACKER_UPDATE >` 等变体），避免协议块残留正文。
+  static final RegExp _trackerOpenRe =
+      RegExp(r'<\s*TRACKER_UPDATE\s*>', caseSensitive: false);
+  static final RegExp _trackerCloseRe =
+      RegExp(r'<\s*/\s*TRACKER_UPDATE\s*>', caseSensitive: false);
+
   /// v70：从响应中提取裁判可选输出的最终状态 "state" 字段——
   /// `{"state":{"字段key":最终值}}`，App 检测到后按最终值一次性 set
   /// （不再增量叠加）。key 经 [canonicalizeNarrative] 规范化（label/
@@ -160,27 +167,31 @@ class TrackerRuntime {
 
   /// v70：从文本中提取 <TRACKER_UPDATE>...</TRACKER_UPDATE> 标记块。
   /// 返回 (标记内 JSON 文本, 标记前正文)；无标记返回 (null, 原文本)。
+  /// v82：标签匹配改为大小写不敏感 + 允许空白（<tracker_update>、
+  /// <TRACKER_UPDATE > 等变体都能识别剥离），防止协议块残留正文。
   static (String?, String) extractTrackerUpdateBlock(String text) {
-    final start = text.lastIndexOf(kTrackerUpdateOpenTag);
-    if (start < 0) {
+    final openMatches = _trackerOpenRe.allMatches(text).toList();
+    if (openMatches.isEmpty) {
       return (null, text);
     }
-    final end = text.indexOf(kTrackerUpdateCloseTag, start);
-    if (end <= start) {
+    final openMatch = openMatches.last;
+    final rest = text.substring(openMatch.end);
+    final closeMatch = _trackerCloseRe.firstMatch(rest);
+    if (closeMatch == null) {
       return (null, text);
     }
-    final jsonText = text
-        .substring(start + kTrackerUpdateOpenTag.length, end)
-        .trim();
-    final displayText = text.substring(0, start).trim();
+    final jsonText = rest.substring(0, closeMatch.start).trim();
+    final displayText = text.substring(0, openMatch.start).trim();
     return (jsonText, displayText);
   }
 
   /// 从模型输出提取 patch。优先 <TRACKER_UPDATE> 标记（v70 快速模式
   /// 新协议），再 JSON 块（含 patch.set/add），失败回退 STATE 块。
   /// 找不到返回空 patch。
+  /// v82：标记内 JSON 解析失败时，回退解析用**剥离后的正文**（displayText），
+  /// 避免把坏标记块当 JSON 块捡到。
   static StatePatch extractPatch(String text) {
-    final (markerJson, _) = extractTrackerUpdateBlock(text);
+    final (markerJson, displayText) = extractTrackerUpdateBlock(text);
     if (markerJson != null) {
       try {
         final decoded = jsonDecode(markerJson);
@@ -194,11 +205,12 @@ class TrackerRuntime {
         // 标记内 JSON 解析失败 → 回退 JSON 块解析（兼容旧协议）
       }
     }
-    final jsonPatch = _extractJsonPatch(text);
+    final fallback = markerJson != null ? displayText : text;
+    final jsonPatch = _extractJsonPatch(fallback);
     if (jsonPatch != null) {
       return jsonPatch;
     }
-    return _extractStateBlockPatch(text);
+    return _extractStateBlockPatch(fallback);
   }
 
   /// 从模型输出提取 choices（可选动作按钮列表）。
@@ -1530,27 +1542,35 @@ class TrackerRuntime {
 
     // 按段落拆分，命中关键词的段落优先保留
     final paragraphs = text.split(RegExp(r'\n+'));
-    final kept = <String>[];
-    for (final para in paragraphs) {
-      if (kept.length >= 24) {
-        break;
-      }
-      if (keywords.any((k) => k.isNotEmpty && para.contains(k))) {
-        kept.add(para);
-      }
-    }
-    // 开头 + 结尾保底（关键词段落不足时也有上下文）
+    final head = paragraphs.first;
+    final tail = paragraphs.last;
+    final hitParagraphs = paragraphs
+        .where((p) => keywords.any((k) => k.isNotEmpty && p.contains(k)))
+        .toList();
+    // 开头 + 结尾保底——**无论有无关键词命中都保留首尾**（v82 修复：
+    // 旧实现无命中时只保留首段，长正文中后段的状态事件被裁掉，裁判
+    // 看不到证据返回空 patch——"首条成功后续失败"的直接原因）
     final result = StringBuffer();
-    if (kept.isNotEmpty) {
-      final head = paragraphs.first;
-      final tail = paragraphs.last;
-      result.write('（开头）$head\n');
-      if (head != tail && paragraphs.length > 1) {
-        result.write('（中间）${kept.join('\n')}\n');
-        result.write('（结尾）$tail');
+    result.write('（开头）$head\n');
+    if (head != tail && paragraphs.length > 1) {
+      if (hitParagraphs.isNotEmpty) {
+        // 命中段落按字符预算累积（v82：旧实现按 24 段上限再整体截断，
+        // 结尾常被砍掉；改为预算内保留，保证结尾不被裁）
+        final budget = maxChars - head.length - tail.length - 40;
+        var used = 0;
+        final kept = <String>[];
+        for (final para in hitParagraphs) {
+          if (used + para.length + 1 > budget) {
+            break;
+          }
+          kept.add(para);
+          used += para.length + 1;
+        }
+        if (kept.isNotEmpty) {
+          result.write('（中间）${kept.join('\n')}\n');
+        }
       }
-    } else {
-      result.write(paragraphs.first);
+      result.write('（结尾）$tail');
     }
     final trimmed = result.toString().trim();
     if (trimmed.length <= maxChars) {
