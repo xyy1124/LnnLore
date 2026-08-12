@@ -129,5 +129,26 @@ void main() {
       expect(defaults.containsKey('thinking'), isFalse);
       expect(defaults['reasoning_effort'], 'high');
     });
+
+    // v87 根因回归：裁判请求（小 max_tokens）必须禁用原生 thinking，
+    // 否则 max 级思考吃光 512-1024 token 预算 → 空回复 → 状态不更新
+    test('裁判场景（forceDeepSeekThinkingMode=disabled）强制 thinking disabled', () {
+      final defaults = ChatService.instance.buildCompletionDefaults(
+        preset,
+        useStreaming: false,
+        isDeepSeek: true,
+        deepSeekThinkingMode: DeepSeekThinkingMode.max,
+      );
+      // 模拟裁判调用：即使全局设置是 max，裁判也用 disabled 覆盖
+      final judgeDefaults = ChatService.instance.buildCompletionDefaults(
+        preset,
+        useStreaming: false,
+        isDeepSeek: true,
+        deepSeekThinkingMode: DeepSeekThinkingMode.disabled,
+      );
+      expect((defaults['thinking'] as Map)['type'], 'enabled');
+      expect((judgeDefaults['thinking'] as Map)['type'], 'disabled');
+      expect(judgeDefaults.containsKey('reasoning_effort'), isFalse);
+    });
   });
 }
