@@ -120,4 +120,135 @@ void main() {
       expect(result.length, lessThanOrEqualTo(3500));
     });
   });
+
+  group('v83 formatter 语义提示注入', () {
+    const cardWithStringHints = {
+      'data': {
+        'extensions': {
+          'tracker': {
+            'schemaVersion': '1.0',
+            'stateSchema': {
+              'xno_cloth': {
+                'type': 'string',
+                'label': '服装状态',
+                'allowCustomValues': true,
+                'updatePolicy': {
+                  'semanticHints': {
+                    'meaning': '当前衣着状态的短文本描述。仅当本轮文本明确建立、改变、移除或恢复衣着状态时，依据文本证据概括新的当前状态并执行 set；新值是自由文本，不是固定枚举。没有明确证据时保持 current，不猜测。',
+                    'positiveSignals': ['明确穿上、换上、脱下、撕裂、弄脏或恢复衣物，且结果明确'],
+                    'negativeSignals': ['仅提及、触碰、注视衣物而没有状态变化'],
+                    'neutralSignals': ['本轮没有衣着信息'],
+                  },
+                },
+              },
+            },
+            'initialState': {'xno_cloth': '松散半敞'},
+          },
+        },
+      },
+    };
+
+    test('string 字段带 semanticHints 时注入四类语义行', () {
+      final config = TrackerConfig.fromCardJson(cardWithStringHints);
+      final state = <String, dynamic>{'xno_cloth': '松散半敞'};
+      final result = TrackerRuntime.formatTrackerInstruction(
+        state: state,
+        config: config,
+      );
+      expect(result, contains('meaning='));
+      expect(result, contains('positive='));
+      expect(result, contains('negative='));
+      expect(result, contains('neutral='));
+      expect(result, contains('自由文本'));
+      expect(result, contains('保持 current'));
+    });
+
+    test('string 字段无 hints（旧卡）仍正常生成，不崩溃', () {
+      final config = _config();
+      final state = <String, dynamic>{'xno_cloth': '松散半敞'};
+      final result = TrackerRuntime.formatTrackerInstruction(
+        state: state,
+        config: config,
+      );
+      expect(result, contains('key=xno_cloth'));
+      expect(result, contains('type=string'));
+      // 旧卡不注入任何 meaning/positive 行（不凭空生成激进信号）
+      expect(result, isNot(contains('meaning=')));
+    });
+
+    test('超长 meaning 被截断（长度上限）', () {
+      final longCard = {
+        'data': {
+          'extensions': {
+            'tracker': {
+              'schemaVersion': '1.0',
+              'stateSchema': {
+                'xno_cloth': {
+                  'type': 'string',
+                  'label': '服装状态',
+                  'allowCustomValues': true,
+                  'updatePolicy': {
+                    'semanticHints': {
+                      'meaning': '长' * 500,
+                      'positiveSignals': ['短'],
+                      'negativeSignals': ['短'],
+                      'neutralSignals': ['短'],
+                    },
+                  },
+                },
+              },
+              'initialState': {'xno_cloth': '松散半敞'},
+            },
+          },
+        },
+      };
+      final config = TrackerConfig.fromCardJson(longCard);
+      final result = TrackerRuntime.formatTrackerInstruction(
+        state: <String, dynamic>{'xno_cloth': '松散半敞'},
+        config: config,
+      );
+      final meaningLine = result.split('\n').firstWhere((l) => l.startsWith('  meaning='));
+      expect(meaningLine.length, lessThanOrEqualTo(301 + '  meaning='.length));
+      expect(meaningLine, endsWith('…'));
+    });
+
+    test('裁判指令不包含卡 PHI 原文（结构化 hints 注入，非原始 PHI）', () {
+      // 卡 PHI 里的自由文本规则（历史遗留写法）不应被原样注入指令
+      const phiText = '服装状态：换上新衣/穿回衣服→完整；衣襟扯松→松散半敞。';
+      final cardWithPhi = {
+        'data': {
+          'post_history_instructions': phiText,
+          'extensions': {
+            'tracker': {
+              'schemaVersion': '1.0',
+              'stateSchema': {
+                'xno_cloth': {
+                  'type': 'string',
+                  'label': '服装状态',
+                  'allowCustomValues': true,
+                  'updatePolicy': {
+                    'semanticHints': {
+                      'meaning': '当前衣着状态的短文本描述。',
+                      'positiveSignals': ['明确换上、脱下衣物且结果明确'],
+                      'negativeSignals': ['仅提及衣物无变化'],
+                      'neutralSignals': ['本轮没有衣着信息'],
+                    },
+                  },
+                },
+              },
+              'initialState': {'xno_cloth': '松散半敞'},
+            },
+          },
+        },
+      };
+      final config = TrackerConfig.fromCardJson(cardWithPhi);
+      final result = TrackerRuntime.formatTrackerInstruction(
+        state: <String, dynamic>{'xno_cloth': '松散半敞'},
+        config: config,
+      );
+      // 只注入结构化 hints；PHI 原文（箭头规则）不进入裁判指令
+      expect(result, isNot(contains('换上新衣/穿回衣服→完整')));
+      expect(result, contains('当前衣着状态的短文本描述'));
+    });
+  });
 }
