@@ -2248,15 +2248,19 @@ class ChatService {
     // v66：正文裁剪——裁判只需判断状态变化，不需要读整篇长文
     // （用户消息最多 1000 字、角色回复最多 3000 字，命中语义关键词的
     // 段落优先保留）
+    // v86：裁剪阈值大幅提高——v85 裁判已语义驱动，旧 3000 字软阈值
+    // 会静默裁掉中段语义同义表达（"思维被重塑"等不命中关键词）的
+    // 完成事件（v85 xno_layer 不更新根因）。常规单轮正文完整传入；
+    // 仅远超 hard budget 时降级为 selectRelevantText 均匀采样。
     final trimmedUserText = TrackerRuntime.selectRelevantText(
       userText,
       config: trackerConfig,
-      maxChars: 1000,
+      maxChars: 2000,
     );
     final trimmedAssistantText = TrackerRuntime.selectRelevantText(
       assistantText,
       config: trackerConfig,
-      maxChars: 3000,
+      maxChars: 8000,
     );
     // v66：主模型已更新的字段——裁判不得重复叠加同一事件
     final mainPatchKeys = <String>{
@@ -2276,6 +2280,16 @@ class ChatService {
         '本轮用户消息：\n$trimmedUserText\n\n'
         '本轮角色回复：\n$trimmedAssistantText\n\n'
         '判断规则（mode=$mode）：$modeDesc。\n'
+        // v86：明确 conservative 的边界——只过滤含糊/意图/未完成事件；
+        // 一旦 user/assistant 本轮正文明确建立完成结果，必须按语义更新。
+        // （v85 实测：用户"会加深/要穿"为意图不更新，但 assistant 同轮
+        // 明确写出"认知已加深/已穿上"仍空 patch → 模型过度保守。）
+        'mode 仅用于处理含糊、推测、仅意图或未完成事件：此类不更新。'
+        '一旦 user 或 assistant 本轮正文明确建立了完成结果（如"她的认知'
+        '已被进一步改写""她已经穿上了那件衣服"），必须按字段语义更新，'
+        '不得因 mode 而保持不变。判断需综合 user 与 assistant 的本轮'
+        '最终结果：user 的请求不妨碍 assistant 正文中已完成的动作触发'
+        '更新；只答应、计划、预测、动作开始但结果尚未确定则不触发。\n'
         '剧情明确表示某字段上升或下降时，即使没有具体数字，也必须输出'
         '增量（下降用负数）：qualitative 程度词表仅作参考，词表未覆盖'
         '但剧情语义明确时，依据剧情实际推进幅度输出合理增量（通常 1-2，'
