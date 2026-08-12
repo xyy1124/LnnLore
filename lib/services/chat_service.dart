@@ -396,8 +396,7 @@ class ChatService {
               ? (judgeResult?.$3 ?? processed.consequence)
               : processed.consequence;
       // v69：诊断日志——快速模式看不到更新时，一行确认是哪层失败
-      debugPrint(
-        '[TRACKER_MODE] mode=$updateMode '
+      print('[TRACKER_MODE] mode=$updateMode '
         'mainProtocol=${processed.patch.protocolDetected} '
         'mainPatch=${processed.patch} '
         'mainNarrative=${processed.narrative.keys} '
@@ -670,8 +669,7 @@ class ChatService {
               ? (judgeResult?.$3 ?? processed.consequence)
               : processed.consequence;
       // v69：诊断日志——快速模式看不到更新时，一行确认是哪层失败
-      debugPrint(
-        '[TRACKER_MODE] mode=$updateMode '
+      print('[TRACKER_MODE] mode=$updateMode '
         'mainProtocol=${processed.patch.protocolDetected} '
         'mainPatch=${processed.patch} '
         'mainNarrative=${processed.narrative.keys} '
@@ -940,8 +938,7 @@ class ChatService {
               ? (judgeResult?.$3 ?? processed.consequence)
               : processed.consequence;
       // v69：诊断日志——快速模式看不到更新时，一行确认是哪层失败
-      debugPrint(
-        '[TRACKER_MODE] mode=$updateMode '
+      print('[TRACKER_MODE] mode=$updateMode '
         'mainProtocol=${processed.patch.protocolDetected} '
         'mainPatch=${processed.patch} '
         'mainNarrative=${processed.narrative.keys} '
@@ -1255,8 +1252,7 @@ class ChatService {
               ? (judgeResult?.$3 ?? processed.consequence)
               : processed.consequence;
       // v69：诊断日志——快速模式看不到更新时，一行确认是哪层失败
-      debugPrint(
-        '[TRACKER_MODE] mode=$updateMode '
+      print('[TRACKER_MODE] mode=$updateMode '
         'mainProtocol=${processed.patch.protocolDetected} '
         'mainPatch=${processed.patch} '
         'mainNarrative=${processed.narrative.keys} '
@@ -2241,8 +2237,7 @@ class ChatService {
     final mode = await getTrackerJudgeMode();
     // v83：分阶段日志——started（裁判任务开始，含模式与字段数，
     // 不记录正文）
-    debugPrint(
-      '[TRACKER_JUDGE] started mode=$mode fields=${trackerConfig.stateSchema.length} '
+    print('[TRACKER_JUDGE] started mode=$mode fields=${trackerConfig.stateSchema.length} '
       'stateText=${stateText.length}字',
     );
     final modeDesc = switch (mode) {
@@ -2281,14 +2276,18 @@ class ChatService {
         '本轮用户消息：\n$trimmedUserText\n\n'
         '本轮角色回复：\n$trimmedAssistantText\n\n'
         '判断规则（mode=$mode）：$modeDesc。\n'
-        '剧情明确表示某字段上升或下降时，即使没有具体数字，也必须按 '
-        'qualitative 中最匹配的程度词输出增量（下降用负数）；'
-        '每轮增量不超过 maxAutoDeltaPerTurn（未声明则不限制）；'
-        '同一事件每轮最多更新一次，只有本轮新发生的事件才能触发变化。\n'
+        '剧情明确表示某字段上升或下降时，即使没有具体数字，也必须输出'
+        '增量（下降用负数）：qualitative 程度词表仅作参考，词表未覆盖'
+        '但剧情语义明确时，依据剧情实际推进幅度输出合理增量（通常 1-2，'
+        '重大事件可更大）；每轮增量不超过 maxAutoDeltaPerTurn（未声明'
+        '则不限制）；同一事件每轮最多更新一次，只有本轮新发生的事件'
+        '才能触发变化。\n'
         '$mainPatchNote'
-        '语义提示（positive/negative/neutral）用于理解每个字段在剧情中的'
-        '含义与通常影响方向——neutral 中列举的行为（普通闲聊/重复描写等）'
-        '不得触发变化。\n'
+        '语义提示（meaning/positive/negative/neutral）用于理解每个字段'
+        '在剧情中的含义与通常影响方向，帮助按剧情语义判断——字段含义'
+        '相关的任何实质性剧情事件都应按语义反映到对应字段，不必拘泥于'
+        '提示词列表；neutral 中列举的行为（普通闲聊/重复描写等）不得'
+        '触发变化。\n'
         '输出格式（只输出 JSON 代码块，不要任何解释文字）：\n'
         '```json\n'
         '{\n'
@@ -2338,8 +2337,7 @@ class ChatService {
       final stopwatch = Stopwatch()..start();
       for (var attempt = 0; attempt < 2; attempt++) {
         // v83：request 日志（裁剪后文本长度与字段数，不记录正文）
-        debugPrint(
-          '[TRACKER_JUDGE] request attempt=$attempt '
+        print('[TRACKER_JUDGE] request attempt=$attempt '
           'userText=${trimmedUserText.length}字 assistantText=${trimmedAssistantText.length}字 '
           'maxTokens=$judgeMaxTokens',
         );
@@ -2364,19 +2362,16 @@ class ChatService {
           enforceThinkingChain: false,
         );
         if (completion.isPartial && attempt == 0) {
-          debugPrint(
-            '[TRACKER_JUDGE] response attempt=$attempt isPartial=true '
+          print('[TRACKER_JUDGE] response attempt=$attempt isPartial=true '
             '耗时=${stopwatch.elapsedMilliseconds}ms',
           );
-          debugPrint(
-            '[TRACKER_JUDGE] 裁判输出被截断（maxTokens=$judgeMaxTokens），'
+          print('[TRACKER_JUDGE] 裁判输出被截断（maxTokens=$judgeMaxTokens），'
             '重试压缩输出…',
           );
           continue; // 截断 → 第二次重试
         }
         // v83：response 日志——返回状态与耗时（不记录正文）
-        debugPrint(
-          '[TRACKER_JUDGE] response attempt=$attempt '
+        print('[TRACKER_JUDGE] response attempt=$attempt '
           '耗时=${stopwatch.elapsedMilliseconds}ms '
           'chars=${completion.text.length}',
         );
@@ -2397,8 +2392,7 @@ class ChatService {
             reply: patch.reply,
             protocolDetected: true,
           );
-          debugPrint(
-            '[TRACKER_JUDGE] 裁判输出最终状态 state=$finalState '
+          print('[TRACKER_JUDGE] 裁判输出最终状态 state=$finalState '
             '（按 set 一次性保存，忽略 patch.add）',
           );
         }
@@ -2414,37 +2408,33 @@ class ChatService {
           TrackerRuntime.extractConsequence(completion.text),
           trackerConfig,
         );
-        debugPrint(
-          '[TRACKER_JUDGE] mode=$mode attempt=${attempt + 1} '
+        print('[TRACKER_JUDGE] mode=$mode attempt=${attempt + 1} '
           'patch=$patch narrative=$narrative consequence=$consequence',
         );
         // v83：parse 阶段日志——区分"无 tracker 块/空 patch/解析失败"
-        debugPrint(
-          '[TRACKER_JUDGE] parse blockFound=${patch.protocolDetected} '
+        print('[TRACKER_JUDGE] parse blockFound=${patch.protocolDetected} '
           'set=${patch.setValues.length} add=${patch.addValues.length} '
           'narrativeKeys=${narrative.keys.length} '
           '${!patch.protocolDetected ? 'no_tracker_block' : patch.setValues.isEmpty && patch.addValues.isEmpty ? 'empty_patch' : 'has_patch'}',
         );
         // v68：无协议（patch 未检测到）也视为失败——第二次重试
         if (!patch.protocolDetected && attempt == 0) {
-          debugPrint('[TRACKER_JUDGE] 裁判未输出合法协议，重试…');
+          print('[TRACKER_JUDGE] 裁判未输出合法协议，重试…');
           continue;
         }
         // v83：done 日志（裁判判定完成，patch 已解析）
-        debugPrint(
-          '[TRACKER_JUDGE] done patchSet=${patch.setValues.keys} '
+        print('[TRACKER_JUDGE] done patchSet=${patch.setValues.keys} '
           '总耗时=${stopwatch.elapsedMilliseconds}ms',
         );
         return (patch, narrative, consequence);
       }
-      debugPrint(
-        '[TRACKER_JUDGE] 裁判两次尝试均失败（截断/非法 JSON），'
+      print('[TRACKER_JUDGE] 裁判两次尝试均失败（截断/非法 JSON），'
         '保留主模型结果',
       );
       return null;
     } on Object catch (error) {
       // 裁判失败不影响主流程（状态保持主模型 patch 结果）
-      debugPrint('[TRACKER_JUDGE] 裁判请求失败（忽略）: $error');
+      print('[TRACKER_JUDGE] 裁判请求失败（忽略）: $error');
       return null;
     }
   }
@@ -2514,8 +2504,7 @@ class ChatService {
   }) async {
     // v70：整个裁判任务注册进会话队列——下一轮发送前会被等待
     // v83：queued 日志（后台裁判入队，含轮次与队列状态）
-    debugPrint(
-      '[TRACKER_JUDGE] queued turn=$turn session=${sessionId.length > 6 ? sessionId.substring(sessionId.length - 6) : sessionId} '
+    print('[TRACKER_JUDGE] queued turn=$turn session=${sessionId.length > 6 ? sessionId.substring(sessionId.length - 6) : sessionId} '
       'queueSize=${_pendingTrackerJudges.length}',
     );
     final task = _runTrackerJudgeTask(
@@ -2572,8 +2561,7 @@ class ChatService {
     }
     // v80：提交前校验状态代次（await 期间可能切分支/删分支/重置）
     if (stateGeneration != _currentStateGeneration(sessionId)) {
-      debugPrint(
-        '[TRACKER_JUDGE] 状态代次已变更（切分支/删分支/重置），'
+      print('[TRACKER_JUDGE] 状态代次已变更（切分支/删分支/重置），'
         '丢弃过期裁判结果',
       );
       return;
@@ -2595,17 +2583,16 @@ class ChatService {
       );
       if (needCommit) {
         // v83：persist 阶段日志——写库前记录待提交字段，写库后确认
-        debugPrint(
-          '[TRACKER_JUDGE] persist_started changedKeys=${finalVars.keys.length}',
+        print('[TRACKER_JUDGE] persist_started changedKeys=${finalVars.keys.length}',
         );
         try {
           await ChatDatabaseService.instance.upsertSessionVariables(
             sessionId,
             finalVars,
           );
-          debugPrint('[TRACKER_JUDGE] persist_committed session=$sessionId');
+          print('[TRACKER_JUDGE] persist_committed session=$sessionId');
         } on Object catch (error) {
-          debugPrint('[TRACKER_JUDGE] persist_failed: $error');
+          print('[TRACKER_JUDGE] persist_failed: $error');
           return;
         }
       }
@@ -2619,8 +2606,7 @@ class ChatService {
         beforeVariables: localVariables,
         consequence: judgeConsequence,
       );
-      debugPrint(
-        '[TRACKER_JUDGE] 后台裁判完成（当前轮）：patch=$judgePatch '
+      print('[TRACKER_JUDGE] 后台裁判完成（当前轮）：patch=$judgePatch '
         'vars=$finalVars',
       );
     } else {
@@ -2635,8 +2621,7 @@ class ChatService {
         beforeVariables: localVariables,
         consequence: judgeConsequence,
       );
-      debugPrint(
-        '[TRACKER_JUDGE] 后台裁判过期丢弃（turn=$turn '
+      print('[TRACKER_JUDGE] 后台裁判过期丢弃（turn=$turn '
         '当前=${_currentTrackerJudgeTurn(sessionId)}）'
         '：仅更新旧消息快照',
       );
