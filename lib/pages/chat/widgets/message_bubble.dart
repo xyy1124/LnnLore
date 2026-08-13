@@ -16,6 +16,7 @@ import '../../../services/chat_variable_service.dart';
 import '../../../services/regex_script_service.dart';
 import '../../../services/tracker_runtime.dart';
 import '../../../widgets/chat_markdown_body.dart';
+import 'entity_status_panel.dart';
 import 'special_status_panel.dart';
 import 'thinking_chain_widget.dart';
 import '../utils/pseudo_thinking_chain.dart';
@@ -640,6 +641,92 @@ class _MessageBubbleState extends State<MessageBubble> {
       '0' => false,
       _ => trackerConfig.defaultExpanded,
     };
+    // v91：实体卡（群像卡，schemaVersion 2）走 Flutter 原生 Tab 面板；
+    // v1 卡保持 HTML 路径（SpecialStatusPanel）。
+    if (trackerConfig.isEntityCard) {
+      // 数据源：优先消息快照（v6 state + 注册表，消息时刻冻结），
+      // 无快照时用当前变量表（运行时生成）。
+      final variables = widget.sessionVariables;
+      final entityData = TrackerRuntime.buildEntityPanelData(
+        cardJson: _messageCharacter?.cardJson ?? widget.character?.cardJson,
+        variables: variables,
+        narrative: null,
+      );
+      // 快照 narrative：优先 v6 快照（含 entity narrative）
+      Map<String, String>? snapshotNarrative;
+      if (widget.message.id != null) {
+        final messageId = widget.message.id!;
+        final rawV6 = variables[
+            ChatService.messageStatusSnapshotV6Key(messageId)];
+        if (rawV6 != null && rawV6.trim().isNotEmpty) {
+          try {
+            final decoded = jsonDecode(rawV6);
+            if (decoded is Map && decoded['narrative'] is Map) {
+              snapshotNarrative = (decoded['narrative'] as Map)
+                  .map((k, v) => MapEntry(k.toString(), v.toString()));
+            }
+          } catch (_) {}
+        }
+      }
+      if (snapshotNarrative != null && snapshotNarrative.isNotEmpty) {
+        // 用快照 narrative 重建模型（narrative 按消息时刻冻结）
+        final rebuilt = TrackerRuntime.buildEntityPanelData(
+          cardJson: _messageCharacter?.cardJson ?? widget.character?.cardJson,
+          variables: variables,
+          narrative: snapshotNarrative,
+        );
+        if (!rebuilt.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: EntityStatusPanel(
+              key: ValueKey<String>(
+                'entity_tracker_${widget.message.id}_${trackerCharacterId ?? ''}',
+              ),
+              data: rebuilt,
+              expanded: initialExpanded,
+              onExpandedChanged: (expanded) {
+                final sessionId = widget.message.sessionId;
+                if (sessionId == null || trackerCharacterId == null) {
+                  return;
+                }
+                unawaited(
+                  ChatDatabaseService.instance.upsertSessionVariables(
+                    sessionId,
+                    {expandedPrefKey: expanded ? '1' : '0'},
+                  ),
+                );
+              },
+            ),
+          );
+        }
+      }
+      if (!entityData.isEmpty) {
+        return Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: EntityStatusPanel(
+            key: ValueKey<String>(
+              'entity_tracker_${widget.message.id}_${trackerCharacterId ?? ''}',
+            ),
+            data: entityData,
+            expanded: initialExpanded,
+            onExpandedChanged: (expanded) {
+              final sessionId = widget.message.sessionId;
+              if (sessionId == null || trackerCharacterId == null) {
+                return;
+              }
+              unawaited(
+                ChatDatabaseService.instance.upsertSessionVariables(
+                  sessionId,
+                  {expandedPrefKey: expanded ? '1' : '0'},
+                ),
+              );
+            },
+          ),
+        );
+      }
+      // 实体数据为空（无已出场角色）→ 不显示面板
+      return const SizedBox.shrink();
+    }
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: SpecialStatusPanel(
