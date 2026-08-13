@@ -146,8 +146,8 @@ void main() {
       final registryJson = TrackerRuntime.encodeEntityRegistry({
         ...registry,
         'entities': [
-          {'id': 'szh', 'templateId': 'brainwashed_female', 'displayName': '沈昭华', 'aliases': ['昭华仙子'], 'order': 0, 'source': 'preset'},
-          {'id': 'lql', 'templateId': 'brainwashed_female', 'displayName': '洛青鸾', 'aliases': ['青鸾'], 'order': 1, 'source': 'preset'},
+          {'id': 'szh', 'templateId': 'brainwashed_female', 'displayName': '沈昭华', 'aliases': ['昭华仙子'], 'order': 0, 'source': 'preset', 'appeared': true},
+          {'id': 'lql', 'templateId': 'brainwashed_female', 'displayName': '洛青鸾', 'aliases': ['青鸾'], 'order': 1, 'source': 'preset', 'appeared': true},
         ],
       });
       final text = TrackerRuntime.formatEntityTrackerInstruction(
@@ -198,8 +198,8 @@ void main() {
         'nextDynamicOrdinal': 1,
         'appliedMigrations': <String>[],
         'entities': [
-          {'id': 'szh', 'templateId': 'brainwashed_female', 'displayName': '沈昭华', 'aliases': [], 'order': 0, 'source': 'preset'},
-          {'id': 'dyn_0001', 'templateId': 'brainwashed_female', 'displayName': '顾清寒', 'aliases': [], 'order': 1, 'source': 'discovered'},
+          {'id': 'szh', 'templateId': 'brainwashed_female', 'displayName': '沈昭华', 'aliases': [], 'order': 0, 'source': 'preset', 'appeared': true},
+          {'id': 'dyn_0001', 'templateId': 'brainwashed_female', 'displayName': '顾清寒', 'aliases': [], 'order': 1, 'source': 'discovered', 'appeared': true},
         ],
       });
       final sections = TrackerRuntime.renderEntitySections(
@@ -235,7 +235,7 @@ void main() {
         'nextDynamicOrdinal': 1,
         'appliedMigrations': <String>[],
         'entities': [
-          {'id': 'szh', 'templateId': 'brainwashed_female', 'displayName': '沈昭华', 'aliases': [], 'order': 0, 'source': 'preset'},
+          {'id': 'szh', 'templateId': 'brainwashed_female', 'displayName': '沈昭华', 'aliases': [], 'order': 0, 'source': 'preset', 'appeared': true},
         ],
       });
       final html = TrackerRuntime.renderStatusPanelHtml(
@@ -250,6 +250,81 @@ void main() {
       expect(html, contains('沈昭华'));
       expect(html, contains('90'));
       expect(html, isNot(contains('{{entitysections')));
+    });
+
+    test('v91 未出场实体不渲染（洛青鸾 appeared=false 不出现）', () {
+      final config = TrackerConfig.fromCardJson(_entityCard);
+      final registryJson = TrackerRuntime.encodeEntityRegistry({
+        'version': 1,
+        'nextDynamicOrdinal': 1,
+        'appliedMigrations': <String>[],
+        'entities': [
+          {'id': 'szh', 'templateId': 'brainwashed_female', 'displayName': '沈昭华', 'aliases': [], 'order': 0, 'source': 'preset', 'appeared': true},
+          {'id': 'lql', 'templateId': 'brainwashed_female', 'displayName': '洛青鸾', 'aliases': ['青鸾'], 'order': 1, 'source': 'preset', 'appeared': false},
+        ],
+      });
+      final sections = TrackerRuntime.renderEntitySections(
+        cardJson: _entityCard,
+        variables: {
+          TrackerRuntime.kEntityRegistryKey: registryJson,
+          'entity.szh.xno_depth': '90',
+          'entity.szh.xno_layer': '2',
+          'entity.lql.xno_depth': '0',
+        },
+        config: config,
+        registry: TrackerRuntime.decodeEntityRegistry(registryJson),
+      );
+      expect(sections, isNotNull);
+      expect(sections, contains('沈昭华'));
+      // 未出场的洛青鸾不渲染
+      expect(sections, isNot(contains('洛青鸾')));
+    });
+  });
+  group('v93 实体 patch 应用（canonicalize/reduce 实例 key）', () {
+    test('实例 key 的 add 增量正确应用并 clamp（状态更新链路根因）', () {
+      final config = TrackerConfig.fromCardJson(_entityCard);
+      final patch = StatePatch(
+        addValues: {'entity.szh.xno_depth': 10},
+        protocolDetected: true,
+      );
+      final result = TrackerRuntime.applyPatchToVariables(
+        variables: {'entity.szh.xno_depth': '90', 'entity.szh.xno_layer': '2'},
+        patch: patch,
+        config: config,
+      );
+      // v93 前：canonicalizePatch 丢弃实例 key → 值不变（90）；修复后 90+10=100
+      expect(result['entity.szh.xno_depth'], '100');
+    });
+
+    test('实例 key 的 set 绝对值覆盖', () {
+      final config = TrackerConfig.fromCardJson(_entityCard);
+      final patch = StatePatch(
+        setValues: {'entity.lql.xno_depth': 5},
+        protocolDetected: true,
+      );
+      final result = TrackerRuntime.applyPatchToVariables(
+        variables: {'entity.szh.xno_depth': '90'},
+        patch: patch,
+        config: config,
+      );
+      expect(result['entity.lql.xno_depth'], '5');
+    });
+
+    test('canonicalTrackerKey 识别实例 key 与模板 local key', () {
+      final config = TrackerConfig.fromCardJson(_entityCard);
+      expect(
+        TrackerRuntime.canonicalTrackerKey('entity.szh.xno_depth', config),
+        'entity.szh.xno_depth',
+      );
+      expect(
+        TrackerRuntime.canonicalTrackerKey('xno_depth', config),
+        'xno_depth',
+      );
+      // 模板 label 也能识别
+      expect(
+        TrackerRuntime.canonicalTrackerKey('洗脑深度', config),
+        'xno_depth',
+      );
     });
   });
 }
