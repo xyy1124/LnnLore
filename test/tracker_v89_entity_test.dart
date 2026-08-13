@@ -310,21 +310,151 @@ void main() {
       expect(result['entity.lql.xno_depth'], '5');
     });
 
-    test('canonicalTrackerKey 识别实例 key 与模板 local key', () {
+    test('canonicalTrackerKey 识别实例 key，拒绝无归属裸 key', () {
       final config = TrackerConfig.fromCardJson(_entityCard);
       expect(
         TrackerRuntime.canonicalTrackerKey('entity.szh.xno_depth', config),
         'entity.szh.xno_depth',
       );
+      // v94：模板 local key / label 无 entityId 归属——拒绝放行，
+      // 防止 v1 patch（裸 key）写入变量表后渲染读不到（实例键）
       expect(
         TrackerRuntime.canonicalTrackerKey('xno_depth', config),
-        'xno_depth',
+        isNull,
       );
-      // 模板 label 也能识别
       expect(
         TrackerRuntime.canonicalTrackerKey('洗脑深度', config),
-        'xno_depth',
+        isNull,
       );
+    });
+  });
+
+  group('v95 面板样式提取（渐变/边框）', () {
+    // 卡模板 border 写 "2px solid #9b59b6"（真实卡写法）——原正则
+    // `[#\w]{3,8}` 会先捕获 "2px" 导致全部卡回退同一主题灰
+    const styledCard = {
+      'data': {
+        'extensions': {
+          'tracker': {
+            'schemaVersion': 2,
+            'entityTemplates': {
+              'brainwashed_female': {
+                'label': '角色洗脑状态',
+                'defaultState': {'xno_depth': 0, 'xno_layer': 0},
+                'stateSchema': {
+                  'xno_depth': {
+                    'type': 'number',
+                    'label': '洗脑深度',
+                    'min': 0,
+                    'max': 100,
+                  },
+                  'xno_layer': {
+                    'type': 'number',
+                    'label': '常识改写',
+                    'min': 0,
+                    'max': 5,
+                  },
+                },
+              },
+            },
+            'initialEntities': [
+              {
+                'id': 'szh',
+                'displayName': '沈昭华',
+                'aliases': ['昭华仙子'],
+                'templateId': 'brainwashed_female',
+                'initialState': {'xno_depth': 90, 'xno_layer': 2},
+              },
+            ],
+            'template':
+                '<details style="border: 2px solid #9b59b6; background: '
+                'linear-gradient(180deg,#0d0a14,#1b1226);">'
+                '<summary>状态</summary>{{entitysections::brainwashed_female}}</details>',
+          },
+        },
+      },
+    };
+
+    const registryJson =
+        '{"version":1,"nextDynamicOrdinal":1,"appliedMigrations":[],'
+        '"entities":[{"id":"szh","displayName":"沈昭华",'
+        '"templateId":"brainwashed_female","order":0,"source":"preset",'
+        '"appeared":true}]}';
+
+    test('border 提取到 # 颜色而非 "2px"（v95 修复）', () {
+      final data = TrackerRuntime.buildEntityPanelData(
+        cardJson: styledCard,
+        variables: {
+          TrackerRuntime.kEntityRegistryKey: registryJson,
+          'entity.szh.xno_depth': '90',
+          'entity.szh.xno_layer': '2',
+        },
+      );
+      expect(data.borderColor, '#9b59b6');
+      expect(data.borderColor.startsWith('#'), isTrue);
+      expect(RegExp(r'^#[0-9a-fA-F]{3,8}$').hasMatch(data.borderColor),
+          isTrue);
+    });
+
+    test('渐变背景提取到起止色', () {
+      final data = TrackerRuntime.buildEntityPanelData(
+        cardJson: styledCard,
+        variables: {
+          TrackerRuntime.kEntityRegistryKey: registryJson,
+          'entity.szh.xno_depth': '90',
+          'entity.szh.xno_layer': '2',
+        },
+      );
+      expect(data.bgGradientStart, '#0d0a14');
+      expect(data.bgGradientEnd, '#1b1226');
+    });
+
+    test('无模板样式时回退模板字段主色（非空则仍有效）', () {
+      const fallbackCard = {
+        'data': {
+          'extensions': {
+            'tracker': {
+              'schemaVersion': 2,
+              'entityTemplates': {
+                'brainwashed_female': {
+                  'label': '角色洗脑状态',
+                  'stateSchema': {
+                    'xno_depth': {
+                      'type': 'number',
+                      'label': '洗脑深度',
+                      'min': 0,
+                      'max': 100,
+                      'presentation': {
+                        'ranges': [
+                          {'gte': 0, 'lt': 50, 'title': '浅层', 'color': '#e67e22'},
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+              'initialEntities': [
+                {
+                  'id': 'szh',
+                  'displayName': '沈昭华',
+                  'templateId': 'brainwashed_female',
+                  'initialState': {'xno_depth': 90},
+                },
+              ],
+              'template': '<details><summary>状态</summary></details>',
+            },
+          },
+        },
+      };
+      final data = TrackerRuntime.buildEntityPanelData(
+        cardJson: fallbackCard,
+        variables: {
+          TrackerRuntime.kEntityRegistryKey: registryJson,
+          'entity.szh.xno_depth': '90',
+        },
+      );
+      expect(data.bgGradientStart, isEmpty);
+      expect(data.borderColor, '#e67e22');
     });
   });
 }
