@@ -2412,6 +2412,72 @@ class TrackerRuntime {
       '答应不触发）；同事件不重复叠加。\n'
       '- 新角色建档仅限剧情中以具体人物出现的角色。\n';
 
+  /// v91：实体卡**主模型注入**用的状态摘要——只列出模板字段定义与
+  /// 活跃实体当前值，**不含裁判协议/归属规则/输出指令**（那些只给
+  /// 裁判；主模型在后台/严格模式只需知道状态存在并体现于正文，
+  /// 由 App 注入 kStoryOnlySuffix 禁止其输出协议）。
+  static String formatEntityStateSummary({
+    required Map<String, String> variables,
+    required TrackerConfig config,
+  }) {
+    if (!config.isEntityCard) {
+      return '';
+    }
+    final template = config.entityTemplates.values.firstOrNull;
+    if (template == null) {
+      return '';
+    }
+    final fields = <String>[];
+    template.stateSchema.forEach((fieldKey, schema) {
+      final range = schema.isNumber
+          ? ' | range=${schema.min ?? '-inf'}..${schema.max ?? '+inf'}'
+          : '';
+      fields.add(
+        '- field=$fieldKey | label=${schema.label.isEmpty ? fieldKey : schema.label}'
+        ' | type=${schema.type}$range',
+      );
+    });
+    if (fields.isEmpty) {
+      return '';
+    }
+    final registry = decodeEntityRegistry(variables[kEntityRegistryKey]);
+    final entities = registry['entities'] is List
+        ? registry['entities']!.whereType<Map<String, dynamic>>().toList()
+        : <Map<String, dynamic>>[];
+    entities.sort((a, b) {
+      final oa = a['order'] is int ? a['order'] as int : 0;
+      final ob = b['order'] is int ? b['order'] as int : 0;
+      return oa.compareTo(ob);
+    });
+    final entityLines = <String>[];
+    for (final entity in entities) {
+      if (entity['appeared'] != true) {
+        continue; // v91：出场才显示
+      }
+      final id = entity['id'] as String? ?? '';
+      final name = entity['displayName'] as String? ?? id;
+      if (id.isEmpty) {
+        continue;
+      }
+      final values = <String>[];
+      template.stateSchema.forEach((fieldKey, _) {
+        final v = variables[entityFieldKey(id, fieldKey)];
+        if (v != null && v.trim().isNotEmpty) {
+          values.add('$fieldKey=$v');
+        }
+      });
+      entityLines.add(
+        '- entityId=$id | name=$name'
+        '${values.isNotEmpty ? ' | current=${values.join(', ')}' : ' | current=（未记录）'}',
+      );
+    }
+    return '【当前状态·实体卡】（每个角色拥有独立一套字段，以 entityId 归属）\n'
+        '模板字段定义（${template.label}）：\n'
+        '${fields.join('\n')}\n\n'
+        '已出场角色（${entityLines.length} 个）：\n'
+        '${entityLines.isEmpty ? '（暂无）' : entityLines.join('\n')}';
+  }
+
   /// v50：patch 字段名规范化——模型可能输出中文 label（`烙印值`）而不是
   /// 真实 key（`yw_brand`）。label 精确匹配映射回 key；完全未知的字段
   /// 直接丢弃（避免被 reducer 当成新变量保存、污染变量表）。
