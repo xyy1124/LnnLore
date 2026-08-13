@@ -38,6 +38,74 @@ class TrackerStageInfo {
   final String text;
 }
 
+// ---- v91：实体面板结构化模型（Flutter 原生 Tab 渲染的数据源）----
+
+/// v91：单个字段的展示数据（value + 阶段信息 + 动态解读）。
+class EntityFieldModel {
+  const EntityFieldModel({
+    required this.key,
+    required this.label,
+    required this.value,
+    this.title = '',
+    this.color = '',
+    this.text = '',
+    this.narrative = '',
+    this.percent = '',
+  });
+
+  final String key;
+  final String label;
+
+  /// 当前原始值（如 "45" / "松散半敞"）。
+  final String value;
+
+  /// 阶段标题（number 字段 ranges / string states）。
+  final String title;
+  final String color;
+  final String text;
+
+  /// 剧情摘录（narrative，过滤元语言后；空则展示层回退 text）。
+  final String narrative;
+
+  /// number 字段百分比文本（如 "45%"）；string 字段为空。
+  final String percent;
+}
+
+/// v91：单个实体（角色）的展示页数据。
+class EntityPanelModel {
+  const EntityPanelModel({
+    required this.entityId,
+    required this.displayName,
+    required this.templateId,
+    required this.fields,
+  });
+
+  final String entityId;
+  final String displayName;
+  final String templateId;
+  final List<EntityFieldModel> fields;
+}
+
+/// v91：实体卡状态面板的完整结构化数据（v2 原生渲染用）。
+class EntityPanelData {
+  const EntityPanelData({
+    this.title = '',
+    this.globalFields = const [],
+    this.entities = const [],
+  });
+
+  /// 面板标题（原 <summary>）。
+  final String title;
+
+  /// 根 stateSchema 字段（混合卡全局字段，如斗罗的魂力/武魂/征服）。
+  final List<EntityFieldModel> globalFields;
+
+  /// 已出场实体页（按注册表 order 排序）。
+  final List<EntityPanelModel> entities;
+
+  bool get isEmpty => globalFields.isEmpty && entities.isEmpty;
+}
+
 /// 解析出的结构化 patch。
 class StatePatch {
   StatePatch({
@@ -993,11 +1061,18 @@ class TrackerRuntime {
         final ob = b['order'] is int ? b['order'] as int : 0;
         return oa.compareTo(ob);
       });
-    if (entities.isEmpty) {
+    // v91：出场才显示——只渲染 appeared=true 的实体（未出场预设
+    // 角色不占位）。旧会话迁移：缺 appeared 时 discovered 视为出场、
+    // preset 有非初始值证据视为出场（见 chat_service 迁移），渲染层
+    // 对缺失字段保守处理（null/缺省视为未出场，避免误显示）。
+    final appearedEntities = entities
+        .where((e) => e['appeared'] == true)
+        .toList();
+    if (appearedEntities.isEmpty) {
       return null;
     }
     final sections = <String>[];
-    for (final entity in entities) {
+    for (final entity in appearedEntities) {
       final entityId = entity['id'] as String? ?? '';
       final displayName = entity['displayName'] as String? ?? entityId;
       final templateId = entity['templateId'] as String? ?? '';
@@ -1021,6 +1096,171 @@ class TrackerRuntime {
       return null;
     }
     return sections.join('\n');
+  }
+
+  /// v91：构建实体卡面板的**结构化数据**（Flutter 原生 Tab 渲染用，
+  /// 不走 HTML）。字段展示信息（value/阶段/narrative）与 HTML 路径
+  /// 共用同一套 presentation 解析，保证两种渲染同值同文案。
+  ///
+  /// 只包含已出场实体（appeared=true）；混合卡的根全局字段单独列出。
+  /// [variables] 含实例字段（entity.<id>.<field>）与注册表 key；
+  /// [narrative] 按完整 instance key 匹配（消息快照 v6 冻结）。
+  static EntityPanelData buildEntityPanelData({
+    required Map<String, dynamic>? cardJson,
+    required Map<String, String> variables,
+    Map<String, String>? narrative,
+  }) {
+    final config = TrackerConfig.fromCardJson(cardJson);
+    if (!config.isEntityCard) {
+      return const EntityPanelData();
+    }
+
+    // 面板标题：优先 <summary> 内容（从 tracker.template 提取），
+    // 无则用模板 label。
+    String title = '';
+    final rawTemplate = config.template ?? '';
+    final summaryMatch = RegExp(
+      r'<summary\b[^>]*>([\s\S]*?)</summary>',
+      caseSensitive: false,
+    ).firstMatch(rawTemplate);
+    if (summaryMatch != null) {
+      title = summaryMatch.group(1)?.trim() ?? '';
+    }
+    if (title.isEmpty) {
+      final firstTemplate = config.entityTemplates.values.firstOrNull;
+      title = firstTemplate?.label ?? '状态面板';
+    }
+
+    String valueOfInstance(String entityId, String fieldKey) {
+      final key = entityFieldKey(entityId, fieldKey);
+      final v = variables[key];
+      if (v != null && v.isNotEmpty) {
+        return v;
+      }
+      for (final initial in config.initialEntities) {
+        if (initial.id == entityId) {
+          final init = initial.initialState[fieldKey];
+          if (init != null) {
+            return '$init';
+          }
+          break;
+        }
+      }
+      final template = config.entityTemplates[config.initialEntities
+          .where((e) => e.id == entityId)
+          .map((e) => e.templateId)
+          .firstOrNull];
+      final def = template?.defaultState[fieldKey];
+      return def == null ? '' : '$def';
+    }
+
+    EntityFieldModel fieldModel(
+      String entityId,
+      String fieldKey,
+      TrackerFieldSchema schema,
+      String value,
+    ) {
+      final stage = stageInfo(
+        entityFieldKey(entityId, fieldKey),
+        value,
+        config,
+      );
+      var narrativeText = '';
+      final n = narrative?[entityFieldKey(entityId, fieldKey)];
+      if (n != null && n.trim().isNotEmpty && !isMetaLanguageNarrative(n)) {
+        narrativeText = n.trim();
+      }
+      return EntityFieldModel(
+        key: fieldKey,
+        label: schema.label.isEmpty ? fieldKey : schema.label,
+        value: value,
+        title: stage?.title ?? '',
+        color: stage?.color ?? '',
+        text: stage?.text ?? '',
+        narrative: narrativeText,
+        percent: schema.isNumber
+            ? _percentText(entityFieldKey(entityId, fieldKey), value, config)
+            : '',
+      );
+    }
+
+    // 根全局字段（混合卡）
+    final globalFields = <EntityFieldModel>[];
+    for (final key in config.stateSchema.keys) {
+      final schema = config.stateSchema[key];
+      if (schema == null) {
+        continue;
+      }
+      final v = variables[key];
+      if (v == null || v.trim().isEmpty) {
+        continue;
+      }
+      final stage = stageInfo(key, v, config);
+      globalFields.add(
+        EntityFieldModel(
+          key: key,
+          label: schema.label.isEmpty ? key : schema.label,
+          value: v,
+          title: stage?.title ?? '',
+          color: stage?.color ?? '',
+          text: stage?.text ?? '',
+          narrative: '',
+          percent: schema.isNumber ? _percentText(key, v, config) : '',
+        ),
+      );
+    }
+
+    // 已出场实体页（按注册表 order）
+    final registry = decodeEntityRegistry(variables[kEntityRegistryKey]);
+    final rawEntities = registry['entities'] is List
+        ? registry['entities']!.whereType<Map<String, dynamic>>().toList()
+        : <Map<String, dynamic>>[];
+    rawEntities.sort((a, b) {
+      final oa = a['order'] is int ? a['order'] as int : 0;
+      final ob = b['order'] is int ? b['order'] as int : 0;
+      return oa.compareTo(ob);
+    });
+    final entities = <EntityPanelModel>[];
+    for (final entity in rawEntities) {
+      if (entity['appeared'] != true) {
+        continue; // v91：出场才显示
+      }
+      final entityId = entity['id'] as String? ?? '';
+      final displayName = entity['displayName'] as String? ?? entityId;
+      final templateId = entity['templateId'] as String? ?? '';
+      if (entityId.isEmpty) {
+        continue;
+      }
+      final template = config.entityTemplates[templateId];
+      if (template == null) {
+        continue;
+      }
+      final fields = <EntityFieldModel>[];
+      template.stateSchema.forEach((fieldKey, schema) {
+        final value = valueOfInstance(entityId, fieldKey);
+        if (value.isEmpty) {
+          return;
+        }
+        fields.add(fieldModel(entityId, fieldKey, schema, value));
+      });
+      if (fields.isEmpty) {
+        continue;
+      }
+      entities.add(
+        EntityPanelModel(
+          entityId: entityId,
+          displayName: displayName,
+          templateId: templateId,
+          fields: fields,
+        ),
+      );
+    }
+
+    return EntityPanelData(
+      title: title,
+      globalFields: globalFields,
+      entities: entities,
+    );
   }
 
   /// v89：渲染单个实体分区。
@@ -2138,16 +2378,18 @@ class TrackerRuntime {
 【实体状态协议】（实体卡专用，输出 JSON 代码块，不要任何解释文字）
 {
   "entities": [{"ref": "new:1", "displayName": "新角色名", "templateId": "模板ID"}],
+  "appearedEntityRefs": ["实体ID或new:N"],
   "updates": [
     {"entityRef": "实体ID或new:N", "field": "字段key", "op": "delta|set", "value": 数值或字符串, "narrative": "该实体剧情摘录", "consequence": "下一轮行为约束"}
   ]
 }
 - entities：本轮**首次以具体人物出现**（有名、有行动、有对话、被称呼或受事件影响）且不在上方列表中的角色才列出；泛称/群体/归属不明的"她"不列出；最多新增 5 个。
+- appearedEntityRefs：本轮**真实出场**的已建档角色（含预设实体）——当场说话/行动/被互动/明确处于当前场景的都算；**即使状态无变化也必须列出**；只在名单/设定中出现、被提到/回忆、计划邀请但未实际出现、指代不清的"她"不算。
 - updates：每个操作 entityRef 必须能对应上方一个实体（既有 entityId 或本轮 entities 里的 new:N）；一个事件只更新一个角色的字段，禁止把某角色的状态镜像到其他角色。
 - field 必须是模板字段（${template.id}）。
 - op=delta 时 value 为数值增量（number 字段）；op=set 时 value 为新值（string 字段或数值绝对值）。
 - 同一实体同一字段每轮最多一个操作；冲突或指代不清则不输出该操作。
-- 没有变化时输出 {"entities": [], "updates": []}。
+- 没有变化时输出 {"entities": [], "appearedEntityRefs": [], "updates": []}（出场角色仍要列在 appearedEntityRefs）。
 - narrative/consequence 遵循统一剧情摘录契约。
 ''';
     return '【当前状态·实体卡】（以下 field 是模板字段的唯一标识；'
