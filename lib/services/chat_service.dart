@@ -2125,6 +2125,9 @@ class ChatService {
     final trackerKeys = <String>{
       ...config.stateSchema.keys,
       ...config.initialState.keys,
+      // v91：实体卡模板字段（instance key 的 local 部分匹配）
+      for (final template in config.entityTemplates.values)
+        ...template.stateSchema.keys,
     };
     if (trackerKeys.isEmpty) {
       return null;
@@ -2133,27 +2136,53 @@ class ChatService {
       for (final key in trackerKeys)
         if (variables[key]?.trim().isNotEmpty == true) key: variables[key]!,
     };
-    final state = existingState.isEmpty
-        ? config.initialState.map((k, v) => MapEntry(k, '$v'))
-        : existingState;
-    final text = TrackerRuntime.formatTrackerInstruction(
-      state: Map<String, dynamic>.from(state),
-      config: config,
-    );
+    // v91：实体卡主模型注入用状态摘要（不含裁判协议/输出指令）；
+    // v1 卡保持原 formatTrackerInstruction。
+    final text = config.isEntityCard
+        ? TrackerRuntime.formatEntityStateSummary(
+            variables: variables,
+            config: config,
+          )
+        : TrackerRuntime.formatTrackerInstruction(
+            state: Map<String, dynamic>.from(
+              existingState.isEmpty
+                  ? config.initialState.map((k, v) => MapEntry(k, '$v'))
+                  : existingState,
+            ),
+            config: config,
+          );
     if (text.isEmpty) {
       return null;
     }
     // v67：注入上一轮动态解读（narrative）与剧情影响指令（consequence）——
     // 模型下一轮不只读到"压制中"标签，还读到"反抗正在失去效果"与
     // "除非成功脱身，否则保持行动受限"等剧情约束，正文才能持续体现状态。
+    // v91：实体卡 narrative/consequence 是 instance key（entity.<id>.<field>），
+    // label 从对应模板字段取。
     final parts = <String>[text];
+    String labelOf(String key) {
+      if (config.isEntityCard) {
+        final parsed = TrackerRuntime.parseEntityFieldKey(key);
+        if (parsed != null) {
+          for (final template in config.entityTemplates.values) {
+            final schema = template.stateSchema[parsed.$2];
+            if (schema != null) {
+              return schema.label.isEmpty ? parsed.$2 : schema.label;
+            }
+          }
+          return parsed.$2;
+        }
+        return key;
+      }
+      return config.stateSchema[key]?.label ?? key;
+    }
+
     final narrativeLines = <String>[];
     for (final entry in narrative.entries) {
       if (entry.value.trim().isEmpty) {
         continue;
       }
-      final label = config.stateSchema[entry.key]?.label ?? entry.key;
-      narrativeLines.add('- $label：${entry.value.trim()}');
+      narrativeLines.add('- ${labelOf(entry.key)}：${entry.value.trim()}');
     }
     if (narrativeLines.isNotEmpty) {
       parts.add('[当前状态在剧情中的具体表现]\n${narrativeLines.join('\n')}');
@@ -2163,8 +2192,7 @@ class ChatService {
       if (entry.value.trim().isEmpty) {
         continue;
       }
-      final label = config.stateSchema[entry.key]?.label ?? entry.key;
-      consequenceLines.add('- $label：${entry.value.trim()}');
+      consequenceLines.add('- ${labelOf(entry.key)}：${entry.value.trim()}');
     }
     if (consequenceLines.isNotEmpty) {
       parts.add('[状态对下一轮剧情的约束]\n${consequenceLines.join('\n')}');
