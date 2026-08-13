@@ -16,6 +16,7 @@ import '../models/processed_assistant_output.dart';
 import '../models/prompt_assembly.dart';
 import '../models/tracker_config.dart';
 import '../models/world_book.dart';
+import 'character_card_extensions_reader.dart';
 import 'chat_character_resolver.dart';
 import 'chat_database_service.dart';
 import 'chat_display_sanitizer.dart';
@@ -93,7 +94,6 @@ class ChatService {
   /// 保证"正文先显示、状态稍后更新，但用户下次发送前上一轮状态必须
   /// 结算完成"（不丢状态、不覆盖）。
   final Map<String, Future<void>> _pendingTrackerJudges = {};
-
   /// v70：等待该会话上一轮后台裁判结算完成（无则立即返回）。
   Future<void> _awaitPendingTrackerJudge(String sessionId) async {
     final pending = _pendingTrackerJudges[sessionId];
@@ -342,14 +342,14 @@ class ChatService {
           // v70：快速模式=主模型唯一写入者（输出 <TRACKER_UPDATE> 协议）；
           // 后台/严格=主模型只输出正文（状态由裁判决定）
           includeOutputProtocol:
-              appSettingsNotifier.value.trackerUpdateMode ==
+              _effectiveTrackerUpdateMode(character.cardJson) ==
                   TrackerUpdateMode.quick,
         ),
       );
 
       // v73：后台/严格模式主模型只输出正文——状态由裁判决定；
       // 快速模式主模型是唯一状态写入者
-      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
+      final updateMode = _effectiveTrackerUpdateMode(character.cardJson);
       final processed = await _processAssistantOutput(
         activeSession.id,
         completion.text,
@@ -381,6 +381,7 @@ class ChatService {
             assistantText: processed.displayText,
             cancellationToken: cancellationToken,
             mainPatch: processed.patch,
+            sessionId: activeSession.id,
           );
         } on Object {
           await _debugTraceJudge('strict_catch_error');
@@ -629,12 +630,12 @@ class ChatService {
           // v70：快速模式=主模型唯一写入者（输出 <TRACKER_UPDATE> 协议）；
           // 后台/严格=主模型只输出正文（状态由裁判决定）
           includeOutputProtocol:
-              appSettingsNotifier.value.trackerUpdateMode ==
+              _effectiveTrackerUpdateMode(character.cardJson) ==
                   TrackerUpdateMode.quick,
         ),
       );
 
-      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
+      final updateMode = _effectiveTrackerUpdateMode(character.cardJson);
       final processed = await _processAssistantOutput(
         activeSession.id,
         completion.text,
@@ -657,6 +658,7 @@ class ChatService {
             assistantText: processed.displayText,
             cancellationToken: cancellationToken,
             mainPatch: processed.patch,
+            sessionId: activeSession.id,
           );
         } on Object {
           judgeResult = null;
@@ -896,12 +898,12 @@ class ChatService {
           ).$2,
           // v70：快速模式=主模型唯一写入者；后台/严格=只输出正文
           includeOutputProtocol:
-              appSettingsNotifier.value.trackerUpdateMode ==
+              _effectiveTrackerUpdateMode(character.cardJson) ==
                   TrackerUpdateMode.quick,
         ),
       );
 
-      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
+      final updateMode = _effectiveTrackerUpdateMode(character.cardJson);
       final processed = await _processAssistantOutput(
         session.id,
         completion.text,
@@ -926,6 +928,7 @@ class ChatService {
             assistantText: processed.displayText,
             cancellationToken: cancellationToken,
             mainPatch: processed.patch,
+            sessionId: session.id,
           );
         } on Object {
           judgeResult = null;
@@ -1187,7 +1190,7 @@ class ChatService {
       ).$2,
       // v70：快速模式=主模型唯一写入者；后台/严格=只输出正文
       includeOutputProtocol:
-          appSettingsNotifier.value.trackerUpdateMode ==
+          _effectiveTrackerUpdateMode(character.cardJson) ==
               TrackerUpdateMode.quick,
     );
     if (trackerState != null && trackerState.trim().isNotEmpty) {
@@ -1217,7 +1220,7 @@ class ChatService {
         onThinkingChainRetry: onThinkingChainRetry,
       );
 
-      final updateMode = appSettingsNotifier.value.trackerUpdateMode;
+      final updateMode = _effectiveTrackerUpdateMode(character.cardJson);
       final processed = await _processAssistantOutput(
         session.id,
         completion.text,
@@ -1240,6 +1243,7 @@ class ChatService {
             assistantText: processed.displayText,
             cancellationToken: cancellationToken,
             mainPatch: processed.patch,
+            sessionId: session.id,
           );
         } on Object {
           judgeResult = null;
@@ -1839,6 +1843,12 @@ class ChatService {
   static String messageStatusSnapshotV5Key(String messageId) =>
       '__msg_tracker_state_v5__:$messageId';
 
+  /// v89 快照 key（实体卡）：结构化状态 + narrative + consequence +
+  /// 冻结的实体目录（entities）——历史消息面板按消息时刻的角色目录
+  /// 渲染，不被后来新增/改名的角色影响。
+  static String messageStatusSnapshotV6Key(String messageId) =>
+      '__msg_tracker_state_v6__:$messageId';
+
   Future<void> _persistMessageStatusHtml(
     String sessionId,
     String messageId,
@@ -1928,6 +1938,67 @@ class ChatService {
       if (completeConsequence != null && completeConsequence.isNotEmpty)
         'consequence': completeConsequence,
     };
+    // v89：实体卡写 v6 快照（冻结实体目录 + 全实体状态 + narrative/
+    // consequence）——历史消息面板不被后来新增/改名的角色影响。
+    final v6Payload = <String, dynamic>{};
+    if (config.isEntityCard) {
+      final registry = _readEntityRegistry(finalVariables);
+      final rawEntities = registry['entities'] is List
+          ? registry['entities']!.whereType<Map<String, dynamic>>().toList()
+          : <Map<String, dynamic>>[];
+      final entityDir = <Map<String, dynamic>>[];
+      for (final e in rawEntities) {
+        entityDir.add({
+          'id': e['id'],
+          'templateId': e['templateId'],
+          'displayName': e['displayName'],
+          'order': e['order'],
+        });
+      }
+      final instanceState = <String, dynamic>{};
+      final instanceNarrative = <String, String>{};
+      final instanceConsequence = <String, String>{};
+      final trackerKeys = <String>{
+        ...config.stateSchema.keys,
+        ...config.initialState.keys,
+      };
+      for (final key in finalVariables.keys) {
+        final parsed = TrackerRuntime.parseEntityFieldKey(key);
+        if (parsed != null &&
+            trackerKeys.contains(parsed.$2) &&
+            finalVariables[key]?.trim().isNotEmpty == true) {
+          instanceState[key] = finalVariables[key]!;
+        }
+      }
+      // v89：注册表随快照冻结——渲染层（message_bubble 只传 state）
+      // 从 state 里读注册表 key 即可还原实体目录，无需改读取链路。
+      final registryRaw = finalVariables[TrackerRuntime.kEntityRegistryKey];
+      if (registryRaw != null && registryRaw.trim().isNotEmpty) {
+        instanceState[TrackerRuntime.kEntityRegistryKey] = registryRaw;
+      }
+      if (completeNarrative != null) {
+        for (final key in completeNarrative.keys) {
+          if (TrackerRuntime.parseEntityFieldKey(key) != null) {
+            instanceNarrative[key] = completeNarrative[key]!;
+          }
+        }
+      }
+      if (completeConsequence != null) {
+        for (final key in completeConsequence.keys) {
+          if (TrackerRuntime.parseEntityFieldKey(key) != null) {
+            instanceConsequence[key] = completeConsequence[key]!;
+          }
+        }
+      }
+      v6Payload['entities'] = entityDir;
+      v6Payload['state'] = instanceState;
+      if (instanceNarrative.isNotEmpty) {
+        v6Payload['narrative'] = instanceNarrative;
+      }
+      if (instanceConsequence.isNotEmpty) {
+        v6Payload['consequence'] = instanceConsequence;
+      }
+    }
     await ChatDatabaseService.instance.upsertSessionVariables(sessionId, {
       messageStatusHtmlKey(messageId): jsonEncode(state),
       // v63：有动态解读时写 v4 快照（state + narrative），显示层优先 v4
@@ -1939,6 +2010,9 @@ class ChatService {
       // v67：v5 快照（state + narrative + consequence）——下一轮注入用
       if (v5Payload.length > 1)
         messageStatusSnapshotV5Key(messageId): jsonEncode(v5Payload),
+      // v89：实体卡 v6 快照（冻结实体目录）
+      if (v6Payload.isNotEmpty)
+        messageStatusSnapshotV6Key(messageId): jsonEncode(v6Payload),
     });
   }
 
@@ -2196,6 +2270,306 @@ class ChatService {
     return 'conservative';
   }
 
+  // ---- v89：动态实体（群像卡）注册表 ----
+
+  /// v89：实体卡的有效状态更新模式——动态实体卡选择快速模式时
+  /// **降级为后台模式**（主模型不输出 <TRACKER_UPDATE> 协议，状态由
+  /// 裁判按实体 envelope 维护；动态 quick 需主模型输出实体协议，
+  /// 后置实现）。记录 requested/effective 便于排查。
+  TrackerUpdateMode _effectiveTrackerUpdateMode(
+    Map<String, dynamic>? cardJson,
+  ) {
+    final requested = appSettingsNotifier.value.trackerUpdateMode;
+    final config = TrackerConfig.fromCardJson(cardJson);
+    if (config.isEntityCard && requested == TrackerUpdateMode.quick) {
+      print('[TRACKER_MODE] 实体卡 quick 降级 background '
+        'requestedMode=quick effectiveMode=background');
+      return TrackerUpdateMode.background;
+    }
+    return requested;
+  }
+
+  /// 读取会话实体注册表；无则返回空结构。
+  Map<String, dynamic> _readEntityRegistry(
+    Map<String, String> variables,
+  ) {
+    return TrackerRuntime.decodeEntityRegistry(
+      variables[TrackerRuntime.kEntityRegistryKey],
+    );
+  }
+
+  /// v89：reconcile 实体注册表——
+  /// ① 预设实体（initialEntities）幂等写入（已存在则保留原位序，不覆盖
+  ///    已建档动态实体）；② 迁移声明（legacy key → 预设实体字段）应用
+  ///    一次（appliedMigrations 记录，幂等）。
+  /// 返回 (新注册表 JSON, 需要落库的实例字段增量)。
+  (String?, Map<String, String>) _reconcileEntityRegistry({
+    required Map<String, dynamic> registry,
+    required Map<String, String> variables,
+    required TrackerConfig config,
+  }) {
+    if (!config.isEntityCard) {
+      return (null, const {});
+    }
+    var changed = false;
+    final entities = <Map<String, dynamic>>[
+      ...(registry['entities'] is List
+          ? registry['entities']!.whereType<Map<String, dynamic>>()
+          : <Map<String, dynamic>>[]),
+    ];
+    final existingIds = entities.map((e) => e['id'] as String? ?? '').toSet();
+
+    // ① 预设实体幂等写入
+    var order = entities.length;
+    for (final initial in config.initialEntities) {
+      if (existingIds.contains(initial.id)) {
+        continue;
+      }
+      entities.add({
+        'id': initial.id,
+        'templateId': initial.templateId,
+        'displayName': initial.displayName,
+        'aliases': initial.aliases,
+        'source': 'preset',
+        'order': order++,
+        'status': 'active',
+      });
+      changed = true;
+    }
+
+    // ② 迁移声明（旧 key → 预设实体字段）——只应用一次
+    final applied = <String>[
+      ...(registry['appliedMigrations'] is List
+          ? registry['appliedMigrations']!.whereType<String>()
+          : <String>[]),
+    ];
+    final migratedFields = <String, String>{};
+    for (final migration in config.entityMigrations) {
+      if (applied.contains(migration.id)) {
+        continue;
+      }
+      final targetTemplateId = config.initialEntities
+          .where((e) => e.id == migration.targetEntityId)
+          .map((e) => e.templateId)
+          .firstOrNull;
+      if (targetTemplateId == null) {
+        continue;
+      }
+      migration.fieldMap.forEach((legacyKey, fieldKey) {
+        final legacyValue = variables[legacyKey];
+        if (legacyValue != null && legacyValue.trim().isNotEmpty) {
+          migratedFields[TrackerRuntime.entityFieldKey(
+            migration.targetEntityId,
+            fieldKey,
+          )] = legacyValue;
+        }
+      });
+      applied.add(migration.id);
+      changed = true;
+    }
+
+    if (!changed) {
+      return (null, migratedFields);
+    }
+    final newRegistry = <String, dynamic>{
+      'version': 1,
+      'nextDynamicOrdinal':
+          registry['nextDynamicOrdinal'] is int
+              ? registry['nextDynamicOrdinal'] as int
+              : 1,
+      'appliedMigrations': applied,
+      'entities': entities,
+    };
+    return (TrackerRuntime.encodeEntityRegistry(newRegistry), migratedFields);
+  }
+
+  /// v89：裁判 envelope 中发现的新实体 → 分配 dyn_ 永久 ID 并入注册表。
+  /// 返回 (更新后的注册表, 新实体 ID 映射 {ref → entityId})。
+  (Map<String, dynamic>, Map<String, String>) _applyDiscoveredEntities({
+    required Map<String, dynamic> registry,
+    required List<Map<String, dynamic>> discovered,
+    required TrackerConfig config,
+  }) {
+    var nextOrdinal =
+        registry['nextDynamicOrdinal'] is int ? registry['nextDynamicOrdinal'] as int : 1;
+    final entities = <Map<String, dynamic>>[
+      ...(registry['entities'] is List
+          ? registry['entities']!.whereType<Map<String, dynamic>>()
+          : <Map<String, dynamic>>[]),
+    ];
+    final existingNames = entities
+        .map((e) => (e['displayName'] as String? ?? '').trim())
+        .toSet();
+    final applied = <String>[
+      ...(registry['appliedMigrations'] is List
+          ? registry['appliedMigrations']!.whereType<String>()
+          : <String>[]),
+    ];
+    final idMap = <String, String>{};
+    var order = entities.length;
+    final maxAuto = config.entityDiscovery.maxAutoEntities;
+    for (final item in discovered) {
+      final ref = item['ref'] as String? ?? '';
+      final displayName = (item['displayName'] as String? ?? '').trim();
+      if (ref.isEmpty || displayName.isEmpty) {
+        continue;
+      }
+      // 同名精确匹配 → 复用既有实体
+      String? matchedId;
+      for (final e in entities) {
+        if ((e['displayName'] as String? ?? '').trim() == displayName) {
+          matchedId = e['id'] as String?;
+          break;
+        }
+      }
+      if (matchedId != null) {
+        idMap[ref] = matchedId;
+        continue;
+      }
+      if (entities.length >= maxAuto) {
+        // 达到上限：拒绝新建（记录日志即可，不落库）
+        continue;
+      }
+      final entityId = 'dyn_${nextOrdinal.toString().padLeft(4, '0')}';
+      nextOrdinal++;
+      entities.add({
+        'id': entityId,
+        'templateId': item['templateId'] as String? ??
+            config.entityDiscovery.defaultTemplateId,
+        'displayName': displayName,
+        'aliases': <String>[],
+        'source': 'discovered',
+        'order': order++,
+        'status': 'active',
+      });
+      idMap[ref] = entityId;
+    }
+    final newRegistry = <String, dynamic>{
+      'version': 1,
+      'nextDynamicOrdinal': nextOrdinal,
+      'appliedMigrations': applied,
+      'entities': entities,
+    };
+    return (newRegistry, idMap);
+  }
+
+  /// v89：把裁判 envelope（entities + updates）规范化为标准 patch——
+  /// new:N 引用映射到分配的实体 ID，updates 转为 instance key 的
+  /// set/add。返回 (patch, narrative, consequence, 注册表变更)。
+  (StatePatch, Map<String, String>, Map<String, String>, Map<String, dynamic>?)
+      _normalizeEntityEnvelope({
+    required Map<String, dynamic>? envelope,
+    required Map<String, dynamic> registry,
+    required Map<String, String> idMap,
+    required TrackerConfig config,
+  }) {
+    if (envelope == null) {
+      return (StatePatch(), const {}, const {}, null);
+    }
+    final setValues = <String, dynamic>{};
+    final addValues = <String, num>{};
+    final narrative = <String, String>{};
+    final consequence = <String, String>{};
+    final updates = envelope['updates'];
+    if (updates is List) {
+      for (final item in updates) {
+        final map = CharacterCardExtensionsReader.asMap(item);
+        if (map == null) {
+          continue;
+        }
+        final ref = map['entityRef'] as String? ?? '';
+        final field = map['field'] as String? ?? '';
+        final op = map['op'] as String? ?? 'set';
+        final value = map['value'];
+        // 归属校验：ref → 实体 ID
+        String? entityId = idMap[ref];
+        if (entityId == null) {
+          // 可能是既有实体 ID 直引（裁判也可直接用实体 ID）
+          entityId = ref;
+        }
+        if (entityId == null || entityId.isEmpty || field.isEmpty) {
+          continue;
+        }
+        final instanceKey = TrackerRuntime.entityFieldKey(entityId, field);
+        if (op == 'delta' && value is num) {
+          addValues[instanceKey] = value;
+        } else if (value != null) {
+          setValues[instanceKey] = value;
+        }
+        final n = map['narrative'];
+        if (n is String && n.trim().isNotEmpty) {
+          narrative[instanceKey] = n.trim();
+        }
+        final c = map['consequence'];
+        if (c is String && c.trim().isNotEmpty) {
+          consequence[instanceKey] = c.trim();
+        }
+      }
+    }
+    final patch = StatePatch(
+      setValues: setValues,
+      addValues: addValues,
+      protocolDetected: updates is List && updates.isNotEmpty,
+    );
+    return (patch, narrative, consequence, null);
+  }
+
+  /// v89：从裁判输出中提取实体 envelope（entities + updates）。
+  /// 兼容 JSON 代码块与裸 JSON；解析失败返回 null。
+  Map<String, dynamic>? _extractEntityEnvelope(String text) {
+    // 提取第一个 JSON 代码块
+    final blockMatch = RegExp(
+      r'```(?:json)?\s*([\s\S]*?)```',
+      caseSensitive: false,
+    ).firstMatch(text);
+    final candidate = blockMatch?.group(1)?.trim() ?? text.trim();
+    // 从候选里找 entities/updates 顶层键
+    Object? decoded;
+    try {
+      decoded = jsonDecode(candidate);
+    } catch (_) {
+      // 可能是多余的说明文字包裹，尝试截取第一个 { ... } 平衡块
+      final start = candidate.indexOf('{');
+      if (start < 0) {
+        return null;
+      }
+      var depth = 0;
+      var inString = false;
+      var end = -1;
+      for (var i = start; i < candidate.length; i++) {
+        final ch = candidate[i];
+        if (ch == '"' && (i == 0 || candidate[i - 1] != r'\')) {
+          inString = !inString;
+        }
+        if (!inString) {
+          if (ch == '{') {
+            depth++;
+          } else if (ch == '}') {
+            depth--;
+            if (depth == 0) {
+              end = i;
+              break;
+            }
+          }
+        }
+      }
+      if (end < 0) {
+        return null;
+      }
+      try {
+        decoded = jsonDecode(candidate.substring(start, end + 1));
+      } catch (_) {
+        return null;
+      }
+    }
+    if (decoded is Map<String, dynamic>) {
+      if (decoded.containsKey('entities') || decoded.containsKey('updates')) {
+        return decoded;
+      }
+    }
+    return null;
+  }
+
   /// 状态裁判：剧情生成后**独立调用一次**，返回 JSON patch 与本轮
   /// 动态解读（narrative）与下一轮剧情影响（consequence）。
   /// 返回 null 表示未启用 / 卡无 tracker / 请求失败（不影响主流程——
@@ -2213,6 +2587,9 @@ class ChatService {
     required String assistantText,
     ChatCompletionCancelToken? cancellationToken,
     StatePatch? mainPatch,
+    // v89：实体卡注册表落库用（envelope 解析出新实体时内部立即
+    // 写入 chat_variables——幂等、并发安全，不依赖主流程提交）。
+    String? sessionId,
   }) async {
     // v68：不再检查旧 tracker_judge_enabled 总开关——是否调用裁判已由
     // TrackerUpdateMode（quick/background/strict）决定，隐藏旧开关不能
@@ -2224,6 +2601,35 @@ class ChatService {
       await _debugTraceJudge('enter_isEnabled_false cardJson=${cardJson != null}');
       return null;
     }
+    // v89：实体卡 reconcile——预设实体幂等建档 + 旧 key 迁移。
+    // 每次裁判运行前执行（幂等），保证注册表与变量表一致。
+    if (trackerConfig.isEntityCard) {
+      final registry = _readEntityRegistry(variables);
+      final (registryJson, migratedFields) = _reconcileEntityRegistry(
+        registry: registry,
+        variables: variables,
+        config: trackerConfig,
+      );
+      if (registryJson != null || migratedFields.isNotEmpty) {
+        final writeVars = <String, String>{
+          if (registryJson != null)
+            TrackerRuntime.kEntityRegistryKey: registryJson,
+          ...migratedFields,
+        };
+        if (sessionId != null) {
+          try {
+            await ChatDatabaseService.instance.upsertSessionVariables(
+              sessionId,
+              writeVars,
+            );
+          } on Object catch (error) {
+            print('[TRACKER_JUDGE] 实体注册表 reconcile 落库失败: $error');
+          }
+        }
+        // 内存同步（后续 prompt 组装用）
+        variables.addAll(writeVars);
+      }
+    }
     final trackerKeys = <String>{
       ...trackerConfig.stateSchema.keys,
       ...trackerConfig.initialState.keys,
@@ -2232,12 +2638,17 @@ class ChatService {
       for (final key in trackerKeys)
         if (variables[key]?.trim().isNotEmpty == true) key: variables[key]!,
     };
-    final stateText = TrackerRuntime.formatTrackerInstruction(
-      state: state.isEmpty
-          ? trackerConfig.initialState.map((k, v) => MapEntry(k, '$v'))
-          : state,
-      config: trackerConfig,
-    );
+    final stateText = trackerConfig.isEntityCard
+        ? TrackerRuntime.formatEntityTrackerInstruction(
+            variables: variables,
+            config: trackerConfig,
+          )
+        : TrackerRuntime.formatTrackerInstruction(
+            state: state.isEmpty
+                ? trackerConfig.initialState.map((k, v) => MapEntry(k, '$v'))
+                : state,
+            config: trackerConfig,
+          );
     if (stateText.isEmpty) {
       // v87 调试埋点：裁判被调用但状态文本为空
       await _debugTraceJudge('enter_stateText_empty');
@@ -2407,6 +2818,49 @@ class ChatService {
           'chars=${completion.text.length}',
         );
         var patch = TrackerRuntime.extractPatch(completion.text);
+        // v89：实体卡（群像卡）——裁判输出实体 envelope（entities +
+        // updates），先解析发现的新实体并分配 dyn_ ID，再规范化为
+        // instance key patch。注册表变更**内部立即落库**（幂等：
+        // 同名复用/序号单调，即使后续字段提交失败下轮也能恢复）。
+        Map<String, String>? entityNarrative;
+        Map<String, String>? entityConsequence;
+        if (trackerConfig.isEntityCard) {
+          final envelope = _extractEntityEnvelope(completion.text);
+          if (envelope != null) {
+            final registry = _readEntityRegistry(variables);
+            final (newRegistry, idMap) = _applyDiscoveredEntities(
+              registry: registry,
+              discovered: envelope['entities'] is List
+                  ? (envelope['entities'] as List)
+                      .whereType<Map<String, dynamic>>()
+                      .toList()
+                  : const [],
+              config: trackerConfig,
+            );
+            final (entityPatch, entNarrative, entConsequence, _) =
+                _normalizeEntityEnvelope(
+                  envelope: envelope,
+                  registry: newRegistry,
+                  idMap: idMap,
+                  config: trackerConfig,
+                );
+            patch = entityPatch;
+            entityNarrative = entNarrative;
+            entityConsequence = entConsequence;
+            // 新实体建档：注册表立即写库（幂等）
+            if (sessionId != null &&
+                newRegistry['entities'] is List &&
+                (newRegistry['entities'] as List).isNotEmpty) {
+              await ChatDatabaseService.instance.upsertSessionVariables(
+                sessionId,
+                {
+                  TrackerRuntime.kEntityRegistryKey:
+                      TrackerRuntime.encodeEntityRegistry(newRegistry),
+                },
+              );
+            }
+          }
+        }
         // v70：裁判可选输出最终状态 "state" 字段——检测到则按最终值
         // 一次性 set（不再增量叠加，避免"主+裁判重复增加"）。
         // v73：state 存在时**完全忽略 patch.add**——模型同时返回
@@ -2428,17 +2882,23 @@ class ChatService {
           );
         }
         // v65：narrative key 规范化——模型可能用中文 label/别名作键，
-        // 统一映射回真实 key（patch 规范化与 narrative 规范化同一映射）
-        final narrative = TrackerRuntime.canonicalizeNarrative(
-          TrackerRuntime.extractNarrative(completion.text),
-          trackerConfig,
-        );
+        // 统一映射回真实 key（patch 规范化与 narrative 规范化同一映射）。
+        // v89：实体卡用 envelope 内嵌 narrative（instance key 直存，
+        // 无需规范化）。
+        final narrative = trackerConfig.isEntityCard
+            ? (entityNarrative ?? const <String, String>{})
+            : TrackerRuntime.canonicalizeNarrative(
+                TrackerRuntime.extractNarrative(completion.text),
+                trackerConfig,
+              );
         // v67：consequence 同样规范化（narrative 与 consequence 共用
         // canonicalizeNarrative——都是"字段 → 文本"映射）
-        final consequence = TrackerRuntime.canonicalizeNarrative(
-          TrackerRuntime.extractConsequence(completion.text),
-          trackerConfig,
-        );
+        final consequence = trackerConfig.isEntityCard
+            ? (entityConsequence ?? const <String, String>{})
+            : TrackerRuntime.canonicalizeNarrative(
+                TrackerRuntime.extractConsequence(completion.text),
+                trackerConfig,
+              );
         print('[TRACKER_JUDGE] mode=$mode attempt=${attempt + 1} '
           'patch=$patch narrative=$narrative consequence=$consequence',
         );
@@ -2609,6 +3069,7 @@ class ChatService {
       userText: userText,
       assistantText: assistantText,
       mainPatch: processed.patch,
+      sessionId: sessionId,
     );
     if (judgeResult == null) {
       return;
