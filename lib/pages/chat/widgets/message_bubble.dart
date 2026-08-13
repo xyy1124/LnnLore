@@ -644,16 +644,12 @@ class _MessageBubbleState extends State<MessageBubble> {
     // v91：实体卡（群像卡，schemaVersion 2）走 Flutter 原生 Tab 面板；
     // v1 卡保持 HTML 路径（SpecialStatusPanel）。
     if (trackerConfig.isEntityCard) {
-      // 数据源：优先消息快照（v6 state + 注册表，消息时刻冻结），
-      // 无快照时用当前变量表（运行时生成）。
+      final cardJson =
+          _messageCharacter?.cardJson ?? widget.character?.cardJson;
       final variables = widget.sessionVariables;
-      final entityData = TrackerRuntime.buildEntityPanelData(
-        cardJson: _messageCharacter?.cardJson ?? widget.character?.cardJson,
-        variables: variables,
-        narrative: null,
-      );
-      // 快照 narrative：优先 v6 快照（含 entity narrative）
-      Map<String, String>? snapshotNarrative;
+      // 数据源优先级（v91）：v6 快照（state + registry + narrative 全部
+      // 按消息时刻冻结）→ 无快照才用当前变量表（运行时生成）。
+      EntityPanelData? snapshotData;
       if (widget.message.id != null) {
         final messageId = widget.message.id!;
         final rawV6 = variables[
@@ -661,53 +657,55 @@ class _MessageBubbleState extends State<MessageBubble> {
         if (rawV6 != null && rawV6.trim().isNotEmpty) {
           try {
             final decoded = jsonDecode(rawV6);
-            if (decoded is Map && decoded['narrative'] is Map) {
-              snapshotNarrative = (decoded['narrative'] as Map)
-                  .map((k, v) => MapEntry(k.toString(), v.toString()));
+            if (decoded is Map) {
+              // 冻结变量表：快照 state（instance key）+ 注册表 key
+              final frozenVars = <String, String>{};
+              final rawState = decoded['state'];
+              if (rawState is Map) {
+                rawState.forEach((k, v) {
+                  if (k is String && v != null) {
+                    frozenVars[k] = '$v';
+                  }
+                });
+              }
+              // 快照内嵌注册表（v89 起随 state 冻结）
+              final rawRegistry =
+                  frozenVars[TrackerRuntime.kEntityRegistryKey];
+              if (rawRegistry == null || rawRegistry.isEmpty) {
+                final reg = variables[TrackerRuntime.kEntityRegistryKey];
+                if (reg != null) {
+                  frozenVars[TrackerRuntime.kEntityRegistryKey] = reg;
+                }
+              }
+              Map<String, String>? frozenNarrative;
+              if (decoded['narrative'] is Map) {
+                frozenNarrative = (decoded['narrative'] as Map)
+                    .map((k, v) => MapEntry(k.toString(), v.toString()));
+              }
+              snapshotData = TrackerRuntime.buildEntityPanelData(
+                cardJson: cardJson,
+                variables: frozenVars,
+                narrative: frozenNarrative,
+              );
             }
           } catch (_) {}
         }
       }
-      if (snapshotNarrative != null && snapshotNarrative.isNotEmpty) {
-        // 用快照 narrative 重建模型（narrative 按消息时刻冻结）
-        final rebuilt = TrackerRuntime.buildEntityPanelData(
-          cardJson: _messageCharacter?.cardJson ?? widget.character?.cardJson,
-          variables: variables,
-          narrative: snapshotNarrative,
-        );
-        if (!rebuilt.isEmpty) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: EntityStatusPanel(
-              key: ValueKey<String>(
-                'entity_tracker_${widget.message.id}_${trackerCharacterId ?? ''}',
-              ),
-              data: rebuilt,
-              expanded: initialExpanded,
-              onExpandedChanged: (expanded) {
-                final sessionId = widget.message.sessionId;
-                if (sessionId == null || trackerCharacterId == null) {
-                  return;
-                }
-                unawaited(
-                  ChatDatabaseService.instance.upsertSessionVariables(
-                    sessionId,
-                    {expandedPrefKey: expanded ? '1' : '0'},
-                  ),
-                );
-              },
-            ),
-          );
-        }
-      }
-      if (!entityData.isEmpty) {
+      final data = (snapshotData != null && !snapshotData.isEmpty)
+          ? snapshotData
+          : TrackerRuntime.buildEntityPanelData(
+              cardJson: cardJson,
+              variables: variables,
+              narrative: null,
+            );
+      if (!data.isEmpty) {
         return Padding(
           padding: const EdgeInsets.only(top: 4),
           child: EntityStatusPanel(
             key: ValueKey<String>(
               'entity_tracker_${widget.message.id}_${trackerCharacterId ?? ''}',
             ),
-            data: entityData,
+            data: data,
             expanded: initialExpanded,
             onExpandedChanged: (expanded) {
               final sessionId = widget.message.sessionId;
