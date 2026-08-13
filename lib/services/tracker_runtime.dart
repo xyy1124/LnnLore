@@ -51,6 +51,7 @@ class EntityFieldModel {
     this.text = '',
     this.narrative = '',
     this.percent = '',
+    this.maxText = '',
   });
 
   final String key;
@@ -67,8 +68,12 @@ class EntityFieldModel {
   /// 剧情摘录（narrative，过滤元语言后；空则展示层回退 text）。
   final String narrative;
 
-  /// number 字段百分比文本（如 "45%"）；string 字段为空。
+  /// number 字段百分比（0-100 整数文本，如 "45"）；string 字段为空。
   final String percent;
+
+  /// v92：number 字段的 max 值文本（原 HTML 面板 `【value/max】` 的
+  /// max 部分，如 "100"）；string 字段为空。
+  final String maxText;
 }
 
 /// v91：单个实体（角色）的展示页数据。
@@ -92,6 +97,9 @@ class EntityPanelData {
     this.title = '',
     this.globalFields = const [],
     this.entities = const [],
+    this.bgGradientStart = '',
+    this.bgGradientEnd = '',
+    this.borderColor = '',
   });
 
   /// 面板标题（原 <summary>）。
@@ -102,6 +110,11 @@ class EntityPanelData {
 
   /// 已出场实体页（按注册表 order 排序）。
   final List<EntityPanelModel> entities;
+
+  /// v92：卡模板提取的样式——渐变背景起止色 / 边框色（复刻原卡风格）。
+  final String bgGradientStart;
+  final String bgGradientEnd;
+  final String borderColor;
 
   bool get isEmpty => globalFields.isEmpty && entities.isEmpty;
 }
@@ -509,11 +522,14 @@ class TrackerRuntime {
     required TrackerConfig config,
   }) {
     final next = Map<String, dynamic>.from(current);
+    // v93：实体卡解析实例 key → 模板字段 schema（clamp/枚举校验用）
+    TrackerFieldSchema? schemaOf(String key) => _schemaFor(key, config);
+
     // set：绝对值覆盖
     patch.setValues.forEach((key, value) {
       // v65：string 字段 allowCustomValues=false 时，只接受 presentation.states
       // 中声明的枚举值——模型自创未声明状态被拒绝（保持原值）。
-      final schema = config.stateSchema[key];
+      final schema = schemaOf(key);
       if (schema != null && !schema.isNumber && !schema.allowCustomValues) {
         final states = schema.presentation?.states;
         if (states != null && !states.containsKey('$value')) {
@@ -535,7 +551,7 @@ class TrackerRuntime {
       if (setKeys.contains(key)) {
         return;
       }
-      final schema = config.stateSchema[key];
+      final schema = schemaOf(key);
       if (schema != null && !schema.isNumber) {
         return; // 字符串字段忽略 add
       }
@@ -594,9 +610,10 @@ class TrackerRuntime {
   static TrackerStageInfo? stageInfo(
     String key,
     dynamic value,
-    TrackerConfig config,
-  ) {
-    final schema = config.stateSchema[key];
+    TrackerConfig config, {
+    TrackerFieldSchema? schemaOverride,
+  }) {
+    final schema = schemaOverride ?? config.stateSchema[key];
     if (schema == null || value == null) {
       return null;
     }
@@ -674,8 +691,13 @@ class TrackerRuntime {
   }
 
   /// v52：number 字段的百分比文本（min/max 归一化；无 max 时返回原值）。
-  static String _percentText(String key, dynamic value, TrackerConfig config) {
-    final schema = config.stateSchema[key];
+  static String _percentText(
+    String key,
+    dynamic value,
+    TrackerConfig config, {
+    TrackerFieldSchema? schemaOverride,
+  }) {
+    final schema = schemaOverride ?? config.stateSchema[key];
     if (schema == null || value == null) {
       return '';
     }
@@ -1131,6 +1153,44 @@ class TrackerRuntime {
       title = firstTemplate?.label ?? '状态面板';
     }
 
+    // v92：从卡模板提取渐变/边框样式（复刻原卡风格）
+    String bgStart = '', bgEnd = '', borderColor = '';
+    final styleMatch = RegExp(
+      r'linear-gradient\(180deg,\s*([#\w]+)[^,]*,\s*([#\w]+)\)',
+      caseSensitive: false,
+    ).firstMatch(rawTemplate);
+    if (styleMatch != null) {
+      bgStart = styleMatch.group(1) ?? '';
+      bgEnd = styleMatch.group(2) ?? '';
+    }
+    final borderMatch = RegExp(
+      r'border\s*:\s*[^;]*?\b([#\w]{3,8})\b',
+      caseSensitive: false,
+    ).firstMatch(rawTemplate);
+    if (borderMatch != null) {
+      borderColor = borderMatch.group(1) ?? '';
+    }
+    // 无模板样式时回退模板 label 主色（若字段有颜色则用第一个字段色）
+    if (borderColor.isEmpty && bgStart.isEmpty) {
+      final firstTemplate = config.entityTemplates.values.firstOrNull;
+      if (firstTemplate != null) {
+        for (final schema in firstTemplate.stateSchema.values) {
+          // 取 presentation.ranges/states 第一段的 color
+          final pres = schema.presentation;
+          if (pres != null) {
+            if (pres.ranges.isNotEmpty) {
+              borderColor = pres.ranges.first.color;
+              break;
+            }
+            if (pres.states.isNotEmpty) {
+              borderColor = pres.states.values.first.color;
+              break;
+            }
+          }
+        }
+      }
+    }
+
     String valueOfInstance(String entityId, String fieldKey) {
       final key = entityFieldKey(entityId, fieldKey);
       final v = variables[key];
@@ -1164,6 +1224,7 @@ class TrackerRuntime {
         entityFieldKey(entityId, fieldKey),
         value,
         config,
+        schemaOverride: schema,
       );
       var narrativeText = '';
       final n = narrative?[entityFieldKey(entityId, fieldKey)];
@@ -1179,7 +1240,16 @@ class TrackerRuntime {
         text: stage?.text ?? '',
         narrative: narrativeText,
         percent: schema.isNumber
-            ? _percentText(entityFieldKey(entityId, fieldKey), value, config)
+            ? _percentText(
+                entityFieldKey(entityId, fieldKey),
+                value,
+                config,
+                schemaOverride: schema,
+              )
+            : '',
+        // v92：number 字段 max 值文本（原 HTML `【value/max】` 的 max）
+        maxText: schema.isNumber && schema.max != null
+            ? '${schema.max}'
             : '',
       );
     }
@@ -1196,6 +1266,11 @@ class TrackerRuntime {
         continue;
       }
       final stage = stageInfo(key, v, config);
+      var globalNarrative = '';
+      final gn = narrative?[key];
+      if (gn != null && gn.trim().isNotEmpty && !isMetaLanguageNarrative(gn)) {
+        globalNarrative = gn.trim();
+      }
       globalFields.add(
         EntityFieldModel(
           key: key,
@@ -1204,8 +1279,11 @@ class TrackerRuntime {
           title: stage?.title ?? '',
           color: stage?.color ?? '',
           text: stage?.text ?? '',
-          narrative: '',
+          narrative: globalNarrative,
           percent: schema.isNumber ? _percentText(key, v, config) : '',
+          maxText: schema.isNumber && schema.max != null
+              ? '${schema.max}'
+              : '',
         ),
       );
     }
@@ -1260,6 +1338,9 @@ class TrackerRuntime {
       title: title,
       globalFields: globalFields,
       entities: entities,
+      bgGradientStart: bgStart,
+      bgGradientEnd: bgEnd,
+      borderColor: borderColor,
     );
   }
 
@@ -2494,6 +2575,27 @@ class TrackerRuntime {
     if (value.isEmpty || !config.isEnabled) {
       return null;
     }
+    // v93：实体卡——instance key（entity.<id>.<field>）直接放行
+    // （裁判 envelope 已按模板字段校验，key 结构已知）；模板 local
+    // key 也能识别（字段定义在模板而非根 stateSchema）。
+    if (config.isEntityCard) {
+      if (parseEntityFieldKey(value) != null) {
+        return value;
+      }
+      for (final template in config.entityTemplates.values) {
+        if (template.stateSchema.containsKey(value)) {
+          return value;
+        }
+        for (final entry in template.stateSchema.entries) {
+          final schema = entry.value;
+          if (schema.label.trim() == value ||
+              schema.aliases.any((alias) => alias.trim() == value)) {
+            return entry.key;
+          }
+        }
+      }
+      return null;
+    }
     if (config.stateSchema.containsKey(value)) {
       return value;
     }
@@ -2532,7 +2634,14 @@ class TrackerRuntime {
     required TrackerConfig config,
   }) {
     final changed = <String>{};
-    for (final key in config.stateSchema.keys) {
+    // v92：实体卡——实例 key（entity.<id>.<field>）也在变化集合内
+    // （旧实现只遍历根 stateSchema，实体字段永远不判为"已变化"，
+    // narrative 合并/描述回退全部失效 → 状态看似不更新）。
+    final allKeys = <String>{
+      ...config.stateSchema.keys,
+      ...after.keys.where((k) => TrackerRuntime.parseEntityFieldKey(k) != null),
+    };
+    for (final key in allKeys) {
       final schema = config.stateSchema[key];
       final beforeValue = before[key];
       final afterValue = after[key];
@@ -2582,12 +2691,32 @@ class TrackerRuntime {
       // 已变化字段但裁判漏写：移除旧解读（旧剧情说明不再适用），
       // 回退新阶段静态描述；连静态描述也没有则确定性兜底
       merged.remove(key);
-      final stage = stageInfo(key, afterVariables[key], config);
+      // v92：实体卡解析实例 key → 模板字段 schema（stageInfo/label
+      // 才能正确解析，否则静态描述回退失效）
+      TrackerFieldSchema? schemaOverride;
+      if (config.isEntityCard) {
+        final parsed = TrackerRuntime.parseEntityFieldKey(key);
+        if (parsed != null) {
+          for (final template in config.entityTemplates.values) {
+            final s = template.stateSchema[parsed.$2];
+            if (s != null) {
+              schemaOverride = s;
+              break;
+            }
+          }
+        }
+      }
+      final stage = stageInfo(
+        key,
+        afterVariables[key],
+        config,
+        schemaOverride: schemaOverride,
+      );
       if (stage?.text.trim().isNotEmpty == true) {
         merged[key] = stage!.text.trim();
         continue;
       }
-      final schema = config.stateSchema[key];
+      final schema = schemaOverride ?? config.stateSchema[key];
       final label = schema?.label.trim().isNotEmpty == true
           ? schema!.label.trim()
           : key;
@@ -2638,8 +2767,29 @@ class TrackerRuntime {
 
   // ---- 内部 ----
 
+  /// v93：实体卡解析实例 key → 模板字段 schema；v1 卡查根 schema。
+  static TrackerFieldSchema? _schemaFor(
+    String key,
+    TrackerConfig config,
+  ) {
+    if (!config.isEntityCard) {
+      return config.stateSchema[key];
+    }
+    final parsed = parseEntityFieldKey(key);
+    if (parsed == null) {
+      return config.stateSchema[key];
+    }
+    for (final template in config.entityTemplates.values) {
+      final s = template.stateSchema[parsed.$2];
+      if (s != null) {
+        return s;
+      }
+    }
+    return null;
+  }
+
   static dynamic _validate(String key, dynamic value, TrackerConfig config) {
-    final schema = config.stateSchema[key];
+    final schema = _schemaFor(key, config);
     if (schema != null) {
       if (schema.isNumber) {
         final numValue = value is num ? value : num.tryParse('$value');
@@ -2661,10 +2811,10 @@ class TrackerRuntime {
   static num _clamp(String key, num value, TrackerConfig config) {
     if (!value.isFinite) {
       // Infinity/NaN 兜底：丢弃并钳到下限（有 schema 时）
-      final schema = config.stateSchema[key];
+      final schema = _schemaFor(key, config);
       return schema?.min ?? 0;
     }
-    final schema = config.stateSchema[key];
+    final schema = _schemaFor(key, config);
     if (schema == null) {
       return value;
     }
