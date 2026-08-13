@@ -1904,7 +1904,20 @@ class ChatService {
                 key: finalVariables[key]!,
           };
     if (state.isEmpty) {
-      return;
+      // v92：实体卡——state 空但注册表已有已出场实体时，仍需写 v6
+      // 快照（冻结实体目录；否则出场但无字段变化的消息快照缺失 →
+      // 面板读当前变量且无 narrative → 描述缺失/看似不更新）。
+      if (!config.isEntityCard) {
+        return;
+      }
+      final regRaw = finalVariables[TrackerRuntime.kEntityRegistryKey];
+      final hasAppeared = regRaw != null &&
+          TrackerRuntime.decodeEntityRegistry(regRaw)['entities'] is List &&
+          (TrackerRuntime.decodeEntityRegistry(regRaw)['entities'] as List)
+              .any((e) => e is Map && e['appeared'] == true);
+      if (!hasAppeared) {
+        return;
+      }
     }
     // v65：合并完整 narrative——已变化字段必须有解读（裁判新解读优先、
     // 漏写回退新阶段静态描述、连静态也没有则确定性兜底）；未变化字段
