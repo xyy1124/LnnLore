@@ -94,6 +94,78 @@ class DecisionChoice {
 class TrackerRuntime {
   TrackerRuntime._();
 
+  // ---- v89：动态实体（群像卡）----
+
+  /// 实例 key 前缀：`entity.<entityId>.<fieldKey>`——实体 ID 与字段名
+  /// 都可能含下划线，用点分隔避免反向解析歧义。
+  static const String kEntityKeyPrefix = 'entity.';
+
+  /// 实体注册表变量 key（会话级，存 chat_variables）。
+  static const String kEntityRegistryKey = '__tracker_entities_v1__';
+
+  /// v89：实体注册表（会话内活跃角色目录）。
+  static Map<String, dynamic> decodeEntityRegistry(String? raw) {
+    if (raw == null || raw.trim().isEmpty) {
+      return {'version': 1, 'nextDynamicOrdinal': 1, 'appliedMigrations': <String>[], 'entities': <Map<String, dynamic>>[]};
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+    } catch (_) {}
+    return {'version': 1, 'nextDynamicOrdinal': 1, 'appliedMigrations': <String>[], 'entities': <Map<String, dynamic>>[]};
+  }
+
+  static String encodeEntityRegistry(Map<String, dynamic> registry) =>
+      jsonEncode(registry);
+
+  /// 生成实例字段 key：`entity.<entityId>.<fieldKey>`。
+  static String entityFieldKey(String entityId, String fieldKey) =>
+      '$kEntityKeyPrefix$entityId.$fieldKey';
+
+  /// 解析实例 key → (entityId, fieldKey)；非实体 key 返回 null。
+  static (String, String)? parseEntityFieldKey(String key) {
+    if (!key.startsWith(kEntityKeyPrefix)) {
+      return null;
+    }
+    final rest = key.substring(kEntityKeyPrefix.length);
+    final dot = rest.indexOf('.');
+    if (dot <= 0 || dot == rest.length - 1) {
+      return null;
+    }
+    return (rest.substring(0, dot), rest.substring(dot + 1));
+  }
+
+  /// v89：narrative 剧情摘录契约（后台裁判 + 快速协议共用同一文本）。
+  static const String kTrackerNarrativeContract =
+      'narrative 是一条 15 至 45 个汉字、可直接嵌入正文的单句剧情摘录。'
+      '只摘取本轮正文已经明确发生且属于该实体的神态、言行、衣着或处境，'
+      '并与更新后状态一致。不得补写未发生的动作、心理或结果，不得解释'
+      '字段、规则、数值、档位、变化原因或判断过程。事实不足时输出空字符串。';
+
+  /// v89：narrative 元语言窄过滤——命中高置信裁判/协议语言则整条丢弃
+  /// （由展示层回退静态文案）。只过滤明确的元语言，不误杀正常剧情词。
+  static bool isMetaLanguageNarrative(String text) {
+    final direct = RegExp(
+      r'本字段|该字段|字段值|状态值|当前数值|TRACKER_UPDATE|裁判|判定|tracker|patch',
+      caseSensitive: false,
+    );
+    if (direct.hasMatch(text)) {
+      return true;
+    }
+    final combined1 = RegExp(
+      r'(本轮|该轮|此轮).{0,12}(增加|减少|上升|下降|更新|变动)',
+    );
+    if (combined1.hasMatch(text)) {
+      return true;
+    }
+    final combined2 = RegExp(
+      r'(数值|层级|档位|指标).{0,12}(变为|升至|降至|达到)',
+    );
+    return combined2.hasMatch(text);
+  }
+
   /// v70：<TRACKER_UPDATE> 标记块——快速模式正文与状态协议分离：
   /// 正文正常输出，末尾追加标记块（不把长篇正文塞进 JSON reply）。
   static const String kTrackerUpdateOpenTag = '<TRACKER_UPDATE>';
@@ -592,6 +664,42 @@ class TrackerRuntime {
       return init == null ? null : '$init';
     }
 
+    // v89：实体卡分区渲染——模板含 {{entitysections::<templateId>}} 插槽时，
+    // 按会话实体注册表逐实体渲染分区（每个实体一套模板字段）。先于
+    // 常规 getvar 替换（entitysections 是块级插槽，不是字段引用）。
+    final registryRaw = variables[kEntityRegistryKey];
+    if (config.isEntityCard && registryRaw != null && registryRaw.trim().isNotEmpty) {
+      final entitySlotPattern = RegExp(
+        r'\{\{\s*entitysections::([^}]+)\s*\}\}',
+        caseSensitive: false,
+      );
+      // 需要模板内容来检测插槽——先取模板候选做插槽替换
+      final slotTemplate = _pickPanelTemplate(config, cardJson);
+      if (slotTemplate != null && entitySlotPattern.hasMatch(slotTemplate)) {
+        final sections = renderEntitySections(
+          cardJson: cardJson,
+          variables: variables,
+          narrative: narrative,
+          config: config,
+          registry: decodeEntityRegistry(registryRaw),
+        );
+        if (sections != null && sections.trim().isNotEmpty) {
+          return slotTemplate
+              .replaceAllMapped(
+                entitySlotPattern,
+                (m) => sections,
+              )
+              .replaceAll(
+                RegExp(
+                  r'\{\{\s*get(var|title|text|color|percent|narrative)\s*\}\}',
+                  caseSensitive: false,
+                ),
+                '',
+              );
+        }
+      }
+    }
+
     // ① 状态面板模板（卡内定义的状态栏样子），优先级：
     //    tracker.template → post_history_instructions 的 <!--panel--> HTML
     //    → StatusFallback.replaceString（纯文本兜底）。
@@ -823,16 +931,210 @@ class TrackerRuntime {
   }
 
   /// v58：模板是否有效——非空且含至少一个展示变量
-  /// （getvar/gettitle/gettext/getcolor/getpercent）。占位文本
-  /// （如 "{label}：{value}"）或纯说明文字视为无效，跳过。
+  /// （getvar/gettitle/gettext/getcolor/getpercent）或实体分区插槽
+  /// （entitysections）。占位文本（如 "{label}：{value}"）或纯说明
+  /// 文字视为无效，跳过。
   static bool _isValidStatusTemplate(String? value) {
     if (value == null || value.trim().isEmpty) {
       return false;
+    }
+    if (RegExp(
+      r'\{\{\s*entitysections::[^}]+\}\}',
+      caseSensitive: false,
+    ).hasMatch(value)) {
+      return true;
     }
     return RegExp(
       r'\{\{\s*get(var|title|text|color|percent|narrative)::[^}]+\}\}',
       caseSensitive: false,
     ).hasMatch(value);
+  }
+
+  /// v89：取面板模板候选（与 renderStatusPanelHtml 同一优先级逻辑）。
+  static String? _pickPanelTemplate(
+    TrackerConfig config,
+    Map<String, dynamic>? cardJson,
+  ) {
+    final candidates = <(String, String?)>[
+      ('tracker.template', config.template),
+      ('post_history_instructions', postHistoryPanelTemplate(cardJson)),
+      ('StatusFallback', statusFallbackTemplate(cardJson)),
+    ];
+    for (final (_, candidate) in candidates) {
+      if (_isValidStatusTemplate(candidate)) {
+        return candidate!.trim();
+      }
+    }
+    return null;
+  }
+
+  /// v89：按会话实体注册表逐实体渲染分区 HTML（群像卡动态面板）。
+  ///
+  /// 每个实体按其模板的 sectionTemplate 渲染（{{entityid}}/{{entityname}}
+  /// 占位符；section 内 {{getvar::key}} 等解析到该实体完整 instance key
+  /// `entity.<entityId>.<key>`）；无 sectionTemplate 时用内置四行分区。
+  /// narrative 按完整 instance key 匹配（消息快照 v6 按此冻结）。
+  /// 返回 null 表示无任何实体可渲染。
+  static String? renderEntitySections({
+    required Map<String, dynamic>? cardJson,
+    required Map<String, String> variables,
+    Map<String, String>? narrative,
+    required TrackerConfig config,
+    required Map<String, dynamic> registry,
+  }) {
+    final rawEntities = registry['entities'];
+    if (rawEntities is! List || rawEntities.isEmpty) {
+      return null;
+    }
+    // 按 order 排序
+    final entities = rawEntities.whereType<Map<String, dynamic>>().toList()
+      ..sort((a, b) {
+        final oa = a['order'] is int ? a['order'] as int : 0;
+        final ob = b['order'] is int ? b['order'] as int : 0;
+        return oa.compareTo(ob);
+      });
+    if (entities.isEmpty) {
+      return null;
+    }
+    final sections = <String>[];
+    for (final entity in entities) {
+      final entityId = entity['id'] as String? ?? '';
+      final displayName = entity['displayName'] as String? ?? entityId;
+      final templateId = entity['templateId'] as String? ?? '';
+      if (entityId.isEmpty) {
+        continue;
+      }
+      final template = config.entityTemplates[templateId];
+      final section = _renderEntitySection(
+        entityId: entityId,
+        displayName: displayName,
+        template: template,
+        variables: variables,
+        narrative: narrative,
+        config: config,
+      );
+      if (section.isNotEmpty) {
+        sections.add(section);
+      }
+    }
+    if (sections.isEmpty) {
+      return null;
+    }
+    return sections.join('\n');
+  }
+
+  /// v89：渲染单个实体分区。
+  static String _renderEntitySection({
+    required String entityId,
+    required String displayName,
+    required TrackerEntityTemplate? template,
+    required Map<String, String> variables,
+    Map<String, String>? narrative,
+    required TrackerConfig config,
+  }) {
+    final safeName = _htmlEscape(displayName);
+    String valueOfInstance(String fieldKey) {
+      final key = entityFieldKey(entityId, fieldKey);
+      final v = variables[key];
+      if (v != null && v.isNotEmpty) {
+        return v;
+      }
+      // 预设实体初始值：initialEntities 覆盖模板 defaultState
+      for (final initial in config.initialEntities) {
+        if (initial.id == entityId) {
+          final init = initial.initialState[fieldKey];
+          if (init != null) {
+            return '$init';
+          }
+          break;
+        }
+      }
+      final def = template?.defaultState[fieldKey];
+      return def == null ? '' : '$def';
+    }
+
+    String narrativeOf(String fieldKey) {
+      final key = entityFieldKey(entityId, fieldKey);
+      final n = narrative?[key];
+      if (n != null && n.trim().isNotEmpty && !isMetaLanguageNarrative(n)) {
+        return _htmlEscape(n.trim());
+      }
+      return '';
+    }
+
+    // 无 sectionTemplate → 内置四行分区
+    if (template == null || template.sectionTemplate == null) {
+      final rows = <String>[];
+      template?.stateSchema.forEach((fieldKey, schema) {
+        final value = valueOfInstance(fieldKey);
+        if (value.isEmpty) {
+          return;
+        }
+        final label = schema.label.isEmpty ? fieldKey : schema.label;
+        final n = narrativeOf(fieldKey);
+        rows.add(
+          '<div style="font-size:12px;color:#e8e8e8;">'
+          '<span style="color:#9b59b6;font-weight:600;">$label</span>：'
+          '$value'
+          '${n.isNotEmpty ? '<span style="color:#a8a098;font-size:11px;margin-left:6px;">$n</span>' : ''}'
+          '</div>',
+        );
+      });
+      if (rows.isEmpty) {
+        return '';
+      }
+      return '<section style="padding:6px 8px;border-bottom:1px dashed '
+          'rgba(255,255,255,0.12);">'
+          '<div style="font-weight:700;color:#e8e8e8;font-size:13px;'
+          'margin-bottom:4px;">$safeName</div>${rows.join('')}</section>';
+    }
+
+    // 有 sectionTemplate → 按模板渲染（{{getvar::key}} 解析到实例 key）
+    var section = template!.sectionTemplate!;
+    section = section
+        .replaceAll('{{entityid}}', _htmlEscape(entityId))
+        .replaceAll('{{entityname}}', safeName);
+    section = section.replaceAllMapped(
+      RegExp(
+        r'\{\{\s*(getvar|gettitle|gettext|getcolor|getpercent|getnarrative)::([^}]+)\}\}',
+        caseSensitive: false,
+      ),
+      (m) {
+        final kind = m.group(1)!.toLowerCase();
+        final fieldKey = m.group(2)!.trim();
+        final instanceKey = entityFieldKey(entityId, fieldKey);
+        final value = valueOfInstance(fieldKey);
+        switch (kind) {
+          case 'gettitle':
+            final stage = stageInfo(instanceKey, value, config);
+            if (stage?.title.trim().isNotEmpty == true) {
+              return _htmlEscape(stage!.title.trim());
+            }
+            return '';
+          case 'gettext':
+            return _htmlEscape(
+              stageInfo(instanceKey, value, config)?.text ?? '',
+            );
+          case 'getcolor':
+            return _htmlEscape(
+              stageInfo(instanceKey, value, config)?.color ?? '',
+            );
+          case 'getpercent':
+            return _htmlEscape(_percentText(instanceKey, value, config));
+          case 'getnarrative':
+            final n = narrativeOf(fieldKey);
+            if (n.isNotEmpty) {
+              return n;
+            }
+            return _htmlEscape(
+              stageInfo(instanceKey, value, config)?.text ?? '',
+            );
+          default:
+            return _htmlEscape(value);
+        }
+      },
+    );
+    return section;
   }
 
   /// v61：状态协议输出指令（固定尾部）——与状态字段列表拼装成完整
@@ -1735,6 +2037,138 @@ class TrackerRuntime {
         '剧情主动调整。同一事件每轮最多更新一次，每轮增量不超过'
         'maxAutoDeltaPerTurn（未声明则不限制）。）';
   }
+
+  /// v89：实体卡（群像卡）专用状态指令——模板字段定义注入一次，
+  /// 随后列出每个活跃实体的 ID/名称/别名/各字段当前值；要求裁判按
+  /// 实体 envelope（entities + updates）输出，归属规则写死防串值。
+  /// [variables] 应包含实例字段（entity.<id>.<key>）与实体注册表
+  /// （__tracker_entities_v1__）。
+  static String formatEntityTrackerInstruction({
+    required Map<String, String> variables,
+    required TrackerConfig config,
+  }) {
+    if (!config.isEntityCard) {
+      return '';
+    }
+    final template = config.entityTemplates.values.firstOrNull;
+    if (template == null) {
+      return '';
+    }
+    // ① 模板字段定义注入一次（含 semanticHints，防重复膨胀）
+    final fields = <String>[];
+    template.stateSchema.forEach((fieldKey, schema) {
+      final range = schema.isNumber
+          ? ' | range=${schema.min ?? '-inf'}..${schema.max ?? '+inf'}'
+          : '';
+      var line = '- field=$fieldKey | label=${schema.label.isEmpty ? fieldKey : schema.label}'
+          ' | type=${schema.type}$range';
+      final policy = schema.updatePolicy;
+      if (policy != null) {
+        if (policy.qualitativeDeltas.isNotEmpty) {
+          line += '\n  qualitative: ${policy.qualitativeDeltas.entries.map((e) => '${e.key}=${e.value}').join('，')}';
+        }
+        if (policy.maxAutoDeltaPerTurn != null) {
+          line += '\n  maxAutoDeltaPerTurn=${policy.maxAutoDeltaPerTurn}';
+        }
+        line += '\n  mode=${policy.mode}';
+        final hints = policy.semanticHints;
+        if (hints != null) {
+          String clip(String s, [int max = 300]) =>
+              s.length <= max ? s : '${s.substring(0, max)}…';
+          final clipList = (List<String> items) => items
+              .map((e) => clip(e, 80))
+              .take(10)
+              .toList();
+          if (hints.meaning.isNotEmpty) {
+            line += '\n  meaning=${clip(hints.meaning)}';
+          }
+          if (hints.positiveSignals.isNotEmpty) {
+            line += '\n  positive=${clipList(hints.positiveSignals).join('，')}';
+          }
+          if (hints.negativeSignals.isNotEmpty) {
+            line += '\n  negative=${clipList(hints.negativeSignals).join('，')}';
+          }
+          if (hints.neutralSignals.isNotEmpty) {
+            line += '\n  neutral=${clipList(hints.neutralSignals).join('，')}';
+          }
+        }
+      }
+      fields.add(line);
+    });
+    if (fields.isEmpty) {
+      return '';
+    }
+
+    // ② 活跃实体列表（ID/名称/别名/当前值）
+    final registry = decodeEntityRegistry(
+      variables[kEntityRegistryKey],
+    );
+    final entities = registry['entities'] is List
+        ? registry['entities']!.whereType<Map<String, dynamic>>().toList()
+        : <Map<String, dynamic>>[];
+    entities.sort((a, b) {
+      final oa = a['order'] is int ? a['order'] as int : 0;
+      final ob = b['order'] is int ? b['order'] as int : 0;
+      return oa.compareTo(ob);
+    });
+    final entityLines = <String>[];
+    for (final entity in entities) {
+      final id = entity['id'] as String? ?? '';
+      final name = entity['displayName'] as String? ?? id;
+      final aliases = entity['aliases'] is List
+          ? (entity['aliases'] as List).whereType<String>().join('，')
+          : '';
+      if (id.isEmpty) {
+        continue;
+      }
+      final values = <String>[];
+      template.stateSchema.forEach((fieldKey, _) {
+        final v = variables[entityFieldKey(id, fieldKey)];
+        if (v != null && v.trim().isNotEmpty) {
+          values.add('$fieldKey=$v');
+        }
+      });
+      entityLines.add(
+        '- entityId=$id | name=$name${aliases.isNotEmpty ? ' | aliases=$aliases' : ''}'
+        '${values.isNotEmpty ? ' | current=${values.join(', ')}' : ' | current=（未记录）'}',
+      );
+    }
+
+    final protocol = '''
+【实体状态协议】（实体卡专用，输出 JSON 代码块，不要任何解释文字）
+{
+  "entities": [{"ref": "new:1", "displayName": "新角色名", "templateId": "模板ID"}],
+  "updates": [
+    {"entityRef": "实体ID或new:N", "field": "字段key", "op": "delta|set", "value": 数值或字符串, "narrative": "该实体剧情摘录", "consequence": "下一轮行为约束"}
+  ]
+}
+- entities：本轮**首次以具体人物出现**（有名、有行动、有对话、被称呼或受事件影响）且不在上方列表中的角色才列出；泛称/群体/归属不明的"她"不列出；最多新增 5 个。
+- updates：每个操作 entityRef 必须能对应上方一个实体（既有 entityId 或本轮 entities 里的 new:N）；一个事件只更新一个角色的字段，禁止把某角色的状态镜像到其他角色。
+- field 必须是模板字段（${template.id}）。
+- op=delta 时 value 为数值增量（number 字段）；op=set 时 value 为新值（string 字段或数值绝对值）。
+- 同一实体同一字段每轮最多一个操作；冲突或指代不清则不输出该操作。
+- 没有变化时输出 {"entities": [], "updates": []}。
+- narrative/consequence 遵循统一剧情摘录契约。
+''';
+    return '【当前状态·实体卡】（以下 field 是模板字段的唯一标识；'
+        '每个实体拥有独立一套字段，操作时用 entityId 归属）\n'
+        '模板字段定义（${template.label}）：\n'
+        '${fields.join('\n')}\n\n'
+        '活跃实体（${entities.length} 个）：\n'
+        '${entityLines.isEmpty ? '（暂无）' : entityLines.join('\n')}\n\n'
+        '$_entityJudgeRules$protocol';
+  }
+
+  /// v89：实体卡裁判规则（角色归属排他 + 发现门槛）。
+  static const String _entityJudgeRules =
+      '【角色归属规则（最高优先级）】\n'
+      '- 每个实体（entityId）拥有独立的一套字段：某角色的事件只更新'
+      '该角色自己的字段，禁止把任何角色的状态镜像/复制到其他角色。\n'
+      '- 指代不清（"她"未明确指向哪个角色）时不更新；群体事件只有'
+      '正文明确列出成员时才允许逐人更新。\n'
+      '- 只有本轮正文明确发生的事件才能触发变化（意图/请求/计划/'
+      '答应不触发）；同事件不重复叠加。\n'
+      '- 新角色建档仅限剧情中以具体人物出现的角色。\n';
 
   /// v50：patch 字段名规范化——模型可能输出中文 label（`烙印值`）而不是
   /// 真实 key（`yw_brand`）。label 精确匹配映射回 key；完全未知的字段
