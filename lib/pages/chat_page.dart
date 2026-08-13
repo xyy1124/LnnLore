@@ -249,6 +249,19 @@ class _ChatPageState extends State<ChatPage> {
     _lastLoadedSessionId = id;
     // 新会话登记时重置尝试计数（避免继承旧会话的计数）
     _pendingRestoreAttempts = 0;
+    // v90：发送后重载（草稿转正式/首条消息）保持视口不动——
+    // 首条消息发送时草稿会话转为正式会话（id 变化），旧逻辑把新会话
+    // 当"首次打开"登记可靠跳底，AI 回复完成后视口被硬拽到底部
+    // （用户实际在看开场/刚发完的位置），第二条消息 id 不变走
+    // "同一会话保持不动"分支，所以只有首条跳底。这里检测 _isSending
+    // （发送期间 _loadSession 重载、状态复位在之后）：发送中重载
+    // 应保持当前视口，不跳底也不恢复旧位置；并置抑制标志让后续
+    // 解冻恢复（_preserveOffsetAfterUnfreeze）同样跳过。
+    if (_viewModel.isSending) {
+      _clearPendingRestore();
+      _suppressUnfreezeRestore = true;
+      return;
+    }
     final saved = _sessionScrollStates[id];
     if (saved != null && !saved.wasAtBottom) {
       // 上次浏览位置在中间：登记待恢复，等消息加载完成后恢复
@@ -561,6 +574,11 @@ class _ChatPageState extends State<ChatPage> {
   bool _previouslySending = false;
   bool _previouslyFrozen = false;
 
+  /// v90：发送后重载置位——本次解冻跳过 v84 的"不可滚动→跳新底部"
+  /// 恢复（发送中视口应保持不动，见 [_onSessionReloaded]）。仅抑制
+  /// 一次解冻，随后清除，不影响后续正常解冻恢复。
+  bool _suppressUnfreezeRestore = false;
+
   void _onViewModelChanged() {
     // v59：统一滚动任务生命周期——
     // ① 生成开始（isSending 上升沿）：取消所有待执行滚动任务，防止
@@ -574,7 +592,13 @@ class _ChatPageState extends State<ChatPage> {
     }
 
     if (_previouslyFrozen && !frozen) {
-      _preserveOffsetAfterUnfreeze();
+      // v90：发送后重载的解冻保持视口不动（首条消息/草稿转正式路径）
+      // ——不执行 v84 的"不可滚动→跳新底部"，也不恢复旧像素。
+      if (_suppressUnfreezeRestore) {
+        _suppressUnfreezeRestore = false;
+      } else {
+        _preserveOffsetAfterUnfreeze();
+      }
     }
 
     _previouslySending = sending;
