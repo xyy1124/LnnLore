@@ -340,6 +340,162 @@ class TrackerAction {
   }
 }
 
+// ---- v89：动态角色实体（群像卡）协议 ----
+
+/// v89：实体模板——一类角色共有的字段定义（如"被洗脑角色"4 指标），
+/// 运行时每个实体实例化一套字段。模板内 stateSchema 结构与全局
+/// stateSchema 一致（key 为模板内字段名，如 xno_layer）。
+class TrackerEntityTemplate {
+  const TrackerEntityTemplate({
+    required this.id,
+    this.label = '',
+    this.defaultState = const {},
+    this.stateSchema = const {},
+    this.sectionTemplate,
+  });
+
+  final String id;
+  final String label;
+
+  /// 动态实体建档时的初始状态（预设实体可用 initialEntities 覆盖）。
+  final Map<String, dynamic> defaultState;
+
+  /// 模板字段定义（key → TrackerFieldSchema，字段 key 无实体前缀）。
+  final Map<String, TrackerFieldSchema> stateSchema;
+
+  /// 单个实体的分区 HTML 模板（{{entityid}}/{{entityname}} 占位符，
+  /// {{getvar::key}} 自动解析到当前实体完整 instance key）。
+  final String? sectionTemplate;
+
+  factory TrackerEntityTemplate.fromJson(Map<String, dynamic> json) {
+    final rawSchema = CharacterCardExtensionsReader.asMap(
+      json['stateSchema'],
+    );
+    final schema = <String, TrackerFieldSchema>{};
+    if (rawSchema != null) {
+      rawSchema.forEach((key, value) {
+        final field = CharacterCardExtensionsReader.asMap(value);
+        if (field != null) {
+          schema[key] = TrackerFieldSchema.fromJson(field);
+        } else if (value is String) {
+          schema[key] = TrackerFieldSchema(type: value);
+        }
+      });
+    }
+    final rawDefault = CharacterCardExtensionsReader.asMap(
+      json['defaultState'],
+    );
+    return TrackerEntityTemplate(
+      id: json['id'] is String ? json['id'] as String : '',
+      label: json['label'] is String ? json['label'] as String : '',
+      defaultState: rawDefault == null ? const {} : Map<String, dynamic>.from(rawDefault),
+      stateSchema: schema,
+      sectionTemplate: json['sectionTemplate'] is String
+          ? json['sectionTemplate'] as String
+          : null,
+    );
+  }
+}
+
+/// v89：预设实体——卡声明的具名角色（沈昭华/洛青鸾/明瑟真人）。
+class TrackerInitialEntity {
+  const TrackerInitialEntity({
+    required this.id,
+    required this.displayName,
+    required this.templateId,
+    this.aliases = const [],
+    this.initialState = const {},
+  });
+
+  /// 稳定角色 ID（如 szh/lql/mszr），发布后不可随显示名改变。
+  final String id;
+  final String displayName;
+  final String templateId;
+
+  /// 别名（裁判匹配用；同名/模糊匹配不自动合并，仅精确匹配复用）。
+  final List<String> aliases;
+
+  /// 覆盖模板 defaultState 的初值（如沈昭华 90/2/松散半敞/85）。
+  final Map<String, dynamic> initialState;
+
+  factory TrackerInitialEntity.fromJson(Map<String, dynamic> json) {
+    final rawAliases = json['aliases'];
+    final aliases = <String>[];
+    if (rawAliases is List) {
+      for (final item in rawAliases) {
+        if (item is String && item.trim().isNotEmpty) {
+          aliases.add(item.trim());
+        }
+      }
+    }
+    final rawInitial = CharacterCardExtensionsReader.asMap(
+      json['initialState'],
+    );
+    return TrackerInitialEntity(
+      id: json['id'] is String ? json['id'] as String : '',
+      displayName: json['displayName'] is String ? json['displayName'] as String : '',
+      templateId: json['templateId'] is String ? json['templateId'] as String : '',
+      aliases: aliases,
+      initialState: rawInitial == null ? const {} : Map<String, dynamic>.from(rawInitial),
+    );
+  }
+}
+
+/// v89：实体自动发现策略（裁判识别剧情中新出现的具名角色并建档）。
+class TrackerEntityDiscovery {
+  const TrackerEntityDiscovery({
+    this.enabled = false,
+    this.defaultTemplateId = '',
+    this.maxAutoEntities = 24,
+  });
+
+  final bool enabled;
+
+  /// 动态实体默认使用的模板 ID。
+  final String defaultTemplateId;
+
+  /// 自动建档上限（防 prompt/面板无限膨胀）。
+  final int maxAutoEntities;
+
+  factory TrackerEntityDiscovery.fromJson(Map<String, dynamic> json) {
+    return TrackerEntityDiscovery(
+      enabled: json['enabled'] is bool ? json['enabled'] as bool : false,
+      defaultTemplateId: json['defaultTemplateId'] is String
+          ? json['defaultTemplateId'] as String
+          : '',
+      maxAutoEntities: json['maxAutoEntities'] is int
+          ? json['maxAutoEntities'] as int
+          : 24,
+    );
+  }
+}
+
+/// v89：旧 key → 实体字段迁移声明（如无前缀 xno_layer → szh.xno_layer）。
+class TrackerEntityMigration {
+  const TrackerEntityMigration({
+    required this.id,
+    required this.targetEntityId,
+    this.fieldMap = const {},
+  });
+
+  final String id;
+  final String targetEntityId;
+
+  /// 旧 key → 模板内字段 key。
+  final Map<String, String> fieldMap;
+
+  factory TrackerEntityMigration.fromJson(Map<String, dynamic> json) {
+    final rawMap = CharacterCardExtensionsReader.asMap(json['fieldMap']);
+    return TrackerEntityMigration(
+      id: json['id'] is String ? json['id'] as String : '',
+      targetEntityId: json['targetEntityId'] is String
+          ? json['targetEntityId'] as String
+          : '',
+      fieldMap: rawMap == null ? const {} : Map<String, String>.from(rawMap.map((k, v) => MapEntry(k.toString(), v.toString()))),
+    );
+  }
+}
+
 class TrackerConfig {
   const TrackerConfig({
     this.schemaVersion = 1,
@@ -349,6 +505,10 @@ class TrackerConfig {
     this.uiOrder = const [],
     this.template,
     this.defaultExpanded = false,
+    this.entityTemplates = const {},
+    this.initialEntities = const [],
+    this.entityDiscovery = const TrackerEntityDiscovery(),
+    this.entityMigrations = const [],
   });
 
   final int schemaVersion;
@@ -361,8 +521,30 @@ class TrackerConfig {
   /// v54：状态面板初始是否展开（卡声明；默认收起）。
   final bool defaultExpanded;
 
+  // ---- v89：动态实体（群像卡）----
+
+  /// 实体模板（templateId → 定义）。
+  final Map<String, TrackerEntityTemplate> entityTemplates;
+
+  /// 预设实体（卡声明的具名角色）。
+  final List<TrackerInitialEntity> initialEntities;
+
+  /// 实体自动发现策略。
+  final TrackerEntityDiscovery entityDiscovery;
+
+  /// 旧 key → 实体字段迁移声明。
+  final List<TrackerEntityMigration> entityMigrations;
+
   bool get isEnabled =>
-      stateSchema.isNotEmpty || initialState.isNotEmpty || actions.isNotEmpty;
+      stateSchema.isNotEmpty ||
+      initialState.isNotEmpty ||
+      actions.isNotEmpty ||
+      entityTemplates.isNotEmpty ||
+      initialEntities.isNotEmpty;
+
+  /// 是否动态实体卡（schemaVersion >= 2 且有实体模板）。
+  bool get isEntityCard =>
+      schemaVersion >= 2 && (entityTemplates.isNotEmpty || initialEntities.isNotEmpty);
 
   /// 状态栏显示顺序：uiHints.order 优先，否则 schema 声明顺序，否则空。
   List<String> get displayOrder {
@@ -450,7 +632,9 @@ class TrackerConfig {
     return TrackerConfig(
       schemaVersion: tracker['schemaVersion'] is int
           ? tracker['schemaVersion'] as int
-          : 1,
+          : (tracker['schemaVersion'] is String
+              ? int.tryParse(tracker['schemaVersion'] as String) ?? 1
+              : 1),
       stateSchema: schema,
       initialState: initialState,
       actions: actions,
@@ -466,6 +650,94 @@ class TrackerConfig {
           tracker['defaultExpanded'] is bool
               ? tracker['defaultExpanded'] as bool
               : false,
+      // v89：动态实体（群像卡）配置
+      entityTemplates: _parseEntityTemplates(tracker),
+      initialEntities: _parseInitialEntities(tracker),
+      entityDiscovery: _parseEntityDiscovery(tracker),
+      entityMigrations: _parseEntityMigrations(tracker),
     );
+  }
+
+  // ---- v89 实体解析 ----
+
+  static Map<String, TrackerEntityTemplate> _parseEntityTemplates(
+    Map<dynamic, dynamic> tracker,
+  ) {
+    final raw = CharacterCardExtensionsReader.asMap(tracker['entityTemplates']);
+    final result = <String, TrackerEntityTemplate>{};
+    if (raw != null) {
+      raw.forEach((key, value) {
+        if (key is! String) {
+          return;
+        }
+        final map = CharacterCardExtensionsReader.asMap(value);
+        if (map == null) {
+          return;
+        }
+        final parsed = TrackerEntityTemplate.fromJson(map);
+        // 模板对象未带 id 时用 map key 兜底
+        final template = parsed.id.isEmpty
+            ? TrackerEntityTemplate(
+                id: key,
+                label: parsed.label,
+                defaultState: parsed.defaultState,
+                stateSchema: parsed.stateSchema,
+                sectionTemplate: parsed.sectionTemplate,
+              )
+            : parsed;
+        result[key] = template;
+      });
+    }
+    return result;
+  }
+
+  static List<TrackerInitialEntity> _parseInitialEntities(
+    Map<dynamic, dynamic> tracker,
+  ) {
+    final raw = tracker['initialEntities'];
+    final result = <TrackerInitialEntity>[];
+    if (raw is List) {
+      for (final item in raw) {
+        final map = CharacterCardExtensionsReader.asMap(item);
+        if (map == null) {
+          continue;
+        }
+        final entity = TrackerInitialEntity.fromJson(map);
+        if (entity.id.isNotEmpty && entity.templateId.isNotEmpty) {
+          result.add(entity);
+        }
+      }
+    }
+    return result;
+  }
+
+  static TrackerEntityDiscovery _parseEntityDiscovery(
+    Map<dynamic, dynamic> tracker,
+  ) {
+    final map = CharacterCardExtensionsReader.asMap(tracker['entityDiscovery']);
+    if (map == null) {
+      return const TrackerEntityDiscovery();
+    }
+    return TrackerEntityDiscovery.fromJson(map);
+  }
+
+  static List<TrackerEntityMigration> _parseEntityMigrations(
+    Map<dynamic, dynamic> tracker,
+  ) {
+    final raw = tracker['migrations'];
+    final result = <TrackerEntityMigration>[];
+    if (raw is List) {
+      for (final item in raw) {
+        final map = CharacterCardExtensionsReader.asMap(item);
+        if (map == null) {
+          continue;
+        }
+        final migration = TrackerEntityMigration.fromJson(map);
+        if (migration.id.isNotEmpty && migration.targetEntityId.isNotEmpty) {
+          result.add(migration);
+        }
+      }
+    }
+    return result;
   }
 }
