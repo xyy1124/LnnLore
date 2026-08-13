@@ -539,8 +539,13 @@ class _MessageBubbleState extends State<MessageBubble> {
       // v63：优先 v4 快照（state + narrative），回退 v3（仅 state）
       // v67：v5 快照（state + narrative + consequence）优先，v4 回退——
       // 解码器结构兼容（consequence 仅用于注入下一轮，显示层不需要）
-      final rawV5 = widget.sessionVariables[
-          ChatService.messageStatusSnapshotV5Key(messageId)];
+      // v89：v6 快照（实体卡，冻结实体目录 + 全实体状态）最优先。
+      final rawV6 = widget.sessionVariables[
+          ChatService.messageStatusSnapshotV6Key(messageId)];
+      final rawV5 = rawV6?.trim().isNotEmpty == true
+          ? rawV6
+          : widget.sessionVariables[
+              ChatService.messageStatusSnapshotV5Key(messageId)];
       final rawV4 = rawV5?.trim().isNotEmpty == true
           ? rawV5
           : widget.sessionVariables[
