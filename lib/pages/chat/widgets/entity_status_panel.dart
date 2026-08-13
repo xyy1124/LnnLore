@@ -88,6 +88,9 @@ class _EntityStatusPanelState extends State<EntityStatusPanel> {
           entity: entities.first,
           colorScheme: colorScheme,
           showName: true,
+          bgStart: data.bgGradientStart,
+          bgEnd: data.bgGradientEnd,
+          borderColor: data.borderColor,
         ),
       );
     }
@@ -144,6 +147,9 @@ class _EntityStatusPanelState extends State<EntityStatusPanel> {
                   child: _GlobalFieldsCard(
                     fields: data.globalFields,
                     colorScheme: colorScheme,
+                    bgStart: data.bgGradientStart,
+                    bgEnd: data.bgGradientEnd,
+                    borderColor: data.borderColor,
                   ),
                 ),
               if (hasEntities) ...[
@@ -190,6 +196,9 @@ class _EntityStatusPanelState extends State<EntityStatusPanel> {
                     ),
                     colorScheme: colorScheme,
                     showName: entities.length < 2,
+                    bgStart: data.bgGradientStart,
+                    bgEnd: data.bgGradientEnd,
+                    borderColor: data.borderColor,
                   ),
                 ),
               ],
@@ -206,20 +215,39 @@ class _GlobalFieldsCard extends StatelessWidget {
   const _GlobalFieldsCard({
     required this.fields,
     required this.colorScheme,
+    this.bgStart = '',
+    this.bgEnd = '',
+    this.borderColor = '',
   });
 
   final List<EntityFieldModel> fields;
   final ColorScheme colorScheme;
+  final String bgStart;
+  final String bgEnd;
+  final String borderColor;
 
   @override
   Widget build(BuildContext context) {
+    final start = _parseColor(bgStart, colorScheme.surfaceContainer);
+    final end = _parseColor(bgEnd, start);
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainer.withValues(alpha: 0.35),
+        // v92：复刻原卡渐变背景（模板 linear-gradient）
+        gradient: bgStart.isNotEmpty
+            ? LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [start, end],
+              )
+            : null,
+        color: bgStart.isEmpty
+            ? colorScheme.surfaceContainer.withValues(alpha: 0.35)
+            : null,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.4),
+          color: _parseColor(borderColor, colorScheme.outlineVariant)
+              .withValues(alpha: 0.6),
         ),
       ),
       child: Column(
@@ -232,6 +260,10 @@ class _GlobalFieldsCard extends StatelessWidget {
   }
 
   Widget _buildRow(EntityFieldModel field) {
+    final useDarkCard = bgStart.isNotEmpty;
+    final labelColor = useDarkCard
+        ? const Color(0xFFe8e8e8)
+        : colorScheme.onSurface;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Wrap(
@@ -244,11 +276,12 @@ class _GlobalFieldsCard extends StatelessWidget {
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
-              color: colorScheme.onSurface,
+              color: labelColor,
             ),
           ),
           Text(
-            field.value,
+            // v92：与实体字段卡一致（value/max）
+            '【${field.value}${field.maxText.isNotEmpty ? '/${field.maxText}' : ''}】',
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.bold,
@@ -261,7 +294,7 @@ class _GlobalFieldsCard extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: _parseColor(field.color, colorScheme),
+                color: _parseColor(field.color, colorScheme.primary),
               ),
             ),
         ],
@@ -276,22 +309,41 @@ class _EntityFieldCard extends StatelessWidget {
     required this.entity,
     required this.colorScheme,
     required this.showName,
+    this.bgStart = '',
+    this.bgEnd = '',
+    this.borderColor = '',
   });
 
   final EntityPanelModel entity;
   final ColorScheme colorScheme;
   final bool showName;
+  final String bgStart;
+  final String bgEnd;
+  final String borderColor;
 
   @override
   Widget build(BuildContext context) {
+    final start = _parseColor(bgStart, colorScheme.surfaceContainer);
+    final end = _parseColor(bgEnd, start);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainer.withValues(alpha: 0.35),
+        // v92：复刻原卡渐变背景（模板 linear-gradient）
+        gradient: bgStart.isNotEmpty
+            ? LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [start, end],
+              )
+            : null,
+        color: bgStart.isEmpty
+            ? colorScheme.surfaceContainer.withValues(alpha: 0.35)
+            : null,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.4),
+          color: _parseColor(borderColor, colorScheme.outlineVariant)
+              .withValues(alpha: 0.6),
         ),
       ),
       child: Column(
@@ -316,10 +368,18 @@ class _EntityFieldCard extends StatelessWidget {
   }
 
   Widget _buildField(EntityFieldModel field) {
-    final titleColor = _parseColor(field.color, colorScheme);
+    final titleColor = _parseColor(field.color, colorScheme.primary);
     final narrative = field.narrative.isNotEmpty
         ? field.narrative
         : field.text;
+    // v92：渐变背景（卡模板深色）时文字用原模板浅色，保证可读
+    final useDarkCard = bgStart.isNotEmpty;
+    final labelColor = useDarkCard
+        ? const Color(0xFFe8e8e8)
+        : colorScheme.onSurface;
+    final descColor = useDarkCard
+        ? const Color(0xFFa8a098)
+        : colorScheme.onSurfaceVariant;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Column(
@@ -335,11 +395,13 @@ class _EntityFieldCard extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  color: colorScheme.onSurface,
+                  color: labelColor,
                 ),
               ),
               Text(
-                '【${field.value}${field.percent.isNotEmpty ? '/${field.percent}' : ''}】',
+                // v92：还原原 HTML 面板 `【value/max】` 显示（number 字段
+                // 带 max；string 字段只显示值）
+                '【${field.value}${field.maxText.isNotEmpty ? '/${field.maxText}' : ''}】',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
@@ -364,7 +426,7 @@ class _EntityFieldCard extends StatelessWidget {
                 narrative,
                 style: TextStyle(
                   fontSize: 11,
-                  color: colorScheme.onSurfaceVariant,
+                  color: descColor,
                 ),
               ),
             ),
@@ -375,9 +437,10 @@ class _EntityFieldCard extends StatelessWidget {
 }
 
 /// 解析卡声明颜色（#RRGGBB），非法时回退主题色。
-Color _parseColor(String raw, ColorScheme colorScheme) {
+/// 解析卡声明颜色（#RRGGBB），非法时回退 [fallback]。
+Color _parseColor(String raw, Color fallback) {
   if (raw.isEmpty) {
-    return colorScheme.primary;
+    return fallback;
   }
   var hex = raw.trim();
   if (hex.startsWith('#')) {
@@ -389,5 +452,5 @@ Color _parseColor(String raw, ColorScheme colorScheme) {
       return Color(0xFF000000 | value);
     }
   }
-  return colorScheme.primary;
+  return fallback;
 }
