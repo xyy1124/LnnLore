@@ -2636,10 +2636,15 @@ class ChatService {
         }
       }
     }
+    // v94：envelope 解析成功即视为协议合法——空 updates 是合法输出
+    // （"没有变化"分支，appearedEntityRefs 仍要列出出场角色）。
+    // 不能用 updates 非空作协议标志：空 envelope 会被上层误判"无协议"
+    // 触发重试，重试提示（"输出被截断或不是合法 JSON"）会诱导裁判
+    // 改输出 v1 patch 格式，再次造成协议污染。
     final patch = StatePatch(
       setValues: setValues,
       addValues: addValues,
-      protocolDetected: updates is List && updates.isNotEmpty,
+      protocolDetected: true,
     );
     return (patch, narrative, consequence, null);
   }
@@ -2855,37 +2860,49 @@ class ChatService {
         '相关的任何实质性剧情事件都应按语义反映到对应字段，不必拘泥于'
         '提示词列表；neutral 中列举的行为（普通闲聊/重复描写等）不得'
         '触发变化。\n'
-        '输出格式（只输出 JSON 代码块，不要任何解释文字）：\n'
-        '```json\n'
-        '{\n'
-        '  "patch": {\n'
-        '    "set": {},\n'
-        '    "add": {}\n'
-        '  },\n'
-        '  "narrative": {},\n'
-        '  "consequence": {}\n'
-        '}\n'
-        '```\n'
-        'number 字段增减写入 add（例如 "add":{"字段key":2}）；'
-        'string 字段变化写入 set（例如 "set":{"字段key":"新状态"}）。\n'
-        'narrative 是"当前状态为什么形成"的解读；consequence 是"该状态'
-        '下一轮应如何影响角色行为"（持续状态的保持要求/反转条件）。\n'
-        '【v70 可选最终状态】也可以输出 "state" 字段直接给出本轮结束后'
-        '全部字段的最终值（{"state":{"字段key":最终值}}）——App 检测到 '
-        'state 时按最终值一次性保存（不再叠加）；未输出 state 时仍用 '
-        'patch 增量。\n'
-        '没有实质变化时输出 {"patch":{"set":{},"add":{}}}，可只带 '
-        'narrative/consequence。）\n'
-        '【v65 强制规则】narrative 必须包含以下字段：\n'
-        '1. patch.set 中的全部字段；\n'
-        '2. patch.add 中的全部字段；\n'
-        '3. 主模型已经修改的全部候选字段（对比上方 current 与本轮剧情）；\n'
-        '4. 数值没有变化但本轮剧情含义明显改变的字段。\n'
-        '凡是状态值发生变化的字段，禁止省略 narrative，禁止返回空字符串。\n'
-        'narrative 只能使用字段 key（禁止使用中文 label/别名）。\n'
-        '【v67 强制规则】consequence 与 narrative 覆盖相同的字段集合——'
-        'narrative 解释状态为什么形成，consequence 说明下一轮正文应如何'
-        '持续体现该状态（行动限制/心理反应/连续状态保持/反转条件）。';
+        // v94：输出格式分流——v1 卡保留 patch/set/add 三件套；
+        // 实体卡只遵循上方【实体状态协议】（envelope），不再拼接 v1
+        // 输出格式，避免双协议冲突（备份实测：裁判被 v1 尾巴主导，
+        // 输出裸 key patch 无 entityRef → envelope 解析失败 → 状态
+        // 永不更新；芭蕾卡甚至编造非模板字段 love）。
+        + (trackerConfig.isEntityCard
+            ? '输出格式：按上方【实体状态协议】输出 JSON 代码块，'
+                '必须包含 entities / appearedEntityRefs / updates 三个数组；'
+                'field 必须是上方模板字段 key；entityRef 必须能对应上方'
+                '一个实体（既有 entityId 或本轮 entities 的 new:N）；'
+                '没有变化时输出 {"entities": [], "appearedEntityRefs": [], "updates": []}'
+                '（出场角色仍要列在 appearedEntityRefs）。'
+            : '输出格式（只输出 JSON 代码块，不要任何解释文字）：\n'
+                '```json\n'
+                '{\n'
+                '  "patch": {\n'
+                '    "set": {},\n'
+                '    "add": {}\n'
+                '  },\n'
+                '  "narrative": {},\n'
+                '  "consequence": {}\n'
+                '}\n'
+                '```\n'
+                'number 字段增减写入 add（例如 "add":{"字段key":2}）；'
+                'string 字段变化写入 set（例如 "set":{"字段key":"新状态"}）。\n'
+                'narrative 是"当前状态为什么形成"的解读；consequence 是"该状态'
+                '下一轮应如何影响角色行为"（持续状态的保持要求/反转条件）。\n'
+                '【v70 可选最终状态】也可以输出 "state" 字段直接给出本轮结束后'
+                '全部字段的最终值（{"state":{"字段key":最终值}}）——App 检测到 '
+                'state 时按最终值一次性保存（不再叠加）；未输出 state 时仍用 '
+                'patch 增量。\n'
+                '没有实质变化时输出 {"patch":{"set":{},"add":{}}}，可只带 '
+                'narrative/consequence。）\n'
+                '【v65 强制规则】narrative 必须包含以下字段：\n'
+                '1. patch.set 中的全部字段；\n'
+                '2. patch.add 中的全部字段；\n'
+                '3. 主模型已经修改的全部候选字段（对比上方 current 与本轮剧情）；\n'
+                '4. 数值没有变化但本轮剧情含义明显改变的字段。\n'
+                '凡是状态值发生变化的字段，禁止省略 narrative，禁止返回空字符串。\n'
+                'narrative 只能使用字段 key（禁止使用中文 label/别名）。\n'
+                '【v67 强制规则】consequence 与 narrative 覆盖相同的字段集合——'
+                'narrative 解释状态为什么形成，consequence 说明下一轮正文应如何'
+                '持续体现该状态（行动限制/心理反应/连续状态保持/反转条件）。');
     try {
       // v66：裁判专用精简预设——temperature 0、关闭思维链约束
       // （裁判只需 JSON，不需要长篇回复或思考链）。
@@ -2915,10 +2932,16 @@ class ChatService {
             if (attempt > 0)
               {
                 'role': 'user',
-                'content': '上次输出被截断或不是合法 JSON。'
-                    '请只输出一个完整的 JSON 代码块，压缩文字，'
-                    '确保 "patch"/"narrative"/"consequence" 都在同一个 '
-                    'JSON 对象内且 JSON 语法合法。',
+                'content': trackerConfig.isEntityCard
+                    ? '上次输出不是合法的实体 envelope。请只输出一个完整'
+                        '的 JSON 代码块，压缩文字，确保包含 entities / '
+                        'appearedEntityRefs / updates 三个数组，且 JSON '
+                        '语法合法（字段用上方模板字段 key，entityRef 用 '
+                        '上方实体 ID 或 new:N）。'
+                    : '上次输出被截断或不是合法 JSON。'
+                        '请只输出一个完整的 JSON 代码块，压缩文字，'
+                        '确保 "patch"/"narrative"/"consequence" 都在同一个 '
+                        'JSON 对象内且 JSON 语法合法。',
               }
             else
               {'role': 'user', 'content': '根据以上规则输出状态 patch 与解读。'},
