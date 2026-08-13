@@ -1874,18 +1874,35 @@ class ChatService {
       return;
     }
     // 只保存 tracker 声明的字段（排除 __ 内部变量与无关变量）
+    // v90：实体卡字段在 entityTemplates.*.stateSchema（根可能为空）——
+    // 只收集根会得到空集导致快照不写（实体卡状态不更新的根因）。
     final trackerKeys = <String>{
       ...config.stateSchema.keys,
       ...config.initialState.keys,
+      // v90：实体卡收集所有模板字段 key（按实体前缀的 instance key
+      // 仍以 entity.<id>.<field> 保存，此处用模板 local key 匹配）
+      for (final template in config.entityTemplates.values)
+        ...template.stateSchema.keys,
     };
     if (trackerKeys.isEmpty) {
       return;
     }
-    final state = <String, dynamic>{
-      for (final key in trackerKeys)
-        if (finalVariables[key]?.trim().isNotEmpty == true)
-          key: finalVariables[key]!,
-    };
+    // v90：实体卡的状态值以 instance key（entity.<id>.<field>）存储——
+    // 按"模板 local key ∈ trackerKeys"匹配收集；v1 卡用裸 key 直取。
+    final state = config.isEntityCard
+        ? <String, dynamic>{
+            for (final entry in finalVariables.entries)
+              if (entry.value.trim().isNotEmpty)
+                if (TrackerRuntime.parseEntityFieldKey(entry.key) case
+                    final parsed?
+                    when trackerKeys.contains(parsed.$2))
+                  entry.key: entry.value,
+          }
+        : <String, dynamic>{
+            for (final key in trackerKeys)
+              if (finalVariables[key]?.trim().isNotEmpty == true)
+                key: finalVariables[key]!,
+          };
     if (state.isEmpty) {
       return;
     }
@@ -1961,6 +1978,9 @@ class ChatService {
       final trackerKeys = <String>{
         ...config.stateSchema.keys,
         ...config.initialState.keys,
+        // v90：实体卡模板字段（instance key 的 local 部分匹配）
+        for (final template in config.entityTemplates.values)
+          ...template.stateSchema.keys,
       };
       for (final key in finalVariables.keys) {
         final parsed = TrackerRuntime.parseEntityFieldKey(key);
@@ -2325,6 +2345,27 @@ class ChatService {
       if (existingIds.contains(initial.id)) {
         continue;
       }
+      // v91：出场标记——卡声明开局在场，或旧会话已有该实体非初始值
+      // 的实例字段（旧卡迁移场景：角色已被更新过=已出场）→ 显示。
+      var appeared = initial.initiallyAppeared;
+      if (!appeared) {
+        final template = config.entityTemplates[initial.templateId];
+        if (template != null) {
+          for (final fieldKey in template.stateSchema.keys) {
+            final v = variables[TrackerRuntime.entityFieldKey(
+              initial.id,
+              fieldKey,
+            )];
+            if (v != null && v.trim().isNotEmpty) {
+              final def = template.defaultState[fieldKey];
+              if ('$def' != v.trim()) {
+                appeared = true;
+                break;
+              }
+            }
+          }
+        }
+      }
       entities.add({
         'id': initial.id,
         'templateId': initial.templateId,
@@ -2333,6 +2374,8 @@ class ChatService {
         'source': 'preset',
         'order': order++,
         'status': 'active',
+        // v91：卡声明开局在场 → 立即显示；否则等裁判 appearedEntityRefs
+        'appeared': appeared,
       });
       changed = true;
     }
@@ -2441,6 +2484,8 @@ class ChatService {
         'source': 'discovered',
         'order': order++,
         'status': 'active',
+        // v91：动态发现即真实出场（discovery 契约要求正文中真实出现）
+        'appeared': true,
       });
       idMap[ref] = entityId;
     }
@@ -2451,6 +2496,50 @@ class ChatService {
       'entities': entities,
     };
     return (newRegistry, idMap);
+  }
+
+  /// v91：裁判 appearedEntityRefs → 标记实体出场（单向累积，出场后
+  /// 本会话永久显示）。返回更新后的注册表（无变化返回 null）。
+  /// 出场但无状态变化也必须提交（updates 可能为空）。
+  Map<String, dynamic>? _applyAppearedRefs({
+    required Map<String, dynamic> registry,
+    required List<String> appearedRefs,
+    required Map<String, String> idMap,
+  }) {
+    if (appearedRefs.isEmpty) {
+      return null;
+    }
+    var changed = false;
+    final entities = <Map<String, dynamic>>[
+      ...(registry['entities'] is List
+          ? registry['entities']!.whereType<Map<String, dynamic>>()
+          : <Map<String, dynamic>>[]),
+    ];
+    for (final ref in appearedRefs) {
+      // ref 可能是 new:N（本轮发现）或既有实体 ID
+      final entityId = idMap[ref] ?? ref;
+      for (final entity in entities) {
+        if (entity['id'] == entityId && entity['appeared'] != true) {
+          entity['appeared'] = true;
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (!changed) {
+      return null;
+    }
+    return <String, dynamic>{
+      'version': 1,
+      'nextDynamicOrdinal':
+          registry['nextDynamicOrdinal'] is int
+              ? registry['nextDynamicOrdinal'] as int
+              : 1,
+      'appliedMigrations': registry['appliedMigrations'] is List
+          ? registry['appliedMigrations']!
+          : <String>[],
+      'entities': entities,
+    };
   }
 
   /// v89：把裁判 envelope（entities + updates）规范化为标准 patch——
@@ -2847,15 +2936,31 @@ class ChatService {
             patch = entityPatch;
             entityNarrative = entNarrative;
             entityConsequence = entConsequence;
-            // 新实体建档：注册表立即写库（幂等）
+            // v91：出场标记——裁判 appearedEntityRefs 标记本轮真实出场
+            // 的已建档角色（含预设角色出场但无状态变化；单向累积）。
+            var finalRegistry = newRegistry;
+            final appearedRefs = envelope['appearedEntityRefs'];
+            if (appearedRefs is List) {
+              final appeared = _applyAppearedRefs(
+                registry: newRegistry,
+                appearedRefs: appearedRefs
+                    .whereType<String>()
+                    .toList(),
+                idMap: idMap,
+              );
+              if (appeared != null) {
+                finalRegistry = appeared;
+              }
+            }
+            // 新实体建档/出场标记：注册表立即写库（幂等）
             if (sessionId != null &&
-                newRegistry['entities'] is List &&
-                (newRegistry['entities'] as List).isNotEmpty) {
+                finalRegistry['entities'] is List &&
+                (finalRegistry['entities'] as List).isNotEmpty) {
               await ChatDatabaseService.instance.upsertSessionVariables(
                 sessionId,
                 {
                   TrackerRuntime.kEntityRegistryKey:
-                      TrackerRuntime.encodeEntityRegistry(newRegistry),
+                      TrackerRuntime.encodeEntityRegistry(finalRegistry),
                 },
               );
             }
