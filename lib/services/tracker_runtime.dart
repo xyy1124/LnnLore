@@ -1164,7 +1164,11 @@ class TrackerRuntime {
       bgEnd = styleMatch.group(2) ?? '';
     }
     final borderMatch = RegExp(
-      r'border\s*:\s*[^;]*?\b([#\w]{3,8})\b',
+      // v95：必须 # 开头 3-8 位 hex——原 `[#\w]{3,8}` 会先捕获
+      // `border: 2px solid #9b59b6` 里的 "2px"（3 个 \w 字符），导致
+      // 所有卡边框回退同一主题色（"渲染都长一样"）。
+      // 注意开头不能加 \b：`#` 非 \w，空格→# 之间无 \b 边界。
+      r'border\s*:\s*[^;]*?(#[0-9a-fA-F]{3,8})\b',
       caseSensitive: false,
     ).firstMatch(rawTemplate);
     if (borderMatch != null) {
