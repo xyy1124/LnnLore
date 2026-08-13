@@ -405,6 +405,7 @@ class TrackerInitialEntity {
     required this.templateId,
     this.aliases = const [],
     this.initialState = const {},
+    this.initiallyAppeared = false,
   });
 
   /// 稳定角色 ID（如 szh/lql/mszr），发布后不可随显示名改变。
@@ -417,6 +418,10 @@ class TrackerInitialEntity {
 
   /// 覆盖模板 defaultState 的初值（如沈昭华 90/2/松散半敞/85）。
   final Map<String, dynamic> initialState;
+
+  /// v91：卡声明该预设角色开局是否已在场（如主角/开场即登场角色）。
+  /// false 时只有剧情中真实出场（裁判 appearedEntityRefs）才显示。
+  final bool initiallyAppeared;
 
   factory TrackerInitialEntity.fromJson(Map<String, dynamic> json) {
     final rawAliases = json['aliases'];
@@ -437,6 +442,8 @@ class TrackerInitialEntity {
       templateId: json['templateId'] is String ? json['templateId'] as String : '',
       aliases: aliases,
       initialState: rawInitial == null ? const {} : Map<String, dynamic>.from(rawInitial),
+      initiallyAppeared:
+          json['initiallyAppeared'] is bool ? json['initiallyAppeared'] as bool : false,
     );
   }
 }
