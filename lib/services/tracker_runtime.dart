@@ -2576,23 +2576,15 @@ class TrackerRuntime {
       return null;
     }
     // v93：实体卡——instance key（entity.<id>.<field>）直接放行
-    // （裁判 envelope 已按模板字段校验，key 结构已知）；模板 local
-    // key 也能识别（字段定义在模板而非根 stateSchema）。
+    // （裁判 envelope 已按模板字段校验，key 结构已知）。
+    // v94：模板 local key / label / alias **拒绝放行**——裸 key 无
+    // entityId 归属，落库后渲染/注入读实例键永远读不到（实测：裁判
+    // 被 v1 格式污染输出裸 key patch，写入 xno_depth=2 裸变量，
+    // 面板显示 entity.szh.xno_depth 为空 → 状态看似不更新且产生
+    // 垃圾数据）。实体卡状态必须走 instance key。
     if (config.isEntityCard) {
       if (parseEntityFieldKey(value) != null) {
         return value;
-      }
-      for (final template in config.entityTemplates.values) {
-        if (template.stateSchema.containsKey(value)) {
-          return value;
-        }
-        for (final entry in template.stateSchema.entries) {
-          final schema = entry.value;
-          if (schema.label.trim() == value ||
-              schema.aliases.any((alias) => alias.trim() == value)) {
-            return entry.key;
-          }
-        }
       }
       return null;
     }
