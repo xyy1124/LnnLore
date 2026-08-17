@@ -293,7 +293,7 @@ as DateTime?,
 /// @nodoc
 mixin _$CharacterCardRecord {
 
-@JsonKey(defaultValue: '') String get id;@JsonKey(defaultValue: {}) Map<String, dynamic> get cardJson;@JsonKey(defaultValue: '') String get originalImagePath;@JsonKey(defaultValue: '') String get thumbnailPath; String? get worldBookId;@JsonKey(defaultValue: {}) Map<String, dynamic> get characterBookExtensions; int? get cardColorValue;@NullableDateTimeConverter() DateTime? get updatedAt;
+@JsonKey(defaultValue: '') String get id;@JsonKey(defaultValue: {}) Map<String, dynamic> get cardJson;@JsonKey(defaultValue: '') String get originalImagePath;@JsonKey(defaultValue: '') String get thumbnailPath; double get thumbnailFocusX; double get thumbnailFocusY; double get thumbnailScale; String? get worldBookId;@JsonKey(defaultValue: {}) Map<String, dynamic> get characterBookExtensions; int? get cardColorValue;@NullableDateTimeConverter() DateTime? get updatedAt;
 /// Create a copy of CharacterCardRecord
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -306,16 +306,16 @@ $CharacterCardRecordCopyWith<CharacterCardRecord> get copyWith => _$CharacterCar
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is CharacterCardRecord&&(identical(other.id, id) || other.id == id)&&const DeepCollectionEquality().equals(other.cardJson, cardJson)&&(identical(other.originalImagePath, originalImagePath) || other.originalImagePath == originalImagePath)&&(identical(other.thumbnailPath, thumbnailPath) || other.thumbnailPath == thumbnailPath)&&(identical(other.worldBookId, worldBookId) || other.worldBookId == worldBookId)&&const DeepCollectionEquality().equals(other.characterBookExtensions, characterBookExtensions)&&(identical(other.cardColorValue, cardColorValue) || other.cardColorValue == cardColorValue)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is CharacterCardRecord&&(identical(other.id, id) || other.id == id)&&const DeepCollectionEquality().equals(other.cardJson, cardJson)&&(identical(other.originalImagePath, originalImagePath) || other.originalImagePath == originalImagePath)&&(identical(other.thumbnailPath, thumbnailPath) || other.thumbnailPath == thumbnailPath)&&(identical(other.thumbnailFocusX, thumbnailFocusX) || other.thumbnailFocusX == thumbnailFocusX)&&(identical(other.thumbnailFocusY, thumbnailFocusY) || other.thumbnailFocusY == thumbnailFocusY)&&(identical(other.thumbnailScale, thumbnailScale) || other.thumbnailScale == thumbnailScale)&&(identical(other.worldBookId, worldBookId) || other.worldBookId == worldBookId)&&const DeepCollectionEquality().equals(other.characterBookExtensions, characterBookExtensions)&&(identical(other.cardColorValue, cardColorValue) || other.cardColorValue == cardColorValue)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,const DeepCollectionEquality().hash(cardJson),originalImagePath,thumbnailPath,worldBookId,const DeepCollectionEquality().hash(characterBookExtensions),cardColorValue,updatedAt);
+int get hashCode => Object.hash(runtimeType,id,const DeepCollectionEquality().hash(cardJson),originalImagePath,thumbnailPath,thumbnailFocusX,thumbnailFocusY,thumbnailScale,worldBookId,const DeepCollectionEquality().hash(characterBookExtensions),cardColorValue,updatedAt);
 
 @override
 String toString() {
-  return 'CharacterCardRecord(id: $id, cardJson: $cardJson, originalImagePath: $originalImagePath, thumbnailPath: $thumbnailPath, worldBookId: $worldBookId, characterBookExtensions: $characterBookExtensions, cardColorValue: $cardColorValue, updatedAt: $updatedAt)';
+  return 'CharacterCardRecord(id: $id, cardJson: $cardJson, originalImagePath: $originalImagePath, thumbnailPath: $thumbnailPath, thumbnailFocusX: $thumbnailFocusX, thumbnailFocusY: $thumbnailFocusY, thumbnailScale: $thumbnailScale, worldBookId: $worldBookId, characterBookExtensions: $characterBookExtensions, cardColorValue: $cardColorValue, updatedAt: $updatedAt)';
 }
 
 
@@ -326,7 +326,7 @@ abstract mixin class $CharacterCardRecordCopyWith<$Res>  {
   factory $CharacterCardRecordCopyWith(CharacterCardRecord value, $Res Function(CharacterCardRecord) _then) = _$CharacterCardRecordCopyWithImpl;
 @useResult
 $Res call({
-@JsonKey(defaultValue: '') String id,@JsonKey(defaultValue: {}) Map<String, dynamic> cardJson,@JsonKey(defaultValue: '') String originalImagePath,@JsonKey(defaultValue: '') String thumbnailPath, String? worldBookId,@JsonKey(defaultValue: {}) Map<String, dynamic> characterBookExtensions, int? cardColorValue,@NullableDateTimeConverter() DateTime? updatedAt
+@JsonKey(defaultValue: '') String id,@JsonKey(defaultValue: {}) Map<String, dynamic> cardJson,@JsonKey(defaultValue: '') String originalImagePath,@JsonKey(defaultValue: '') String thumbnailPath, double thumbnailFocusX, double thumbnailFocusY, double thumbnailScale, String? worldBookId,@JsonKey(defaultValue: {}) Map<String, dynamic> characterBookExtensions, int? cardColorValue,@NullableDateTimeConverter() DateTime? updatedAt
 });
 
 
@@ -343,13 +343,16 @@ class _$CharacterCardRecordCopyWithImpl<$Res>
 
 /// Create a copy of CharacterCardRecord
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? cardJson = null,Object? originalImagePath = null,Object? thumbnailPath = null,Object? worldBookId = freezed,Object? characterBookExtensions = null,Object? cardColorValue = freezed,Object? updatedAt = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? cardJson = null,Object? originalImagePath = null,Object? thumbnailPath = null,Object? thumbnailFocusX = null,Object? thumbnailFocusY = null,Object? thumbnailScale = null,Object? worldBookId = freezed,Object? characterBookExtensions = null,Object? cardColorValue = freezed,Object? updatedAt = freezed,}) {
   return _then(_self.copyWith(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,cardJson: null == cardJson ? _self.cardJson : cardJson // ignore: cast_nullable_to_non_nullable
 as Map<String, dynamic>,originalImagePath: null == originalImagePath ? _self.originalImagePath : originalImagePath // ignore: cast_nullable_to_non_nullable
 as String,thumbnailPath: null == thumbnailPath ? _self.thumbnailPath : thumbnailPath // ignore: cast_nullable_to_non_nullable
-as String,worldBookId: freezed == worldBookId ? _self.worldBookId : worldBookId // ignore: cast_nullable_to_non_nullable
+as String,thumbnailFocusX: null == thumbnailFocusX ? _self.thumbnailFocusX : thumbnailFocusX // ignore: cast_nullable_to_non_nullable
+as double,thumbnailFocusY: null == thumbnailFocusY ? _self.thumbnailFocusY : thumbnailFocusY // ignore: cast_nullable_to_non_nullable
+as double,thumbnailScale: null == thumbnailScale ? _self.thumbnailScale : thumbnailScale // ignore: cast_nullable_to_non_nullable
+as double,worldBookId: freezed == worldBookId ? _self.worldBookId : worldBookId // ignore: cast_nullable_to_non_nullable
 as String?,characterBookExtensions: null == characterBookExtensions ? _self.characterBookExtensions : characterBookExtensions // ignore: cast_nullable_to_non_nullable
 as Map<String, dynamic>,cardColorValue: freezed == cardColorValue ? _self.cardColorValue : cardColorValue // ignore: cast_nullable_to_non_nullable
 as int?,updatedAt: freezed == updatedAt ? _self.updatedAt : updatedAt // ignore: cast_nullable_to_non_nullable
@@ -438,10 +441,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(defaultValue: '')  String id, @JsonKey(defaultValue: {})  Map<String, dynamic> cardJson, @JsonKey(defaultValue: '')  String originalImagePath, @JsonKey(defaultValue: '')  String thumbnailPath,  String? worldBookId, @JsonKey(defaultValue: {})  Map<String, dynamic> characterBookExtensions,  int? cardColorValue, @NullableDateTimeConverter()  DateTime? updatedAt)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function(@JsonKey(defaultValue: '')  String id, @JsonKey(defaultValue: {})  Map<String, dynamic> cardJson, @JsonKey(defaultValue: '')  String originalImagePath, @JsonKey(defaultValue: '')  String thumbnailPath,  double thumbnailFocusX,  double thumbnailFocusY,  double thumbnailScale,  String? worldBookId, @JsonKey(defaultValue: {})  Map<String, dynamic> characterBookExtensions,  int? cardColorValue, @NullableDateTimeConverter()  DateTime? updatedAt)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _CharacterCardRecord() when $default != null:
-return $default(_that.id,_that.cardJson,_that.originalImagePath,_that.thumbnailPath,_that.worldBookId,_that.characterBookExtensions,_that.cardColorValue,_that.updatedAt);case _:
+return $default(_that.id,_that.cardJson,_that.originalImagePath,_that.thumbnailPath,_that.thumbnailFocusX,_that.thumbnailFocusY,_that.thumbnailScale,_that.worldBookId,_that.characterBookExtensions,_that.cardColorValue,_that.updatedAt);case _:
   return orElse();
 
 }
@@ -459,10 +462,10 @@ return $default(_that.id,_that.cardJson,_that.originalImagePath,_that.thumbnailP
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(defaultValue: '')  String id, @JsonKey(defaultValue: {})  Map<String, dynamic> cardJson, @JsonKey(defaultValue: '')  String originalImagePath, @JsonKey(defaultValue: '')  String thumbnailPath,  String? worldBookId, @JsonKey(defaultValue: {})  Map<String, dynamic> characterBookExtensions,  int? cardColorValue, @NullableDateTimeConverter()  DateTime? updatedAt)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function(@JsonKey(defaultValue: '')  String id, @JsonKey(defaultValue: {})  Map<String, dynamic> cardJson, @JsonKey(defaultValue: '')  String originalImagePath, @JsonKey(defaultValue: '')  String thumbnailPath,  double thumbnailFocusX,  double thumbnailFocusY,  double thumbnailScale,  String? worldBookId, @JsonKey(defaultValue: {})  Map<String, dynamic> characterBookExtensions,  int? cardColorValue, @NullableDateTimeConverter()  DateTime? updatedAt)  $default,) {final _that = this;
 switch (_that) {
 case _CharacterCardRecord():
-return $default(_that.id,_that.cardJson,_that.originalImagePath,_that.thumbnailPath,_that.worldBookId,_that.characterBookExtensions,_that.cardColorValue,_that.updatedAt);case _:
+return $default(_that.id,_that.cardJson,_that.originalImagePath,_that.thumbnailPath,_that.thumbnailFocusX,_that.thumbnailFocusY,_that.thumbnailScale,_that.worldBookId,_that.characterBookExtensions,_that.cardColorValue,_that.updatedAt);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -479,10 +482,10 @@ return $default(_that.id,_that.cardJson,_that.originalImagePath,_that.thumbnailP
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(defaultValue: '')  String id, @JsonKey(defaultValue: {})  Map<String, dynamic> cardJson, @JsonKey(defaultValue: '')  String originalImagePath, @JsonKey(defaultValue: '')  String thumbnailPath,  String? worldBookId, @JsonKey(defaultValue: {})  Map<String, dynamic> characterBookExtensions,  int? cardColorValue, @NullableDateTimeConverter()  DateTime? updatedAt)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function(@JsonKey(defaultValue: '')  String id, @JsonKey(defaultValue: {})  Map<String, dynamic> cardJson, @JsonKey(defaultValue: '')  String originalImagePath, @JsonKey(defaultValue: '')  String thumbnailPath,  double thumbnailFocusX,  double thumbnailFocusY,  double thumbnailScale,  String? worldBookId, @JsonKey(defaultValue: {})  Map<String, dynamic> characterBookExtensions,  int? cardColorValue, @NullableDateTimeConverter()  DateTime? updatedAt)?  $default,) {final _that = this;
 switch (_that) {
 case _CharacterCardRecord() when $default != null:
-return $default(_that.id,_that.cardJson,_that.originalImagePath,_that.thumbnailPath,_that.worldBookId,_that.characterBookExtensions,_that.cardColorValue,_that.updatedAt);case _:
+return $default(_that.id,_that.cardJson,_that.originalImagePath,_that.thumbnailPath,_that.thumbnailFocusX,_that.thumbnailFocusY,_that.thumbnailScale,_that.worldBookId,_that.characterBookExtensions,_that.cardColorValue,_that.updatedAt);case _:
   return null;
 
 }
@@ -494,7 +497,7 @@ return $default(_that.id,_that.cardJson,_that.originalImagePath,_that.thumbnailP
 
 @JsonSerializable(explicitToJson: true)
 class _CharacterCardRecord extends CharacterCardRecord {
-  const _CharacterCardRecord({@JsonKey(defaultValue: '') required this.id, @JsonKey(defaultValue: {}) final  Map<String, dynamic> cardJson = const {}, @JsonKey(defaultValue: '') required this.originalImagePath, @JsonKey(defaultValue: '') required this.thumbnailPath, this.worldBookId, @JsonKey(defaultValue: {}) final  Map<String, dynamic> characterBookExtensions = const {}, this.cardColorValue, @NullableDateTimeConverter() this.updatedAt}): _cardJson = cardJson,_characterBookExtensions = characterBookExtensions,super._();
+  const _CharacterCardRecord({@JsonKey(defaultValue: '') required this.id, @JsonKey(defaultValue: {}) final  Map<String, dynamic> cardJson = const {}, @JsonKey(defaultValue: '') required this.originalImagePath, @JsonKey(defaultValue: '') required this.thumbnailPath, this.thumbnailFocusX = 0.5, this.thumbnailFocusY = 0.5, this.thumbnailScale = 1.0, this.worldBookId, @JsonKey(defaultValue: {}) final  Map<String, dynamic> characterBookExtensions = const {}, this.cardColorValue, @NullableDateTimeConverter() this.updatedAt}): _cardJson = cardJson,_characterBookExtensions = characterBookExtensions,super._();
   factory _CharacterCardRecord.fromJson(Map<String, dynamic> json) => _$CharacterCardRecordFromJson(json);
 
 @override@JsonKey(defaultValue: '') final  String id;
@@ -507,6 +510,9 @@ class _CharacterCardRecord extends CharacterCardRecord {
 
 @override@JsonKey(defaultValue: '') final  String originalImagePath;
 @override@JsonKey(defaultValue: '') final  String thumbnailPath;
+@override@JsonKey() final  double thumbnailFocusX;
+@override@JsonKey() final  double thumbnailFocusY;
+@override@JsonKey() final  double thumbnailScale;
 @override final  String? worldBookId;
  final  Map<String, dynamic> _characterBookExtensions;
 @override@JsonKey(defaultValue: {}) Map<String, dynamic> get characterBookExtensions {
@@ -531,16 +537,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _CharacterCardRecord&&(identical(other.id, id) || other.id == id)&&const DeepCollectionEquality().equals(other._cardJson, _cardJson)&&(identical(other.originalImagePath, originalImagePath) || other.originalImagePath == originalImagePath)&&(identical(other.thumbnailPath, thumbnailPath) || other.thumbnailPath == thumbnailPath)&&(identical(other.worldBookId, worldBookId) || other.worldBookId == worldBookId)&&const DeepCollectionEquality().equals(other._characterBookExtensions, _characterBookExtensions)&&(identical(other.cardColorValue, cardColorValue) || other.cardColorValue == cardColorValue)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _CharacterCardRecord&&(identical(other.id, id) || other.id == id)&&const DeepCollectionEquality().equals(other._cardJson, _cardJson)&&(identical(other.originalImagePath, originalImagePath) || other.originalImagePath == originalImagePath)&&(identical(other.thumbnailPath, thumbnailPath) || other.thumbnailPath == thumbnailPath)&&(identical(other.thumbnailFocusX, thumbnailFocusX) || other.thumbnailFocusX == thumbnailFocusX)&&(identical(other.thumbnailFocusY, thumbnailFocusY) || other.thumbnailFocusY == thumbnailFocusY)&&(identical(other.thumbnailScale, thumbnailScale) || other.thumbnailScale == thumbnailScale)&&(identical(other.worldBookId, worldBookId) || other.worldBookId == worldBookId)&&const DeepCollectionEquality().equals(other._characterBookExtensions, _characterBookExtensions)&&(identical(other.cardColorValue, cardColorValue) || other.cardColorValue == cardColorValue)&&(identical(other.updatedAt, updatedAt) || other.updatedAt == updatedAt));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,const DeepCollectionEquality().hash(_cardJson),originalImagePath,thumbnailPath,worldBookId,const DeepCollectionEquality().hash(_characterBookExtensions),cardColorValue,updatedAt);
+int get hashCode => Object.hash(runtimeType,id,const DeepCollectionEquality().hash(_cardJson),originalImagePath,thumbnailPath,thumbnailFocusX,thumbnailFocusY,thumbnailScale,worldBookId,const DeepCollectionEquality().hash(_characterBookExtensions),cardColorValue,updatedAt);
 
 @override
 String toString() {
-  return 'CharacterCardRecord(id: $id, cardJson: $cardJson, originalImagePath: $originalImagePath, thumbnailPath: $thumbnailPath, worldBookId: $worldBookId, characterBookExtensions: $characterBookExtensions, cardColorValue: $cardColorValue, updatedAt: $updatedAt)';
+  return 'CharacterCardRecord(id: $id, cardJson: $cardJson, originalImagePath: $originalImagePath, thumbnailPath: $thumbnailPath, thumbnailFocusX: $thumbnailFocusX, thumbnailFocusY: $thumbnailFocusY, thumbnailScale: $thumbnailScale, worldBookId: $worldBookId, characterBookExtensions: $characterBookExtensions, cardColorValue: $cardColorValue, updatedAt: $updatedAt)';
 }
 
 
@@ -551,7 +557,7 @@ abstract mixin class _$CharacterCardRecordCopyWith<$Res> implements $CharacterCa
   factory _$CharacterCardRecordCopyWith(_CharacterCardRecord value, $Res Function(_CharacterCardRecord) _then) = __$CharacterCardRecordCopyWithImpl;
 @override @useResult
 $Res call({
-@JsonKey(defaultValue: '') String id,@JsonKey(defaultValue: {}) Map<String, dynamic> cardJson,@JsonKey(defaultValue: '') String originalImagePath,@JsonKey(defaultValue: '') String thumbnailPath, String? worldBookId,@JsonKey(defaultValue: {}) Map<String, dynamic> characterBookExtensions, int? cardColorValue,@NullableDateTimeConverter() DateTime? updatedAt
+@JsonKey(defaultValue: '') String id,@JsonKey(defaultValue: {}) Map<String, dynamic> cardJson,@JsonKey(defaultValue: '') String originalImagePath,@JsonKey(defaultValue: '') String thumbnailPath, double thumbnailFocusX, double thumbnailFocusY, double thumbnailScale, String? worldBookId,@JsonKey(defaultValue: {}) Map<String, dynamic> characterBookExtensions, int? cardColorValue,@NullableDateTimeConverter() DateTime? updatedAt
 });
 
 
@@ -568,13 +574,16 @@ class __$CharacterCardRecordCopyWithImpl<$Res>
 
 /// Create a copy of CharacterCardRecord
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? cardJson = null,Object? originalImagePath = null,Object? thumbnailPath = null,Object? worldBookId = freezed,Object? characterBookExtensions = null,Object? cardColorValue = freezed,Object? updatedAt = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? cardJson = null,Object? originalImagePath = null,Object? thumbnailPath = null,Object? thumbnailFocusX = null,Object? thumbnailFocusY = null,Object? thumbnailScale = null,Object? worldBookId = freezed,Object? characterBookExtensions = null,Object? cardColorValue = freezed,Object? updatedAt = freezed,}) {
   return _then(_CharacterCardRecord(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as String,cardJson: null == cardJson ? _self._cardJson : cardJson // ignore: cast_nullable_to_non_nullable
 as Map<String, dynamic>,originalImagePath: null == originalImagePath ? _self.originalImagePath : originalImagePath // ignore: cast_nullable_to_non_nullable
 as String,thumbnailPath: null == thumbnailPath ? _self.thumbnailPath : thumbnailPath // ignore: cast_nullable_to_non_nullable
-as String,worldBookId: freezed == worldBookId ? _self.worldBookId : worldBookId // ignore: cast_nullable_to_non_nullable
+as String,thumbnailFocusX: null == thumbnailFocusX ? _self.thumbnailFocusX : thumbnailFocusX // ignore: cast_nullable_to_non_nullable
+as double,thumbnailFocusY: null == thumbnailFocusY ? _self.thumbnailFocusY : thumbnailFocusY // ignore: cast_nullable_to_non_nullable
+as double,thumbnailScale: null == thumbnailScale ? _self.thumbnailScale : thumbnailScale // ignore: cast_nullable_to_non_nullable
+as double,worldBookId: freezed == worldBookId ? _self.worldBookId : worldBookId // ignore: cast_nullable_to_non_nullable
 as String?,characterBookExtensions: null == characterBookExtensions ? _self._characterBookExtensions : characterBookExtensions // ignore: cast_nullable_to_non_nullable
 as Map<String, dynamic>,cardColorValue: freezed == cardColorValue ? _self.cardColorValue : cardColorValue // ignore: cast_nullable_to_non_nullable
 as int?,updatedAt: freezed == updatedAt ? _self.updatedAt : updatedAt // ignore: cast_nullable_to_non_nullable
