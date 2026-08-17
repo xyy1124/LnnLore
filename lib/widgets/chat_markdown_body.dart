@@ -6,6 +6,7 @@ import 'package:markdown/markdown.dart' as md;
 
 import '../data/app_settings.dart';
 import '../pages/chat/widgets/quick_command_marks.dart';
+import '../theme/chat_reading_theme.dart';
 
 const String _quoteTokenTag = 'pinn_quote';
 const String _singleQuoteTokenTag = 'pinn_single_quote';
@@ -112,6 +113,7 @@ class ChatMarkdownBody extends StatelessWidget {
         textColor: effectiveTextColor,
         inlineCodeColor: inlineCodeColor,
         codeBlockColor: codeBlockColor,
+        shadowColor: context.chatReadingTheme.textShadow,
       ),
     );
 
@@ -231,11 +233,13 @@ MarkdownStyleSheet buildChatMarkdownStyleSheet({
   required Color textColor,
   required Color inlineCodeColor,
   required Color codeBlockColor,
+  Color? shadowColor,
 }) {
   final baseTextStyle = buildBaseMessageTextStyle(
     textColor: textColor,
     brightness: colorScheme.brightness,
     enableShadow: chatTextTheme.enableMessageTextShadow,
+    shadowColor: shadowColor,
   );
 
   return MarkdownStyleSheet(
@@ -301,12 +305,15 @@ TextStyle buildBaseMessageTextStyle({
   required Color textColor,
   required Brightness brightness,
   required bool enableShadow,
+  Color? shadowColor,
 }) {
   return TextStyle(
     fontSize: 15,
     height: 1.5,
     color: textColor,
-    shadows: enableShadow ? _buildMessageTextShadows(brightness) : null,
+    shadows: enableShadow
+        ? _buildMessageTextShadows(brightness, shadowColor: shadowColor)
+        : null,
   );
 }
 
@@ -358,13 +365,21 @@ TextStyle buildDecoratedChatTextStyle({
   }
 }
 
-List<Shadow> _buildMessageTextShadows(Brightness brightness) {
-  final shadowColor = brightness == Brightness.dark
-      ? Colors.black.withValues(alpha: 0.34)
-      : Colors.black.withValues(alpha: 0.16);
+List<Shadow> _buildMessageTextShadows(
+  Brightness brightness, {
+  Color? shadowColor,
+}) {
+  final resolvedShadowColor = shadowColor ??
+      (brightness == Brightness.dark
+          ? Colors.black.withValues(alpha: 0.34)
+          : Colors.black.withValues(alpha: 0.16));
 
   return <Shadow>[
-    Shadow(color: shadowColor, blurRadius: 2.5, offset: const Offset(0, 1)),
+    Shadow(
+      color: resolvedShadowColor,
+      blurRadius: 2.5,
+      offset: const Offset(0, 1),
+    ),
   ];
 }
 
