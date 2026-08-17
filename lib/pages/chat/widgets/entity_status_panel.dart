@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../services/tracker_runtime.dart';
+import '../../../theme/chat_reading_theme.dart';
 
 /// v91：实体卡（群像卡）状态面板——Flutter 原生 Tab 渲染。
 ///
@@ -72,6 +73,7 @@ class _EntityStatusPanelState extends State<EntityStatusPanel> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final readingTheme = context.chatReadingTheme;
     final data = widget.data;
     final hasGlobal = data.globalFields.isNotEmpty;
     final entities = data.entities;
@@ -105,8 +107,9 @@ class _EntityStatusPanelState extends State<EntityStatusPanel> {
             // 标题栏（折叠整个面板）
             DecoratedBox(
               decoration: BoxDecoration(
-                color: colorScheme.surfaceContainer.withValues(alpha: 0.72),
+                color: readingTheme.statusHeaderSurface,
                 borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: readingTheme.statusBorder),
               ),
               child: InkWell(
                 borderRadius: BorderRadius.circular(8),
@@ -121,9 +124,10 @@ class _EntityStatusPanelState extends State<EntityStatusPanel> {
                       Expanded(
                         child: Text(
                           data.title.trim().isEmpty ? '状态面板' : data.title.trim(),
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 13,
+                            color: readingTheme.statusHeaderText,
                           ),
                         ),
                       ),
@@ -132,7 +136,7 @@ class _EntityStatusPanelState extends State<EntityStatusPanel> {
                             ? Icons.keyboard_arrow_up
                             : Icons.keyboard_arrow_down,
                         size: 20,
-                        color: colorScheme.onSurfaceVariant,
+                        color: readingTheme.statusHeaderText,
                       ),
                     ],
                   ),
@@ -228,7 +232,8 @@ class _GlobalFieldsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final start = _parseColor(bgStart, colorScheme.surfaceContainer);
+    final readingTheme = context.chatReadingTheme;
+    final start = _parseColor(bgStart, readingTheme.statusFallbackSurface);
     final end = _parseColor(bgEnd, start);
     return Container(
       padding: const EdgeInsets.all(10),
@@ -241,13 +246,11 @@ class _GlobalFieldsCard extends StatelessWidget {
                 colors: [start, end],
               )
             : null,
-        color: bgStart.isEmpty
-            ? colorScheme.surfaceContainer.withValues(alpha: 0.35)
-            : null,
-        borderRadius: BorderRadius.circular(10),
+        color: bgStart.isEmpty ? readingTheme.statusFallbackSurface : null,
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: _parseColor(borderColor, colorScheme.outlineVariant)
-              .withValues(alpha: 0.6),
+          color: _parseColor(borderColor, readingTheme.statusBorder)
+              .withValues(alpha: 0.72),
         ),
       ),
       child: Column(
@@ -260,9 +263,12 @@ class _GlobalFieldsCard extends StatelessWidget {
   }
 
   Widget _buildRow(EntityFieldModel field) {
-    final useDarkCard = bgStart.isNotEmpty;
-    final labelColor = useDarkCard
-        ? const Color(0xFFe8e8e8)
+    final labelColor = bgStart.isNotEmpty
+        ? gradientForegroundForColors(
+            bgStart,
+            bgEnd,
+            fallback: colorScheme.onSurface,
+          )
         : colorScheme.onSurface;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
@@ -323,7 +329,8 @@ class _EntityFieldCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final start = _parseColor(bgStart, colorScheme.surfaceContainer);
+    final readingTheme = context.chatReadingTheme;
+    final start = _parseColor(bgStart, readingTheme.statusFallbackSurface);
     final end = _parseColor(bgEnd, start);
     return Container(
       width: double.infinity,
@@ -337,13 +344,11 @@ class _EntityFieldCard extends StatelessWidget {
                 colors: [start, end],
               )
             : null,
-        color: bgStart.isEmpty
-            ? colorScheme.surfaceContainer.withValues(alpha: 0.35)
-            : null,
-        borderRadius: BorderRadius.circular(10),
+        color: bgStart.isEmpty ? readingTheme.statusFallbackSurface : null,
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: _parseColor(borderColor, colorScheme.outlineVariant)
-              .withValues(alpha: 0.6),
+          color: _parseColor(borderColor, readingTheme.statusBorder)
+              .withValues(alpha: 0.72),
         ),
       ),
       child: Column(
@@ -357,7 +362,13 @@ class _EntityFieldCard extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.bold,
-                  color: colorScheme.onSurface,
+                  color: bgStart.isNotEmpty
+                      ? gradientForegroundForColors(
+                          bgStart,
+                          bgEnd,
+                          fallback: colorScheme.onSurface,
+                        )
+                      : colorScheme.onSurface,
                 ),
               ),
             ),
@@ -372,13 +383,16 @@ class _EntityFieldCard extends StatelessWidget {
     final narrative = field.narrative.isNotEmpty
         ? field.narrative
         : field.text;
-    // v92：渐变背景（卡模板深色）时文字用原模板浅色，保证可读
-    final useDarkCard = bgStart.isNotEmpty;
-    final labelColor = useDarkCard
-        ? const Color(0xFFe8e8e8)
+    final foreground = bgStart.isNotEmpty
+        ? gradientForegroundForColors(
+            bgStart,
+            bgEnd,
+            fallback: colorScheme.onSurface,
+          )
         : colorScheme.onSurface;
-    final descColor = useDarkCard
-        ? const Color(0xFFa8a098)
+    final labelColor = foreground;
+    final descColor = bgStart.isNotEmpty
+        ? foreground.withValues(alpha: 0.72)
         : colorScheme.onSurfaceVariant;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -436,8 +450,26 @@ class _EntityFieldCard extends StatelessWidget {
   }
 }
 
-/// 解析卡声明颜色（#RRGGBB），非法时回退主题色。
-/// 解析卡声明颜色（#RRGGBB），非法时回退 [fallback]。
+/// 根据卡模板渐变的平均亮度选择前景色。
+///
+/// 卡可以声明浅色或深色渐变；仅凭“存在渐变”强制白字会让浅色模板
+/// 难以阅读。无法解析时保留当前主题前景色，避免覆盖卡的兼容路径。
+@visibleForTesting
+Color gradientForegroundForColors(
+  String start,
+  String end, {
+  required Color fallback,
+}) {
+  final startColor = _parseColor(start, fallback);
+  final endColor = _parseColor(end, startColor);
+  final averageLuminance =
+      (startColor.computeLuminance() + endColor.computeLuminance()) / 2;
+  return averageLuminance > 0.42
+      ? const Color(0xFF1F2522)
+      : const Color(0xFFF0F4F2);
+}
+
+/// 解析卡声明颜色（#RRGGBB），非法时回退 [fallback].
 Color _parseColor(String raw, Color fallback) {
   if (raw.isEmpty) {
     return fallback;
