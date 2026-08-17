@@ -279,13 +279,16 @@ class CharacterService {
     }
   }
 
-  Future<void> save(CharacterCardRecord record) async {
+  Future<void> save(
+    CharacterCardRecord record, {
+    bool touchUpdatedAt = true,
+  }) async {
     _checkInitialized();
 
     final normalizedCard = normalizeToV2Card(record.cardJson);
     final storedRecord = record.copyWith(
       cardJson: normalizedCard,
-      updatedAt: DateTime.now(),
+      updatedAt: touchUpdatedAt ? DateTime.now() : record.updatedAt,
     );
 
     final toStore = storedRecord.copyWith(
@@ -595,6 +598,15 @@ class CharacterService {
       cardJson: prepared.cardJson,
       originalImagePath: originalImagePath,
       thumbnailPath: thumbnailPath,
+      thumbnailFocusX: imageBytes == null
+          ? (existing?.thumbnailFocusX ?? 0.5)
+          : 0.5,
+      thumbnailFocusY: imageBytes == null
+          ? (existing?.thumbnailFocusY ?? 0.5)
+          : 0.5,
+      thumbnailScale: imageBytes == null
+          ? (existing?.thumbnailScale ?? 1.0)
+          : 1.0,
       worldBookId: prepared.worldBookId,
       characterBookExtensions: prepared.characterBookExtensions,
       cardColorValue: await _deriveSummaryColorValue(thumbnailPath),
@@ -695,12 +707,64 @@ class CharacterService {
         cardJson: prepared.cardJson,
         originalImagePath: imageData.originalImagePath,
         thumbnailPath: imageData.thumbnailPath,
+        thumbnailFocusX: imageSourcePath == null || imageSourcePath.trim().isEmpty
+            ? existing.thumbnailFocusX
+            : 0.5,
+        thumbnailFocusY: imageSourcePath == null || imageSourcePath.trim().isEmpty
+            ? existing.thumbnailFocusY
+            : 0.5,
+        thumbnailScale: imageSourcePath == null || imageSourcePath.trim().isEmpty
+            ? existing.thumbnailScale
+            : 1.0,
         worldBookId: prepared.worldBookId,
         characterBookExtensions: prepared.characterBookExtensions,
         cardColorValue: imageData.clearCardColorValue
             ? null
             : (imageData.cardColorValue ?? existing.cardColorValue),
       ),
+    );
+  }
+
+  /// Updates only the local thumbnail composition. The card JSON and original
+  /// image are intentionally untouched so exports and imported source files
+  /// stay portable.
+  Future<void> updateThumbnailCrop({
+    required String id,
+    required double focusX,
+    required double focusY,
+    required double scale,
+  }) async {
+    _checkInitialized();
+    final record = await loadById(id);
+    if (record == null || record.originalImagePath.isEmpty) {
+      throw StateError('角色没有可调整的原始封面');
+    }
+    final source = File(record.originalImagePath);
+    if (!await source.exists()) {
+      throw StateError('角色原始封面不存在');
+    }
+    final bytes = await source.readAsBytes();
+    final thumbnailPath = await _storeThumbnail(
+      id,
+      bytes,
+      focusX: focusX,
+      focusY: focusY,
+      scale: scale,
+    );
+    if (thumbnailPath.isEmpty) {
+      throw StateError('无法生成封面缩略图');
+    }
+    await save(
+      record.copyWith(
+        thumbnailPath: thumbnailPath,
+        thumbnailFocusX: focusX.clamp(0.0, 1.0),
+        thumbnailFocusY: focusY.clamp(0.0, 1.0),
+        thumbnailScale: scale.clamp(_minThumbnailScale, _maxThumbnailScale),
+        cardColorValue: await _deriveSummaryColorValue(thumbnailPath),
+      ),
+      // Reframing is a local browsing preference, not a content update. Keep
+      // the user's existing recent-update ordering stable.
+      touchUpdatedAt: false,
     );
   }
 
@@ -1082,20 +1146,100 @@ class CharacterService {
     return relPath;
   }
 
-  Future<String> _storeThumbnail(String id, Uint8List imageBytes) async {
+  static const int _thumbnailWidth = 1024;
+  static const int _thumbnailHeight = 768;
+  static const double _minThumbnailScale = 1.0;
+  static const double _maxThumbnailScale = 4.0;
+
+  Future<String> _storeThumbnail(
+    String id,
+    Uint8List imageBytes, {
+    double focusX = 0.5,
+    double focusY = 0.5,
+    double scale = 1.0,
+  }) async {
     final decoded = img.decodeImage(imageBytes);
     if (decoded == null) {
       return '';
     }
 
-    // 特别版：缩略图加大到 1024（书架式封面/聊天头像放大显示不糊）
-    final resized = img.copyResizeCropSquare(decoded, size: 1024);
-    final encoded = img.encodePng(resized, level: 6);
+    final thumbnail = _buildThumbnail(
+      decoded,
+      focusX: focusX,
+      focusY: focusY,
+      scale: scale,
+    );
+    final encoded = img.encodePng(thumbnail, level: 6);
     final relPath = '$_charactersDir/thumbnails/$id.png';
     final absPath = '$_thumbnailsPath/$id.png';
-    await File(absPath).writeAsBytes(encoded);
+    final target = File(absPath);
+    final temporary = File('$absPath.tmp');
+    await temporary.writeAsBytes(encoded);
+    if (await target.exists()) {
+      await target.delete();
+    }
+    await temporary.rename(absPath);
     await _evictCachedFileImage(absPath);
     return relPath;
+  }
+
+  /// Builds the 4:3 information-library thumbnail from the original portrait.
+  /// Crop values are normalized to the source image and never affect the card
+  /// image or exported card assets.
+  static img.Image buildThumbnailForCrop(
+    img.Image source, {
+    double focusX = 0.5,
+    double focusY = 0.5,
+    double scale = 1.0,
+  }) {
+    return _buildThumbnail(
+      source,
+      focusX: focusX,
+      focusY: focusY,
+      scale: scale,
+    );
+  }
+
+  static img.Image _buildThumbnail(
+    img.Image source, {
+    required double focusX,
+    required double focusY,
+    required double scale,
+  }) {
+    final safeFocusX = focusX.clamp(0.0, 1.0);
+    final safeFocusY = focusY.clamp(0.0, 1.0);
+    final safeScale = scale.clamp(_minThumbnailScale, _maxThumbnailScale);
+    const targetAspect = _thumbnailWidth / _thumbnailHeight;
+    final sourceAspect = source.width / source.height;
+
+    var cropWidth = sourceAspect >= targetAspect
+        ? source.height * targetAspect
+        : source.width.toDouble();
+    var cropHeight = sourceAspect >= targetAspect
+        ? source.height.toDouble()
+        : source.width / targetAspect;
+    cropWidth /= safeScale;
+    cropHeight /= safeScale;
+
+    final cropX = (safeFocusX * source.width - cropWidth / 2)
+        .clamp(0.0, source.width - cropWidth)
+        .round();
+    final cropY = (safeFocusY * source.height - cropHeight / 2)
+        .clamp(0.0, source.height - cropHeight)
+        .round();
+    final cropped = img.copyCrop(
+      source,
+      x: cropX,
+      y: cropY,
+      width: cropWidth.round().clamp(1, source.width),
+      height: cropHeight.round().clamp(1, source.height),
+    );
+    return img.copyResize(
+      cropped,
+      width: _thumbnailWidth,
+      height: _thumbnailHeight,
+      interpolation: img.Interpolation.average,
+    );
   }
 
   Future<_PreparedImageAssets> _prepareImageAssets({
