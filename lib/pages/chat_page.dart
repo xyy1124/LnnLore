@@ -31,6 +31,7 @@ import '../services/chat_database_service.dart';
 import '../services/preset_service.dart';
 import '../services/quick_command_service.dart';
 import '../services/world_book_service.dart';
+import '../theme/chat_reading_theme.dart';
 
 /// 聊天页面
 class ChatPage extends StatefulWidget {
@@ -616,6 +617,7 @@ class _ChatPageState extends State<ChatPage> {
   /// 全员回复模式：显示模式标签（成员自动依次回复）。
   Widget _buildGroupSpeakerBar() {
     final colorScheme = Theme.of(context).colorScheme;
+    final readingTheme = context.chatReadingTheme;
     if (_viewModel.isEveryoneGroupChat) {
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
@@ -624,8 +626,9 @@ class _ChatPageState extends State<ChatPage> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: colorScheme.primaryContainer.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(12),
+              color: readingTheme.choiceSurface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: readingTheme.statusBorder),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -637,7 +640,7 @@ class _ChatPageState extends State<ChatPage> {
                   style: Theme.of(
                     context,
                   ).textTheme.labelSmall?.copyWith(
-                    color: colorScheme.onPrimaryContainer,
+                    color: readingTheme.choiceForeground,
                   ),
                 ),
               ],
@@ -679,8 +682,9 @@ class _ChatPageState extends State<ChatPage> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: colorScheme.primaryContainer.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(12),
+              color: readingTheme.choiceSurface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: readingTheme.statusBorder),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -692,14 +696,14 @@ class _ChatPageState extends State<ChatPage> {
                   style: Theme.of(
                     context,
                   ).textTheme.labelSmall?.copyWith(
-                    color: colorScheme.onPrimaryContainer,
+                    color: readingTheme.choiceForeground,
                   ),
                 ),
                 const SizedBox(width: 4),
                 Icon(
                   Icons.arrow_drop_down,
                   size: 16,
-                  color: colorScheme.onPrimaryContainer,
+                  color: readingTheme.choiceForeground,
                 ),
               ],
             ),
@@ -1370,7 +1374,8 @@ class _ChatPageState extends State<ChatPage> {
         ),
       ),
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: context.chatReadingTheme.appBarSurface,
+        foregroundColor: context.chatReadingTheme.appBarForeground,
         elevation: 0,
         scrolledUnderElevation: 0,
         surfaceTintColor: Colors.transparent,
@@ -1460,7 +1465,7 @@ class _ChatPageState extends State<ChatPage> {
                   if (hasBackground)
                     Positioned.fill(
                       child: Container(
-                        color: Theme.of(context).colorScheme.surface.withValues(
+                        color: context.chatReadingTheme.canvasScrim.withValues(
                           alpha: settings.backgroundOpacity,
                         ),
                       ),
