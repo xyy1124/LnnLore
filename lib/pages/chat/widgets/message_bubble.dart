@@ -15,6 +15,7 @@ import '../../../services/chat_service.dart';
 import '../../../services/chat_variable_service.dart';
 import '../../../services/regex_script_service.dart';
 import '../../../services/tracker_runtime.dart';
+import '../../../theme/chat_reading_theme.dart';
 import '../../../widgets/chat_markdown_body.dart';
 import 'entity_status_panel.dart';
 import 'special_status_panel.dart';
@@ -151,10 +152,10 @@ class _MessageBubbleState extends State<MessageBubble> {
         context: context,
         useRootNavigator: true,
         position: RelativeRect.fromRect(anchorRect, overlayRect),
-        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        color: context.chatReadingTheme.streamSurface,
         elevation: 6,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
         ),
         constraints: const BoxConstraints(minWidth: 120, maxWidth: 220),
         items: [
@@ -264,8 +265,9 @@ class _MessageBubbleState extends State<MessageBubble> {
     AppSettings settings,
     bool showAvatar,
   ) {
-    final bubbleColor = colorScheme.primaryContainer;
-    final textColor = colorScheme.onPrimaryContainer;
+    final readingTheme = context.chatReadingTheme;
+    final bubbleColor = readingTheme.userBubble;
+    final textColor = readingTheme.onUserBubble;
 
     // 特别版：用户消息按原文显示（用户输入不属系统内容，无需清洗）；
     // 空消息不渲染空气泡。
@@ -273,8 +275,8 @@ class _MessageBubbleState extends State<MessageBubble> {
     if (displayText.isEmpty) {
       return const SizedBox.shrink();
     }
-    final inlineCodeColor = colorScheme.primary.withValues(alpha: 0.12);
-    final codeBlockColor = colorScheme.primary.withValues(alpha: 0.08);
+    final inlineCodeColor = readingTheme.userInlineCode;
+    final codeBlockColor = readingTheme.userCodeBlock;
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.end,
@@ -371,12 +373,12 @@ class _MessageBubbleState extends State<MessageBubble> {
                     '${choice['label']}',
                     style: TextStyle(
                       fontSize: 13,
-                      color: colorScheme.onPrimaryContainer,
+                      color: context.chatReadingTheme.choiceForeground,
                     ),
                   ),
-                  backgroundColor: colorScheme.primaryContainer,
+                  backgroundColor: context.chatReadingTheme.choiceSurface,
                   side: BorderSide(
-                    color: colorScheme.primary.withValues(alpha: 0.4),
+                    color: context.chatReadingTheme.statusBorder,
                   ),
                   onPressed: () => onChoicePressed(
                     '${choice['label']}',
@@ -427,9 +429,10 @@ class _MessageBubbleState extends State<MessageBubble> {
     AppSettings settings,
     bool showAvatar,
   ) {
-    final textColor = colorScheme.onSurface;
-    final inlineCodeColor = colorScheme.surfaceContainerHigh;
-    final codeBlockColor = colorScheme.surfaceContainerLow;
+    final readingTheme = context.chatReadingTheme;
+    final textColor = readingTheme.assistantText;
+    final inlineCodeColor = readingTheme.assistantInlineCode;
+    final codeBlockColor = readingTheme.assistantCodeBlock;
     final (pseudoChain, cleanedText, pseudoChainComplete) =
         extractPseudoThinkingChain(widget.message.text);
 
