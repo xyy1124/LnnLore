@@ -16,8 +16,9 @@ import 'chat_page.dart';
 import 'char_edit_page.dart';
 import 'character_intro_page.dart';
 import 'character_intro_settings_page.dart';
+import 'character_thumbnail_crop_page.dart';
 import 'group_chat_create_page.dart';
-import '../widgets/app_snack_bar.dart';
+import '../theme/chat_reading_theme.dart';
 
 class CharListPage extends StatefulWidget {
   const CharListPage({super.key});
@@ -26,13 +27,61 @@ class CharListPage extends StatefulWidget {
   State<CharListPage> createState() => _CharListPageState();
 }
 
+enum CharacterLibrarySort { updatedAt, name }
+
+enum _CharacterMoreAction { intro, introSettings, groupChat }
+
+@visibleForTesting
+List<CharacterSummary> filterAndSortCharacterSummaries(
+  List<CharacterSummary> characters, {
+  required String query,
+  required CharacterLibrarySort sort,
+}) {
+  final normalizedQuery = query.trim().toLowerCase();
+  final visible = characters.where((character) {
+    if (normalizedQuery.isEmpty) {
+      return true;
+    }
+    return character.name.toLowerCase().contains(normalizedQuery) ||
+        character.description.toLowerCase().contains(normalizedQuery);
+  }).toList();
+  switch (sort) {
+    case CharacterLibrarySort.updatedAt:
+      visible.sort((a, b) {
+        final aTime = a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bTime.compareTo(aTime);
+      });
+    case CharacterLibrarySort.name:
+      visible.sort((a, b) => a.name.compareTo(b.name));
+  }
+  return visible;
+}
+
 class _CharListPageState extends State<CharListPage> {
   late Future<List<CharacterSummary>> _charactersFuture;
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  String _query = '';
+  CharacterLibrarySort _sort = CharacterLibrarySort.updatedAt;
 
   @override
   void initState() {
     super.initState();
     _charactersFuture = _loadCharacters();
+    _searchController.addListener(() {
+      final nextQuery = _searchController.text.trim();
+      if (nextQuery != _query) {
+        setState(() => _query = nextQuery);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
   }
 
   Future<List<CharacterSummary>> _loadCharacters() {
@@ -295,6 +344,53 @@ class _CharListPageState extends State<CharListPage> {
     }
   }
 
+  Future<void> _onAdjustThumbnail(CharacterSummary summary) async {
+    final record = await CharacterService.instance.loadById(summary.id);
+    if (record == null || !mounted) {
+      return;
+    }
+    if (record.originalImagePath.isEmpty ||
+        !await File(record.originalImagePath).exists()) {
+      if (mounted) {
+        AppTopNotice.show(context, '该角色没有可调整的原始封面');
+      }
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    final crop = await Navigator.of(context).push<ThumbnailCropValue>(
+      MaterialPageRoute(
+        builder: (_) => CharacterThumbnailCropPage(
+          imagePath: record.originalImagePath,
+          initialFocusX: record.thumbnailFocusX,
+          initialFocusY: record.thumbnailFocusY,
+          initialScale: record.thumbnailScale,
+          characterName: record.name,
+        ),
+      ),
+    );
+    if (crop == null || !mounted) {
+      return;
+    }
+    try {
+      await CharacterService.instance.updateThumbnailCrop(
+        id: summary.id,
+        focusX: crop.focusX,
+        focusY: crop.focusY,
+        scale: crop.scale,
+      );
+      await _refresh();
+      if (mounted) {
+        AppTopNotice.show(context, '封面构图已更新');
+      }
+    } catch (error) {
+      if (mounted) {
+        AppTopNotice.show(context, '调整封面失败：$error', type: AppNoticeType.error);
+      }
+    }
+  }
+
   Future<void> _onExport(CharacterSummary summary) async {
     final record = await CharacterService.instance.loadById(summary.id);
     if (record == null || !mounted) return;
@@ -536,77 +632,85 @@ class _CharListPageState extends State<CharListPage> {
         : FileImage(File(path));
   }
 
-  Widget _buildCharacterImage(String path, Color color) {
-    Widget fallback() {
-      return Container(
-        color: color.withValues(alpha: 0.35),
-        child: const Center(
-          child: Icon(Icons.person, size: 120, color: Colors.white24),
-        ),
-      );
+  List<CharacterSummary> _visibleCharacters(
+    List<CharacterSummary> characters,
+  ) => filterAndSortCharacterSummaries(
+    characters,
+    query: _query,
+    sort: _sort,
+  );
+
+  String _relativeUpdatedAt(DateTime? value) {
+    if (value == null) return '未记录';
+    final now = DateTime.now();
+    final difference = now.difference(value);
+    if (difference.inMinutes < 1) return '刚刚更新';
+    if (difference.inHours < 1) return '${difference.inMinutes} 分钟前';
+    if (difference.inDays < 1) return '${difference.inHours} 小时前';
+    if (difference.inDays < 7) return '${difference.inDays} 天前';
+    return '${value.month}/${value.day}';
+  }
+
+  Future<void> _showMoreActions(_CharacterMoreAction action) async {
+    switch (action) {
+      case _CharacterMoreAction.intro:
+        await _onShowIntroForAny();
+      case _CharacterMoreAction.introSettings:
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const CharacterIntroSettingsPage(),
+          ),
+        );
+      case _CharacterMoreAction.groupChat:
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const GroupChatCreatePage()),
+        );
     }
-
-    if (path.isEmpty) {
-      return fallback();
-    }
-
-    final provider = _imageProviderForPath(path)!;
-
-    return Image(
-      image: provider,
-      fit: BoxFit.cover,
-      alignment: const Alignment(0, -0.5),
-      height: double.infinity,
-      errorBuilder: (_, _, _) => fallback(),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final readingTheme = context.chatReadingTheme;
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.maybePop(context),
+          tooltip: '返回',
         ),
-        title: const Text('角色管理'),
+        title: const Text('角色'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.auto_awesome_outlined),
-            tooltip: 'AI 通读角色介绍',
-            onPressed: _onShowIntroForAny,
+            icon: const Icon(Icons.search_rounded),
+            tooltip: '搜索角色',
+            onPressed: () => _searchFocusNode.requestFocus(),
           ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: '角色介绍 AI 设置',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const CharacterIntroSettingsPage(),
+          PopupMenuButton<_CharacterMoreAction>(
+            tooltip: '更多角色工具',
+            onSelected: _showMoreActions,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _CharacterMoreAction.intro,
+                child: ListTile(
+                  leading: Icon(Icons.auto_awesome_outlined),
+                  title: Text('AI 通读角色介绍'),
                 ),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.group_outlined),
-            tooltip: '新建群聊',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const GroupChatCreatePage(),
+              ),
+              PopupMenuItem(
+                value: _CharacterMoreAction.introSettings,
+                child: ListTile(
+                  leading: Icon(Icons.settings_outlined),
+                  title: Text('角色介绍 AI 设置'),
                 ),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.file_download_outlined),
-            tooltip: '导入',
-            onPressed: _onImport,
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: '新建',
-            onPressed: _onCreate,
+              ),
+              PopupMenuItem(
+                value: _CharacterMoreAction.groupChat,
+                child: ListTile(
+                  leading: Icon(Icons.group_outlined),
+                  title: Text('新建群聊'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -616,45 +720,208 @@ class _CharListPageState extends State<CharListPage> {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-
-          final characters = snapshot.data ?? const <CharacterSummary>[];
-          if (characters.isEmpty) {
-            return const Center(
-              child: Text('还没有角色，先导入一张角色卡吧'),
+          if (snapshot.hasError) {
+            return _CharacterLibraryState(
+              icon: Icons.error_outline_rounded,
+              title: '角色库加载失败',
+              detail: '${snapshot.error}',
+              primaryLabel: '重试',
+              onPrimary: _refresh,
             );
           }
 
+          final characters = snapshot.data ?? const <CharacterSummary>[];
+          final visible = _visibleCharacters(characters);
           return RefreshIndicator(
             onRefresh: _refresh,
-            child: GridView.builder(
-              padding: const EdgeInsets.all(14),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                // 竖版 16:9（9:16）书架封面：宽:高 ≈ 0.62
-                childAspectRatio: 0.62,
-              ),
-              itemCount: characters.length,
-              itemBuilder: (context, index) {
-                final character = characters[index];
-                final color = _summaryColor(character);
-                return _CharacterCard(
-                  name: character.name,
-                  description: character.description,
-                  color: color,
-                  image: _buildCharacterImage(character.thumbnailPath, color),
-                  onEdit: () async {
-                    await _openEditor(character.id);
-                    await _refresh();
-                  },
-                  onExport: () => _onExport(character),
-                  onDelete: () => _onDelete(character),
-                  onShowIntro: () => _onShowIntroduction(character),
-                  // 点击卡片 = 直接开始聊天
-                  onTap: () => _onCreateChat(character),
-                );
-              },
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    child: Column(
+                      children: [
+                        TextField(
+                          controller: _searchController,
+                          focusNode: _searchFocusNode,
+                          decoration: InputDecoration(
+                            hintText: '搜索角色名称或简介',
+                            prefixIcon: const Icon(Icons.search_rounded),
+                            suffixIcon: _query.isEmpty
+                                ? null
+                                : IconButton(
+                                    icon: const Icon(Icons.close_rounded),
+                                    tooltip: '清除搜索',
+                                    onPressed: _searchController.clear,
+                                  ),
+                            filled: true,
+                            fillColor: readingTheme.composerSurface,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(
+                                color: readingTheme.composerBorder,
+                              ),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide(
+                                color: readingTheme.composerBorder,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _onImport,
+                                icon: const Icon(Icons.file_download_outlined),
+                                label: const Text('导入角色卡'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            FilledButton.icon(
+                              onPressed: _onCreate,
+                              icon: const Icon(Icons.add_rounded),
+                              label: const Text('新建'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Text(
+                              characters.isEmpty
+                                  ? '角色库'
+                                  : '共 ${characters.length} 张角色卡',
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            const Spacer(),
+                            PopupMenuButton<CharacterLibrarySort>(
+                              tooltip: '排序方式',
+                              onSelected: (sort) => setState(() => _sort = sort),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: readingTheme.choiceSurface,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: readingTheme.statusBorder,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.sort_rounded,
+                                      size: 16,
+                                      color: readingTheme.choiceForeground,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      _sort == CharacterLibrarySort.updatedAt
+                                          ? '最近更新'
+                                          : '名称',
+                                      style: TextStyle(
+                                        color: readingTheme.choiceForeground,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              itemBuilder: (context) => const [
+                                PopupMenuItem(
+                                  value: CharacterLibrarySort.updatedAt,
+                                  child: Text('最近更新'),
+                                ),
+                                PopupMenuItem(
+                                  value: CharacterLibrarySort.name,
+                                  child: Text('按名称'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (characters.isEmpty)
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: _CharacterLibraryState(
+                      icon: Icons.person_add_alt_1_outlined,
+                      title: '还没有角色',
+                      detail: '导入角色卡，或从空白角色开始创建。',
+                      primaryLabel: '导入角色卡',
+                      onPrimary: _onImport,
+                      secondaryLabel: '新建角色',
+                      onSecondary: _onCreate,
+                    ),
+                  )
+                else if (visible.isEmpty)
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: _CharacterLibraryState(
+                      icon: Icons.search_off_rounded,
+                      title: '没有找到角色',
+                      detail: '尝试其他名称或简介关键词。',
+                      primaryLabel: '清除搜索',
+                      onPrimary: _searchController.clear,
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                    sliver: SliverLayoutBuilder(
+                      builder: (context, constraints) {
+                        final columns = (constraints.crossAxisExtent / 210)
+                            .floor()
+                            .clamp(2, 5);
+                        return SliverGrid.builder(
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: columns,
+                                mainAxisSpacing: 10,
+                                crossAxisSpacing: 10,
+                                childAspectRatio: 0.78,
+                              ),
+                          itemCount: visible.length,
+                          itemBuilder: (context, index) {
+                            final character = visible[index];
+                            return _CharacterLibraryCard(
+                              summary: character,
+                              color: _summaryColor(character),
+                              relativeUpdatedAt: _relativeUpdatedAt(
+                                character.updatedAt,
+                              ),
+                              imageProvider: _imageProviderForPath(
+                                character.thumbnailPath,
+                              ),
+                              onTap: () => _onCreateChat(character),
+                              onEdit: () async {
+                                await _openEditor(character.id);
+                                await _refresh();
+                              },
+                              onAdjustThumbnail: () =>
+                                  _onAdjustThumbnail(character),
+                              onExport: () => _onExport(character),
+                              onDelete: () => _onDelete(character),
+                              onShowIntro: () => _onShowIntroduction(character),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+              ],
             ),
           );
         },
@@ -663,107 +930,67 @@ class _CharListPageState extends State<CharListPage> {
   }
 }
 
-class _CharacterCard extends StatelessWidget {
-  const _CharacterCard({
-    required this.name,
-    required this.description,
-    required this.color,
-    required this.image,
-    required this.onEdit,
-    required this.onExport,
-    required this.onDelete,
-    required this.onShowIntro,
-    required this.onTap,
+class _CharacterLibraryState extends StatelessWidget {
+  const _CharacterLibraryState({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.primaryLabel,
+    required this.onPrimary,
+    this.secondaryLabel,
+    this.onSecondary,
   });
 
-  final String name;
-  final String description;
-  final Color color;
-  final Widget image;
-  final VoidCallback onEdit;
-  final VoidCallback onExport;
-  final VoidCallback onDelete;
-  final VoidCallback onShowIntro;
-  final VoidCallback onTap;
+  final IconData icon;
+  final String title;
+  final String detail;
+  final String primaryLabel;
+  final VoidCallback onPrimary;
+  final String? secondaryLabel;
+  final VoidCallback? onSecondary;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      onLongPress: () => _showActionsMenu(context),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 4),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: Stack(
-            fit: StackFit.expand,
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              // 封面：角色色 + 头像铺满
-              Container(color: color),
-              Positioned.fill(child: image),
-              // 底部渐变压暗保证名字可读
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: 46,
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withValues(alpha: 0.55),
-                      ],
-                    ),
-                  ),
-                ),
+              Icon(
+                icon,
+                size: 44,
+                color: context.chatReadingTheme.composerAccent,
               ),
-              // 底部名字条
-              Positioned(
-                left: 12,
-                right: 12,
-                bottom: 8,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                          shadows: [
-                            Shadow(
-                              color: Colors.black54,
-                              blurRadius: 2,
-                              offset: Offset(0, 1),
-                            ),
-                          ],
-                        ),
-                      ),
+              const SizedBox(height: 14),
+              Text(
+                title,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                detail,
+                style: Theme.of(context).textTheme.bodyMedium,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 18),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  FilledButton(onPressed: onPrimary, child: Text(primaryLabel)),
+                  if (secondaryLabel != null && onSecondary != null)
+                    OutlinedButton(
+                      onPressed: onSecondary,
+                      child: Text(secondaryLabel!),
                     ),
-                    // 长按提示（轻量）
-                    Icon(
-                      Icons.more_horiz,
-                      size: 18,
-                      color: Colors.white.withValues(alpha: 0.7),
-                    ),
-                  ],
-                ),
+                ],
               ),
             ],
           ),
@@ -771,10 +998,138 @@ class _CharacterCard extends StatelessWidget {
       ),
     );
   }
+}
 
-  /// 长按菜单：开始聊天 / 导出 / AI 通读 / 删除。
+class _CharacterLibraryCard extends StatelessWidget {
+  const _CharacterLibraryCard({
+    required this.summary,
+    required this.color,
+    required this.relativeUpdatedAt,
+    required this.imageProvider,
+    required this.onTap,
+    required this.onEdit,
+    required this.onAdjustThumbnail,
+    required this.onExport,
+    required this.onDelete,
+    required this.onShowIntro,
+  });
+
+  final CharacterSummary summary;
+  final Color color;
+  final String relativeUpdatedAt;
+  final ImageProvider? imageProvider;
+  final VoidCallback onTap;
+  final VoidCallback onEdit;
+  final VoidCallback onAdjustThumbnail;
+  final VoidCallback onExport;
+  final VoidCallback onDelete;
+  final VoidCallback onShowIntro;
+
+  @override
+  Widget build(BuildContext context) {
+    final readingTheme = context.chatReadingTheme;
+    final description = summary.description.trim();
+    return Semantics(
+      button: true,
+      label: '${summary.name}，$relativeUpdatedAt 更新',
+      child: Material(
+        color: readingTheme.sidebarSurface,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: () => _showActionsMenu(context),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: readingTheme.statusBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  flex: 7,
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(7),
+                      topRight: Radius.circular(7),
+                    ),
+                    child: imageProvider == null
+                        ? ColoredBox(
+                            color: color.withValues(alpha: 0.22),
+                            child: Icon(
+                              Icons.person_outline_rounded,
+                              size: 42,
+                              color: color,
+                            ),
+                          )
+                        : Image(
+                            image: imageProvider!,
+                            fit: BoxFit.cover,
+                            alignment: Alignment.center,
+                            filterQuality: FilterQuality.medium,
+                            errorBuilder: (_, _, _) => ColoredBox(
+                              color: color.withValues(alpha: 0.22),
+                              child: Icon(
+                                Icons.broken_image_outlined,
+                                size: 36,
+                                color: color,
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+                Expanded(
+                  flex: 5,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 7),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          summary.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: readingTheme.sidebarPrimaryText,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Expanded(
+                          child: Text(
+                            description.isEmpty ? '暂无角色简介' : description,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: readingTheme.sidebarSecondaryText,
+                              fontSize: 11.5,
+                              height: 1.25,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          relativeUpdatedAt,
+                          style: TextStyle(
+                            color: readingTheme.sidebarTimestamp,
+                            fontSize: 10.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _showActionsMenu(BuildContext context) async {
-    final action = await showModalBottomSheet<String>(
+    final action = await showModalBottomSheet<_CharacterCardAction>(
       context: context,
       showDragHandle: true,
       builder: (context) => SafeArea(
@@ -782,19 +1137,29 @@ class _CharacterCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
+              leading: const Icon(Icons.chat_bubble_outline),
+              title: const Text('开始聊天'),
+              onTap: () => Navigator.of(context).pop(_CharacterCardAction.chat),
+            ),
+            ListTile(
+              leading: const Icon(Icons.crop_free_rounded),
+              title: const Text('调整封面构图'),
+              onTap: () => Navigator.of(context).pop(_CharacterCardAction.crop),
+            ),
+            ListTile(
               leading: const Icon(Icons.edit_outlined),
-              title: Text('编辑角色：$name'),
-              onTap: () => Navigator.of(context).pop('edit'),
+              title: const Text('编辑角色'),
+              onTap: () => Navigator.of(context).pop(_CharacterCardAction.edit),
             ),
             ListTile(
               leading: const Icon(Icons.auto_awesome_outlined),
               title: const Text('AI 通读介绍'),
-              onTap: () => Navigator.of(context).pop('intro'),
+              onTap: () => Navigator.of(context).pop(_CharacterCardAction.intro),
             ),
             ListTile(
               leading: const Icon(Icons.file_upload_outlined),
               title: const Text('导出'),
-              onTap: () => Navigator.of(context).pop('export'),
+              onTap: () => Navigator.of(context).pop(_CharacterCardAction.export),
             ),
             ListTile(
               leading: Icon(
@@ -805,27 +1170,32 @@ class _CharacterCard extends StatelessWidget {
                 '删除',
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
-              onTap: () => Navigator.of(context).pop('delete'),
+              onTap: () => Navigator.of(context).pop(_CharacterCardAction.delete),
             ),
           ],
         ),
       ),
     );
-    if (action == null) {
-      return;
-    }
     switch (action) {
-      case 'edit':
+      case _CharacterCardAction.chat:
+        onTap();
+      case _CharacterCardAction.crop:
+        onAdjustThumbnail();
+      case _CharacterCardAction.edit:
         onEdit();
-      case 'intro':
+      case _CharacterCardAction.intro:
         onShowIntro();
-      case 'export':
+      case _CharacterCardAction.export:
         onExport();
-      case 'delete':
+      case _CharacterCardAction.delete:
         onDelete();
+      case null:
+        return;
     }
   }
 }
+
+enum _CharacterCardAction { chat, crop, edit, intro, export, delete }
 
 enum _ExportFormat { json, png }
 
