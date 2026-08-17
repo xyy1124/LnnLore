@@ -12,6 +12,7 @@ import '../services/chat_character_resolver.dart';
 import '../services/chat_database_service.dart';
 import '../services/character_service.dart';
 import '../services/group_chat_service.dart';
+import '../theme/chat_reading_theme.dart';
 import 'char_edit_page.dart';
 import 'char_list_page.dart';
 import 'chat_page.dart';
@@ -289,7 +290,9 @@ class _ChatSidebarPageState extends State<ChatSidebarPage> {
 
   @override
   Widget build(BuildContext context) {
+    final readingTheme = context.chatReadingTheme;
     return Scaffold(
+      backgroundColor: readingTheme.sidebarSurface,
       body: FutureBuilder<_SidebarData>(
         future: _sidebarDataFuture,
         builder: (context, snapshot) {
@@ -394,7 +397,7 @@ class _ChatSidebarPageState extends State<ChatSidebarPage> {
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
                                           fontSize: 13,
-                                          color: Colors.grey.shade700,
+                                          color: readingTheme.sidebarSecondaryText,
                                         ),
                                       ),
                                     ],
@@ -417,7 +420,9 @@ class _ChatSidebarPageState extends State<ChatSidebarPage> {
                     ? Center(
                         child: Text(
                           '暂无聊天记录',
-                          style: TextStyle(color: Colors.grey[600]),
+                          style: TextStyle(
+                            color: readingTheme.sidebarSecondaryText,
+                          ),
                         ),
                       )
                     : ListView.builder(
@@ -457,10 +462,7 @@ class _ChatSidebarPageState extends State<ChatSidebarPage> {
                                 ),
                                 child: Material(
                                   color: isActive
-                                      ? Theme.of(context)
-                                            .colorScheme
-                                            .primaryContainer
-                                            .withValues(alpha: 0.55)
+                                      ? readingTheme.sidebarSelectedSurface
                                       : Colors.transparent,
                                   child: ListTile(
                                     shape: RoundedRectangleBorder(
@@ -490,7 +492,7 @@ class _ChatSidebarPageState extends State<ChatSidebarPage> {
                                       _formatTime(item.summary.updatedAt),
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: Colors.grey[600],
+                                        color: readingTheme.sidebarTimestamp,
                                       ),
                                     ),
                                     onTap: () => _onChatItemTap(item.summary),
@@ -655,7 +657,7 @@ class _RoleAvatar extends StatelessWidget {
 
     return CircleAvatar(
       radius: radius,
-      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+      backgroundColor: context.chatReadingTheme.composerToolSurface,
       child: ClipOval(
         child: Image(
           image: imageProvider,
