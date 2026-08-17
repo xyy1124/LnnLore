@@ -49,6 +49,7 @@ class _CharacterThumbnailCropPageState extends State<CharacterThumbnailCropPage>
   late double _gestureStartFocusX;
   late double _gestureStartFocusY;
   late double _gestureStartScale;
+  late Offset _gestureStartFocal;
 
   @override
   void initState() {
@@ -109,24 +110,29 @@ class _CharacterThumbnailCropPageState extends State<CharacterThumbnailCropPage>
                     child: LayoutBuilder(
                       builder: (context, frame) {
                         return GestureDetector(
-                          onScaleStart: (_) {
+                          onScaleStart: (details) {
                             _gestureStartFocusX = _focusX;
                             _gestureStartFocusY = _focusY;
                             _gestureStartScale = _scale;
+                            _gestureStartFocal = details.focalPoint;
                           },
                           onScaleUpdate: (details) {
                             final nextScale = (_gestureStartScale * details.scale)
                                 .clamp(_minScale, _maxScale);
                             final scaleRatio = nextScale / _gestureStartScale;
                             final frameSize = frame.biggest;
+                            // focalPointDelta 是每帧增量，不能当累计位移用。
+                            // 用"当前触点 - 手势开始触点"得到累计位移，否则
+                            // 单指拖动时焦点几乎不动（只能缩放、平移卡住）。
+                            final offset = details.focalPoint - _gestureStartFocal;
                             setState(() {
                               _scale = nextScale;
                               _focusX = (_gestureStartFocusX -
-                                      details.focalPointDelta.dx /
+                                      offset.dx /
                                           (frameSize.width * scaleRatio))
                                   .clamp(0.0, 1.0);
                               _focusY = (_gestureStartFocusY -
-                                      details.focalPointDelta.dy /
+                                      offset.dy /
                                           (frameSize.height * scaleRatio))
                                   .clamp(0.0, 1.0);
                             });
