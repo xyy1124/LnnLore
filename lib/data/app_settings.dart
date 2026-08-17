@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../services/app_settings_service.dart';
+import '../theme/chat_reading_theme.dart';
 
 part 'app_settings.freezed.dart';
 
@@ -623,16 +624,18 @@ ThemeData buildAppTheme(AppSettings settings, Brightness brightness) {
     seedColor: resolveThemeColor(settings),
     brightness: brightness,
   );
+  final readingTheme = ChatReadingTheme.fromColorScheme(colorScheme);
 
   return ThemeData(
     useMaterial3: true,
     brightness: brightness,
     colorScheme: colorScheme,
+    extensions: <ThemeExtension<dynamic>>[readingTheme],
     fontFamily: resolveCustomFontFamily(settings),
-    scaffoldBackgroundColor: colorScheme.surface,
+    scaffoldBackgroundColor: readingTheme.canvas,
     appBarTheme: AppBarTheme(
-      backgroundColor: colorScheme.surface,
-      foregroundColor: colorScheme.onSurface,
+      backgroundColor: readingTheme.appBarSurface,
+      foregroundColor: readingTheme.appBarForeground,
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
@@ -641,7 +644,7 @@ ThemeData buildAppTheme(AppSettings settings, Brightness brightness) {
       color: colorScheme.surfaceContainerLow,
       elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: colorScheme.outlineVariant),
       ),
     ),
