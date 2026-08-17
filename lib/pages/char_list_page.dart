@@ -14,6 +14,7 @@ import '../services/chat_display_sanitizer.dart';
 import '../services/folder_import_service.dart';
 import 'chat_page.dart';
 import 'char_edit_page.dart';
+import 'character_detail_page.dart';
 import 'character_intro_page.dart';
 import 'character_intro_settings_page.dart';
 import 'character_thumbnail_crop_page.dart';
@@ -547,6 +548,20 @@ class _CharListPageState extends State<CharListPage> {
     }
   }
 
+  /// v98：点击卡片进入只读角色详情页；开始聊天由详情页按钮调用共享
+  /// 命令 [startChatFor]（即原 _onCreateChat），不在本页直接进聊天。
+  Future<void> _openCharacterDetail(CharacterSummary summary) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => CharacterDetailPage(
+          characterId: summary.id,
+          initialSummary: summary,
+          onStartChat: () => _onCreateChat(summary),
+        ),
+      ),
+    );
+  }
+
   Future<void> _onCreateChat(CharacterSummary summary) async {
     final record = await CharacterService.instance.loadById(summary.id);
     if (record == null) {
@@ -905,7 +920,7 @@ class _CharListPageState extends State<CharListPage> {
                               imageProvider: _imageProviderForPath(
                                 character.thumbnailPath,
                               ),
-                              onTap: () => _onCreateChat(character),
+                              onTap: () => _openCharacterDetail(character),
                               onEdit: () async {
                                 await _openEditor(character.id);
                                 await _refresh();
