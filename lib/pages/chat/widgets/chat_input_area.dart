@@ -6,6 +6,7 @@ import '../../../data/app_settings.dart';
 import '../../../data/mock_user_settings.dart';
 import '../../../models/quick_command.dart';
 import '../../../models/world_book.dart';
+import '../../../theme/chat_reading_theme.dart';
 import '../../../widgets/keyboard_safe_edit_sheet.dart';
 import 'quick_command_marks.dart';
 
@@ -125,14 +126,15 @@ class ChatInputArea extends StatelessWidget {
     required String label,
     required VoidCallback? onTap,
     required ColorScheme colorScheme,
+    required ChatReadingTheme readingTheme,
     int maxLabelChars = 20,
   }) {
     final displayLabel = label.runes.length > maxLabelChars
         ? '${String.fromCharCodes(label.runes.take(maxLabelChars))}…'
         : label;
     return Material(
-      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
-      borderRadius: BorderRadius.circular(16),
+      color: readingTheme.composerToolSurface,
+      borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
@@ -152,7 +154,7 @@ class ChatInputArea extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12.5,
                   fontWeight: FontWeight.w500,
-                  color: colorScheme.onSurface,
+                  color: readingTheme.composerText,
                 ),
               ),
             ],
@@ -221,6 +223,7 @@ class ChatInputArea extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final readingTheme = context.chatReadingTheme;
     final hasWorldBooks = worldBooks.isNotEmpty;
     final selectedWorldBooks = worldBooks
         .where((item) => selectedWorldBookIds.contains(item.id))
@@ -260,8 +263,8 @@ class ChatInputArea extends StatelessWidget {
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: colorScheme.primaryContainer.withValues(alpha: 0.55),
-                      borderRadius: BorderRadius.circular(14),
+                      color: readingTheme.composerToolSurface,
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -279,7 +282,7 @@ class ChatInputArea extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: colorScheme.onPrimaryContainer,
+                            color: readingTheme.composerText,
                           ),
                         ),
                       ],
@@ -298,8 +301,8 @@ class ChatInputArea extends StatelessWidget {
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: colorScheme.primaryContainer.withValues(alpha: 0.55),
-                      borderRadius: BorderRadius.circular(12),
+                      color: readingTheme.composerToolSurface,
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -313,8 +316,7 @@ class ChatInputArea extends StatelessWidget {
                                     : (contextUsedTokens / contextMaxTokens))
                                 .clamp(0.0, 1.0),
                             strokeWidth: 2.5,
-                            backgroundColor:
-                                colorScheme.surfaceContainerHighest,
+                            backgroundColor: readingTheme.composerSurface,
                             color: contextMaxTokens > 0 &&
                                     contextUsedTokens / contextMaxTokens > 0.9
                                 ? colorScheme.error
@@ -332,14 +334,14 @@ class ChatInputArea extends StatelessWidget {
                               : '用量待发送后统计',
                           style: TextStyle(
                             fontSize: 11,
-                            color: colorScheme.onPrimaryContainer,
+                            color: readingTheme.composerText,
                           ),
                         ),
                         const SizedBox(width: 2),
                         Icon(
                           Icons.chevron_right,
                           size: 14,
-                          color: colorScheme.onPrimaryContainer,
+                          color: readingTheme.composerText,
                         ),
                       ],
                     ),
@@ -365,7 +367,7 @@ class ChatInputArea extends StatelessWidget {
                 textInputAction: TextInputAction.newline,
                 decoration: InputDecoration(
                   hintText: '输入消息',
-                  hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                  hintStyle: TextStyle(color: readingTheme.composerHint),
                   border: InputBorder.none,
                   isDense: true,
                   contentPadding: const EdgeInsets.only(
@@ -374,7 +376,10 @@ class ChatInputArea extends StatelessWidget {
                     bottom: 8,
                   ),
                 ),
-                style: const TextStyle(fontSize: 16),
+                style: TextStyle(
+                  fontSize: 16,
+                  color: readingTheme.composerText,
+                ),
               ),
               // 发送键：输入框右下角内嵌（圆形渐变，发送/停止切换；
               // 禁用态用 IgnorePointer 让点击穿透到输入框）
@@ -393,21 +398,11 @@ class ChatInputArea extends StatelessWidget {
                     height: 36,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: isSending
-                          ? null
-                          : LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                colorScheme.primary.withValues(alpha: 0.85),
-                                colorScheme.primary,
-                              ],
-                            ),
                       color: isSending
-                          ? colorScheme.errorContainer
+                          ? readingTheme.composerStop
                           : isSendEnabled
-                          ? null
-                          : colorScheme.surfaceContainerHighest,
+                          ? readingTheme.composerSend
+                          : readingTheme.composerToolSurface,
                     ),
                     alignment: Alignment.center,
                     child: Icon(
@@ -416,10 +411,10 @@ class ChatInputArea extends StatelessWidget {
                           : Icons.arrow_upward_rounded,
                       size: 20,
                       color: isSending
-                          ? colorScheme.onErrorContainer
+                          ? colorScheme.onError
                           : isSendEnabled
                           ? colorScheme.onPrimary
-                          : colorScheme.onSurfaceVariant,
+                          : readingTheme.composerHint,
                     ),
                   ),
                 ),
@@ -467,6 +462,7 @@ class ChatInputArea extends StatelessWidget {
                       maxLabelChars: 2,
                       onTap: () => onUserSettingsPressed(context),
                       colorScheme: colorScheme,
+                      readingTheme: readingTheme,
                     );
                   },
                 ),
@@ -486,6 +482,7 @@ class ChatInputArea extends StatelessWidget {
                       ? () => onWorldBookPressed(context)
                       : null,
                   colorScheme: colorScheme,
+                  readingTheme: readingTheme,
                 ),
               ),
               const SizedBox(width: 8),
@@ -500,6 +497,7 @@ class ChatInputArea extends StatelessWidget {
                   label: '预设',
                   onTap: () => onPresetPressed(context),
                   colorScheme: colorScheme,
+                  readingTheme: readingTheme,
                 ),
               ),
             ],
@@ -513,15 +511,15 @@ class ChatInputArea extends StatelessWidget {
       return Container(
         margin: const EdgeInsets.fromLTRB(12, 8, 12, 12),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: BorderRadius.circular(16),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
             child: Container(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(28),
-                color: colorScheme.surface.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(16),
+                color: readingTheme.composerGlassSurface,
                 border: Border.all(
-                  color: colorScheme.outline.withValues(alpha: 0.3),
+                  color: readingTheme.composerBorder,
                   width: 0.5,
                 ),
               ),
@@ -535,16 +533,16 @@ class ChatInputArea extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(28),
+        color: readingTheme.composerSurface,
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+            color: readingTheme.composerShadow,
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
         ],
-        border: Border.all(color: colorScheme.outlineVariant, width: 0.5),
+        border: Border.all(color: readingTheme.composerBorder, width: 0.5),
       ),
       child: inputContent,
     );
@@ -616,6 +614,7 @@ class _QuickCommandMenuSheetState extends State<_QuickCommandMenuSheet> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final readingTheme = context.chatReadingTheme;
     final filtered = _filtered;
 
     return SafeArea(
@@ -675,7 +674,7 @@ class _QuickCommandMenuSheetState extends State<_QuickCommandMenuSheet> {
             Text(
               _typeHint(_selectedType),
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
+                color: readingTheme.thinkingLabel,
               ),
             ),
             const SizedBox(height: 8),
@@ -712,11 +711,11 @@ class _QuickCommandMenuSheetState extends State<_QuickCommandMenuSheet> {
                   itemBuilder: (context, index) {
                     final command = filtered[index];
                     return Material(
-                      color: colorScheme.surfaceContainerLow,
-                      borderRadius: BorderRadius.circular(16),
+                      color: readingTheme.composerSurface,
+                      borderRadius: BorderRadius.circular(8),
                       child: InkWell(
                         onTap: () => widget.onPick(command),
-                        borderRadius: BorderRadius.circular(16),
+                        borderRadius: BorderRadius.circular(8),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -728,9 +727,8 @@ class _QuickCommandMenuSheetState extends State<_QuickCommandMenuSheet> {
                                 width: 34,
                                 height: 34,
                                 decoration: BoxDecoration(
-                                  color: colorScheme.primaryContainer
-                                      .withValues(alpha: 0.6),
-                                  borderRadius: BorderRadius.circular(10),
+                                  color: readingTheme.composerToolSurface,
+                                  borderRadius: BorderRadius.circular(6),
                                 ),
                                 alignment: Alignment.center,
                                 child: Icon(
