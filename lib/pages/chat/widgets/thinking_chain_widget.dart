@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../theme/chat_reading_theme.dart';
+
 /// 思考链组件 - 文字加展开符样式，无底板
 class ThinkingChainWidget extends StatefulWidget {
   const ThinkingChainWidget({
@@ -36,7 +38,8 @@ class _ThinkingChainWidgetState extends State<ThinkingChainWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final accentColor = widget.colorScheme.outline;
+    final readingTheme = context.chatReadingTheme;
+    final accentColor = readingTheme.thinkingRail;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -50,7 +53,7 @@ class _ThinkingChainWidgetState extends State<ThinkingChainWidget> {
                 '思考过程',
                 style: TextStyle(
                   fontSize: 12,
-                  color: widget.colorScheme.onSurfaceVariant,
+                  color: readingTheme.thinkingLabel,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -109,7 +112,7 @@ class _ThinkingChainWidgetState extends State<ThinkingChainWidget> {
                     widget.thinkingChain,
                     style: TextStyle(
                       fontSize: 12,
-                      color: widget.colorScheme.onSurfaceVariant,
+                      color: readingTheme.thinkingText,
                       height: 1.4,
                     ),
                   ),
