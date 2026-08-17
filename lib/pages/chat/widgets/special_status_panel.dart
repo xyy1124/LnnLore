@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 
+import '../../../theme/chat_reading_theme.dart';
+
 /// 特别版：特殊状态栏面板——Flutter 原生 HTML 渲染（非 WebView）。
 ///
 /// 模型输出（卡系统提示强制）的状态面板是 HTML/CSS（`<div style=...>`
@@ -71,7 +73,7 @@ class _SpecialStatusPanelState extends State<SpecialStatusPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final readingTheme = context.chatReadingTheme;
     final body = _sanitizeHtml(widget.html);
 
     if (body.trim().isEmpty) {
@@ -95,8 +97,9 @@ class _SpecialStatusPanelState extends State<SpecialStatusPanel> {
             if (hasTitle)
               DecoratedBox(
                 decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainer.withValues(alpha: 0.72),
+                  color: readingTheme.statusHeaderSurface,
                   borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: readingTheme.statusBorder),
                 ),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(8),
@@ -110,11 +113,12 @@ class _SpecialStatusPanelState extends State<SpecialStatusPanel> {
                       children: [
                         Expanded(
                           child: Text(
-                            title!,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
+                            title,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            color: readingTheme.statusHeaderText,
+                          ),
                           ),
                         ),
                         Icon(
@@ -122,7 +126,7 @@ class _SpecialStatusPanelState extends State<SpecialStatusPanel> {
                               ? Icons.keyboard_arrow_up
                               : Icons.keyboard_arrow_down,
                           size: 20,
-                          color: colorScheme.onSurfaceVariant,
+                          color: readingTheme.statusHeaderText,
                         ),
                       ],
                     ),
@@ -147,7 +151,7 @@ class _SpecialStatusPanelState extends State<SpecialStatusPanel> {
                       child: HtmlWidget(
                         body,
                         textStyle: TextStyle(
-                          color: colorScheme.onSurface,
+                          color: readingTheme.assistantText,
                           fontSize: 13,
                           height: 1.35,
                         ),
