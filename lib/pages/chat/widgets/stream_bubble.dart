@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../theme/chat_reading_theme.dart';
+
 /// 特别版：流式输出悬浮面板（列表外，固定高度）。
 ///
 /// 显示在聊天列表上方的悬浮层（Stack Positioned），**不参与 ListView
@@ -38,13 +40,14 @@ class StreamingPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final readingTheme = context.chatReadingTheme;
     final hasThinking = thinking.isNotEmpty || isThinking;
     final showRetry = retryNotice.isNotEmpty;
     final displayText = showRetry ? retryNotice : text;
     return Material(
       elevation: 6,
-      borderRadius: BorderRadius.circular(12),
-      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.92),
+      borderRadius: BorderRadius.circular(10),
+      color: readingTheme.streamSurface,
       child: SizedBox(
         height: panelHeight,
         child: Padding(
@@ -81,7 +84,7 @@ class StreamingPanel extends StatelessWidget {
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: showRetry
                             ? colorScheme.error
-                            : colorScheme.onSurfaceVariant,
+                            : readingTheme.thinkingLabel,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -99,7 +102,7 @@ class StreamingPanel extends StatelessWidget {
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: showRetry
                           ? colorScheme.error
-                          : colorScheme.onSurface,
+                          : readingTheme.streamText,
                     ),
                   ),
                 ),
