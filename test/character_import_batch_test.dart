@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:pocket_inn/services/character_service.dart';
 import 'package:pocket_inn/services/chat_database_service.dart';
 import 'package:pocket_inn/services/storage_service.dart';
@@ -259,6 +260,69 @@ void main() {
       ]);
       // 预检时两者都未持久化，但批内同名必须计入冲突
       expect(conflicts, ['测试角色']);
+    });
+  });
+
+  group('v97 本地封面构图', () {
+    Uint8List portraitBytes(int leftColor, int rightColor) {
+      final image = img.Image(width: 1600, height: 800);
+      img.fill(image, color: img.ColorRgb8(rightColor, 0, 255 - rightColor));
+      img.fillRect(
+        image,
+        x1: 0,
+        y1: 0,
+        x2: 799,
+        y2: 799,
+        color: img.ColorRgb8(leftColor, 0, 255 - leftColor),
+      );
+      return Uint8List.fromList(img.encodePng(image));
+    }
+
+    test('调整构图不修改原图，普通编辑保留构图，新图重置', () async {
+      final initialImage = portraitBytes(255, 0);
+      await CharacterService.instance.importBatch(
+        files: [
+          (name: '测试角色.json', bytes: _bytes(_charCardJson)),
+          (name: '测试角色.png', bytes: initialImage),
+        ],
+      );
+      final summary = (await CharacterService.instance.loadAllSummaries()).single;
+      final initial = await CharacterService.instance.loadById(summary.id);
+      expect(initial, isNotNull);
+      final originalBefore = await File(initial!.originalImagePath).readAsBytes();
+
+      await CharacterService.instance.updateThumbnailCrop(
+        id: initial.id,
+        focusX: 0.1,
+        focusY: 0.5,
+        scale: 1.6,
+      );
+      final cropped = await CharacterService.instance.loadById(initial.id);
+      expect(cropped!.thumbnailFocusX, 0.1);
+      expect(cropped.thumbnailFocusY, 0.5);
+      expect(cropped.thumbnailScale, 1.6);
+      expect(await File(cropped.originalImagePath).readAsBytes(), originalBefore);
+
+      await CharacterService.instance.updateCard(
+        id: cropped.id,
+        cardJson: cropped.cardJson,
+      );
+      final afterTextEdit = await CharacterService.instance.loadById(cropped.id);
+      expect(afterTextEdit!.thumbnailFocusX, 0.1);
+      expect(afterTextEdit.thumbnailFocusY, 0.5);
+      expect(afterTextEdit.thumbnailScale, 1.6);
+
+      final replacementPath = '${tempDir.path}/replacement.png';
+      await File(replacementPath).writeAsBytes(portraitBytes(0, 255));
+      await CharacterService.instance.updateCard(
+        id: cropped.id,
+        cardJson: cropped.cardJson,
+        imageSourcePath: replacementPath,
+      );
+      final afterImageEdit = await CharacterService.instance.loadById(cropped.id);
+      expect(afterImageEdit!.thumbnailFocusX, 0.5);
+      expect(afterImageEdit.thumbnailFocusY, 0.5);
+      expect(afterImageEdit.thumbnailScale, 1.0);
     });
   });
 
