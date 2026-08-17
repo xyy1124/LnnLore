@@ -5,6 +5,7 @@ import '../data/app_settings.dart';
 import '../models/api_config.dart';
 import '../models/chat_memory.dart';
 import '../services/chat_memory_service.dart';
+import '../theme/chat_reading_theme.dart';
 import 'custom_theme/custom_theme_page.dart';
 
 class GeneralSettingsPage extends StatelessWidget {
@@ -31,8 +32,8 @@ class GeneralSettingsPage extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               _NavigationSectionCard(
-                title: '主题配置',
-                subtitle: '编辑当前主题的颜色、引号、阴影、文本样式',
+                title: '高级调整',
+                subtitle: '编辑当前主题的字体、文字样式与细节颜色',
                 icon: Icons.palette_outlined,
                 onTap: () {
                   Navigator.of(context).push(
@@ -354,90 +355,153 @@ class _ThemePresetDropdownTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Material(
-      color: colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: colorScheme.outlineVariant),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '阅读主题',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '预设主题',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '切换当前使用的主题配置',
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.4,
-                      color: colorScheme.onSurfaceVariant,
+        const SizedBox(height: 4),
+        Text(
+          '选择聊天画布、正文、回应与输入区的整体层级',
+          style: TextStyle(
+            fontSize: 13,
+            height: 1.4,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: AppThemePreset.values.length,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            childAspectRatio: 1.24,
+          ),
+          itemBuilder: (context, index) {
+            final preset = AppThemePreset.values[index];
+            return _ThemePresetSample(
+              preset: preset,
+              settings: settings,
+              selected: preset == settings.themePreset,
+              onTap: () => onChanged(preset),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _ThemePresetSample extends StatelessWidget {
+  const _ThemePresetSample({
+    required this.preset,
+    required this.settings,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final AppThemePreset preset;
+  final AppSettings settings;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final seed = resolveThemeColor(settings, preset: preset);
+    final sampleScheme = ColorScheme.fromSeed(
+      seedColor: seed,
+      brightness: Theme.of(context).brightness,
+    );
+    final readingTheme = ChatReadingTheme.fromColorScheme(sampleScheme);
+
+    return Semantics(
+      selected: selected,
+      button: true,
+      label: '${preset.label}主题',
+      child: Material(
+        color: readingTheme.canvas,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: selected ? seed : readingTheme.statusBorder,
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        preset.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: readingTheme.assistantText,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (selected)
+                      Icon(Icons.check_circle, size: 16, color: seed),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  height: 3,
+                  width: 54,
+                  color: readingTheme.assistantText.withValues(alpha: 0.72),
+                ),
+                const SizedBox(height: 5),
+                Container(
+                  height: 3,
+                  width: 72,
+                  color: readingTheme.assistantText.withValues(alpha: 0.38),
+                ),
+                const Spacer(),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Container(
+                    width: 66,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: readingTheme.userBubble,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(8),
+                        topRight: Radius.circular(8),
+                        bottomLeft: Radius.circular(8),
+                        bottomRight: Radius.circular(3),
+                      ),
                     ),
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 120, maxWidth: 140),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<AppThemePreset>(
-                  value: settings.themePreset,
-                  isExpanded: true,
-                  borderRadius: BorderRadius.circular(16),
-                  focusColor: Colors.transparent,
-                  dropdownColor: colorScheme.surface,
-                  iconEnabledColor: colorScheme.onSurfaceVariant,
-                  items: AppThemePreset.values.map((preset) {
-                    final swatchColor = resolveThemeColor(
-                      settings,
-                      preset: preset,
-                    );
-                    return DropdownMenuItem<AppThemePreset>(
-                      value: preset,
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 18,
-                            height: 18,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [
-                                  swatchColor.withValues(alpha: 0.95),
-                                  swatchColor.withValues(alpha: 0.62),
-                                ],
-                              ),
-                              border: Border.all(
-                                color: swatchColor.withValues(alpha: 0.24),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Text(preset.label),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                  onChanged: (preset) {
-                    if (preset != null) {
-                      onChanged(preset);
-                    }
-                  },
                 ),
-              ),
+                const SizedBox(height: 7),
+                Container(
+                  height: 14,
+                  decoration: BoxDecoration(
+                    color: readingTheme.composerSurface,
+                    borderRadius: BorderRadius.circular(5),
+                    border: Border.all(color: readingTheme.composerBorder),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
