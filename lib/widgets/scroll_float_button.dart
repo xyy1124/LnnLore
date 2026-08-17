@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../theme/chat_reading_theme.dart';
+
 class ScrollFloatButton extends StatefulWidget {
   const ScrollFloatButton({
     super.key,
@@ -142,6 +144,7 @@ class _ScrollFloatButtonState extends State<ScrollFloatButton>
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final readingTheme = context.chatReadingTheme;
 
     return AnimatedBuilder(
       animation: _animationController,
@@ -163,6 +166,7 @@ class _ScrollFloatButtonState extends State<ScrollFloatButton>
             tooltip: '到顶',
             onTap: _atTop ? null : _scrollToVisualTop,
             colorScheme: colorScheme,
+            readingTheme: readingTheme,
           ),
           const SizedBox(height: 8),
           _buildButton(
@@ -170,6 +174,7 @@ class _ScrollFloatButtonState extends State<ScrollFloatButton>
             tooltip: '到底',
             onTap: _atBottom ? null : _scrollToVisualBottom,
             colorScheme: colorScheme,
+            readingTheme: readingTheme,
           ),
         ],
       ),
@@ -181,6 +186,7 @@ class _ScrollFloatButtonState extends State<ScrollFloatButton>
     required String tooltip,
     required VoidCallback? onTap,
     required ColorScheme colorScheme,
+    required ChatReadingTheme readingTheme,
   }) {
     final enabled = onTap != null;
     return Opacity(
@@ -188,8 +194,8 @@ class _ScrollFloatButtonState extends State<ScrollFloatButton>
       child: Material(
         elevation: 4,
         borderRadius: BorderRadius.circular(24),
-        color: colorScheme.surface.withValues(alpha: 0.55),
-        surfaceTintColor: colorScheme.surfaceTint,
+        color: readingTheme.scrollControlSurface,
+        surfaceTintColor: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(24),
           onTap: onTap,
@@ -197,7 +203,11 @@ class _ScrollFloatButtonState extends State<ScrollFloatButton>
             width: 30,
             height: 30,
             alignment: Alignment.center,
-            child: Icon(icon, size: 15, color: colorScheme.onSurface),
+            child: Icon(
+              icon,
+              size: 15,
+              color: readingTheme.scrollControlForeground,
+            ),
           ),
         ),
       ),
