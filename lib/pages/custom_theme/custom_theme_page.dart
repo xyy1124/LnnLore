@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../data/app_settings.dart';
+import '../../theme/chat_reading_theme.dart';
 import '../../widgets/chat_markdown_body.dart';
 import 'widgets/theme_font_family_tile.dart';
 import 'widgets/theme_palette_picker.dart';
@@ -17,7 +18,7 @@ class CustomThemePage extends StatelessWidget {
         final chatTextTheme = themeConfig.chatTextTheme;
 
         return Scaffold(
-          appBar: AppBar(title: const Text('主题配置')),
+          appBar: AppBar(title: const Text('高级调整')),
           body: ListView(
             padding: const EdgeInsets.all(16),
             children: [
@@ -372,108 +373,205 @@ class _ThemePreviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final readingTheme = context.chatReadingTheme;
     final themeConfig = resolveThemeConfig(settings);
     final chatTextTheme = resolveActiveChatTextTheme(settings);
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: colorScheme.outlineVariant),
+        color: readingTheme.canvas,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: readingTheme.statusBorder),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _PreviewChip(
-                label:
-                    '${chatTextTheme.quoteStyle.leading}${chatTextTheme.quoteStyle.trailing}',
-                color: colorScheme.secondary,
-              ),
-              _PreviewChip(
-                label: chatTextTheme.enableMessageTextShadow
-                    ? '阴影已开启'
-                    : '阴影已关闭',
-                color: colorScheme.tertiary,
-              ),
-              _PreviewChip(
-                label: themeConfig.customFontFamily != null
-                    ? '自定义字体: ${themeConfig.customFontFamily}'
-                    : '系统字体',
-                color: colorScheme.primary,
-              ),
-            ],
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            color: readingTheme.appBarSurface,
+            child: Row(
+              children: [
+                Icon(
+                  Icons.menu_rounded,
+                  size: 18,
+                  color: readingTheme.appBarForeground,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '夜间对话',
+                    style: TextStyle(
+                      color: readingTheme.appBarForeground,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.more_horiz_rounded,
+                  size: 18,
+                  color: readingTheme.appBarForeground,
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Flexible(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _PreviewChip(
+                  label:
+                      '${chatTextTheme.quoteStyle.leading}${chatTextTheme.quoteStyle.trailing}',
+                  color: colorScheme.secondary,
+                ),
+                _PreviewChip(
+                  label: chatTextTheme.enableMessageTextShadow
+                      ? '文字阴影'
+                      : '清晰正文',
+                  color: readingTheme.composerAccent,
+                ),
+                _PreviewChip(
+                  label: themeConfig.customFontFamily ?? '系统字体',
+                  color: readingTheme.thinkingRail,
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (settings.showAvatar) ...[
+                  _PreviewAvatar(
+                    backgroundColor: readingTheme.composerToolSurface,
+                    foregroundColor: readingTheme.assistantText,
+                    label: '角',
                   ),
-                  decoration: BoxDecoration(
-                    color: colorScheme.primaryContainer,
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(18),
-                      topRight: Radius.circular(18),
-                      bottomLeft: Radius.circular(18),
-                      bottomRight: Radius.circular(4),
-                    ),
-                  ),
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
                   child: ChatMarkdownBody(
-                    text: _userPreviewText,
+                    text: _characterPreviewText,
                     settings: settings,
-                    textColor: colorScheme.onPrimaryContainer,
-                    inlineCodeColor: colorScheme.primary.withValues(
-                      alpha: 0.12,
-                    ),
-                    codeBlockColor: colorScheme.primary.withValues(alpha: 0.08),
+                    textColor: readingTheme.assistantText,
+                    inlineCodeColor: readingTheme.assistantInlineCode,
+                    codeBlockColor: readingTheme.assistantCodeBlock,
                     applyBodyTextColor: false,
                     selectable: false,
                   ),
                 ),
-              ),
-              if (settings.showAvatar) ...[
-                const SizedBox(width: 8),
-                _PreviewAvatar(
-                  backgroundColor: colorScheme.primary,
-                  foregroundColor: colorScheme.onPrimary,
-                  label: '我',
-                ),
               ],
-            ],
+            ),
           ),
-          const SizedBox(height: 18),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (settings.showAvatar) ...[
-                _PreviewAvatar(
-                  backgroundColor: colorScheme.secondaryContainer,
-                  foregroundColor: colorScheme.onSecondaryContainer,
-                  label: '角',
-                ),
-                const SizedBox(width: 12),
-              ],
-              Expanded(
-                child: ChatMarkdownBody(
-                  text: _characterPreviewText,
-                  settings: settings,
-                  textColor: colorScheme.onSurface,
-                  inlineCodeColor: colorScheme.surfaceContainerHigh,
-                  codeBlockColor: colorScheme.surfaceContainerLow,
-                  selectable: false,
-                ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              decoration: BoxDecoration(
+                color: readingTheme.statusHeaderSurface,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: readingTheme.statusBorder),
               ),
-            ],
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.auto_graph_rounded,
+                    size: 14,
+                    color: readingTheme.composerAccent,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '状态 · 氛围稳定',
+                    style: TextStyle(
+                      color: readingTheme.statusHeaderText,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Flexible(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: readingTheme.userBubble,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(14),
+                        topRight: Radius.circular(14),
+                        bottomLeft: Radius.circular(14),
+                        bottomRight: Radius.circular(3),
+                      ),
+                    ),
+                    child: ChatMarkdownBody(
+                      text: _userPreviewText,
+                      settings: settings,
+                      textColor: readingTheme.onUserBubble,
+                      inlineCodeColor: readingTheme.userInlineCode,
+                      codeBlockColor: readingTheme.userCodeBlock,
+                      applyBodyTextColor: false,
+                      selectable: false,
+                    ),
+                  ),
+                ),
+                if (settings.showAvatar) ...[
+                  const SizedBox(width: 8),
+                  _PreviewAvatar(
+                    backgroundColor: readingTheme.composerAccent,
+                    foregroundColor: colorScheme.onPrimary,
+                    label: '我',
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Container(
+            margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: readingTheme.composerSurface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: readingTheme.composerBorder),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '输入消息',
+                    style: TextStyle(
+                      color: readingTheme.composerHint,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                Container(
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: readingTheme.composerSend,
+                  ),
+                  child: Icon(
+                    Icons.arrow_upward_rounded,
+                    size: 16,
+                    color: colorScheme.onPrimary,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
