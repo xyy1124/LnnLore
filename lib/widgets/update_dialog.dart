@@ -67,6 +67,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
     try {
       final apkPath = await UpdateDownloadService.instance.downloadApk(
         url: widget.update.downloadUrl,
+        expectedSizeBytes: widget.update.sizeBytes,
         onProgress: (received, total) {
           if (!mounted) {
             return;
@@ -130,9 +131,16 @@ class _UpdateDialogState extends State<UpdateDialog> {
         return '已有安装在进行中，请稍后重试';
       case 'cancelled':
         return '安装已取消';
+      case 'install_failed_update_incompatible':
+        return '安装失败：当前 APK 与已安装版本签名不一致。请先备份数据后卸载旧版，再安装新版本。';
+      case 'install_failed_invalid_apk':
+        return '安装失败：APK 无效或已损坏，请重新下载。';
+      case 'install_failed_conflict':
+        return '安装失败：系统检测到安装冲突，请稍后重试。';
+      case 'install_failed_storage':
+        return '安装失败：设备存储空间不足。';
       default:
-        return '安装失败：${message ?? '未知错误'}'
-            '（常见原因：签名不一致或包损坏）';
+        return '安装失败：${message ?? '未知错误'}';
     }
   }
 
