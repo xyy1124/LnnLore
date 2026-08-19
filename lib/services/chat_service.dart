@@ -2607,32 +2607,30 @@ class ChatService {
         if (map == null) {
           continue;
         }
-        final ref = map['entityRef'] as String? ?? '';
-        final field = map['field'] as String? ?? '';
-        final op = map['op'] as String? ?? 'set';
-        final value = map['value'];
-        // 归属校验：ref → 实体 ID
-        String? entityId = idMap[ref];
-        if (entityId == null) {
-          // 可能是既有实体 ID 直引（裁判也可直接用实体 ID）
-          entityId = ref;
-        }
-        if (entityId == null || entityId.isEmpty || field.isEmpty) {
+        // v101：entityRef 允许 ID/显示名；field 允许 key/label/别名/旧键。
+        // number 必须能抽出数字（"15"/"+15"/"15/100"），阶段名「无痕」丢弃。
+        final compiled = TrackerRuntime.compileEntityUpdate(
+          item: map,
+          idMap: idMap,
+          registry: registry,
+          config: config,
+        );
+        if (compiled == null) {
           continue;
         }
-        final instanceKey = TrackerRuntime.entityFieldKey(entityId, field);
-        if (op == 'delta' && value is num) {
-          addValues[instanceKey] = value;
-        } else if (value != null) {
-          setValues[instanceKey] = value;
+        if (compiled.isDelta) {
+          final number = compiled.value;
+          if (number is num) {
+            addValues[compiled.instanceKey] = number;
+          }
+        } else {
+          setValues[compiled.instanceKey] = compiled.value;
         }
-        final n = map['narrative'];
-        if (n is String && n.trim().isNotEmpty) {
-          narrative[instanceKey] = n.trim();
+        if (compiled.narrative != null) {
+          narrative[compiled.instanceKey] = compiled.narrative!;
         }
-        final c = map['consequence'];
-        if (c is String && c.trim().isNotEmpty) {
-          consequence[instanceKey] = c.trim();
+        if (compiled.consequence != null) {
+          consequence[compiled.instanceKey] = compiled.consequence!;
         }
       }
     }
@@ -2868,8 +2866,9 @@ class ChatService {
         + (trackerConfig.isEntityCard
             ? '输出格式：按上方【实体状态协议】输出 JSON 代码块，'
                 '必须包含 entities / appearedEntityRefs / updates 三个数组；'
-                'field 必须是上方模板字段 key；entityRef 必须能对应上方'
-                '一个实体（既有 entityId 或本轮 entities 的 new:N）；'
+                'field 必须是上方模板的英文 field= key，禁止中文 label 和阶段标题；'
+                'number 字段 op=delta、value 必须是数字；'
+                'entityRef 必须用上方 entityId；'
                 '没有变化时输出 {"entities": [], "appearedEntityRefs": [], "updates": []}'
                 '（出场角色仍要列在 appearedEntityRefs）。'
             : '输出格式（只输出 JSON 代码块，不要任何解释文字）：\n'
@@ -2910,8 +2909,15 @@ class ChatService {
       // 在字段多时 256 tokens 会被截断（isPartial → 直接 null → 模式
       // 失效）；按字段数分配 (384 + 字段数*128)，钳到 512-1024。
       final basePreset = await _resolvePreset(null);
+      // v101：实体卡根 stateSchema 为空，旧公式永远 512，双模板 envelope
+      // 容易截断。字段数改为根字段 + 全部模板字段。
+      final judgeFieldCount = trackerConfig.stateSchema.length +
+          trackerConfig.entityTemplates.values.fold<int>(
+            0,
+            (sum, template) => sum + template.stateSchema.length,
+          );
       final judgeMaxTokens =
-          (384 + trackerConfig.stateSchema.length * 128).clamp(512, 1024);
+          (384 + judgeFieldCount * 128).clamp(512, 1024);
       final preset = basePreset.copyWith(
         openaiMaxTokens: judgeMaxTokens,
         temperature: 0,
