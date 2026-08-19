@@ -63,6 +63,18 @@ void main() {
     });
   });
 
+  group('UpdateDownloadService download integrity', () {
+    test('GitHub asset size is available for integrity verification', () {
+      const update = AppUpdateInfo(
+        tagName: 'v1.4.0-special.100',
+        downloadUrl: 'https://example.com/app.apk',
+        sizeBytes: 1024,
+      );
+      expect(update.sizeBytes, 1024);
+      expect(update.sizeText, '1 KB');
+    });
+  });
+
   group('UpdateDownloadService.candidateUrls', () {
     test('直连在前，三个镜像依次在后', () {
       const url =
