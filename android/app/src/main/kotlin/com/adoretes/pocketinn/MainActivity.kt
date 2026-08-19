@@ -1,7 +1,11 @@
 package com.adoretes.pocketinn
 
 import android.app.Activity
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Build
@@ -91,6 +95,25 @@ class MainActivity : FlutterActivity() {
             installResult.error("cancelled", "install cancelled", null)
         }
         super.onDestroy()
+    }
+
+    private fun pickFolderAndReadFiles(result: MethodChannel.Result) {
+        if (picking.getAndSet(true)) {
+            result.error("busy", "folder picker already active", null)
+            return
+        }
+        pendingResult = result
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }
+            startActivityForResult(intent, REQUEST_OPEN_TREE)
+        } catch (e: Exception) {
+            pendingResult = null
+            picking.set(false)
+            result.error("pick", "cannot open folder picker: ${e.message}", null)
+        }
     }
 
     // ---- v81：应用内自更新安装 ----
@@ -216,13 +239,15 @@ class MainActivity : FlutterActivity() {
             return
         }
         thread {
+            var session: PackageInstaller.Session? = null
+            var receiver: BroadcastReceiver? = null
             try {
                 val packageInstaller = packageManager.packageInstaller
                 val params = PackageInstaller.SessionParams(
                     PackageInstaller.SessionParams.MODE_FULL_INSTALL
                 )
                 val sessionId = packageInstaller.createSession(params)
-                val session = packageInstaller.openSession(sessionId)
+                session = packageInstaller.openSession(sessionId)
                 val input = FileInputStream(apkFile)
                 val output = session.openWrite("lnnlore_update", 0, apkFile.length())
                 try {
@@ -240,37 +265,78 @@ class MainActivity : FlutterActivity() {
                     session.abandon()
                     throw e
                 }
-                // 注册会话回调拿安装结果（commit 不传 IntentSender，
-                // 结果由 SessionCallback.onSessionFinished 提供）
-                val callback = object : PackageInstaller.SessionCallback() {
-                    override fun onSessionSealed(id: Int) {}
-                    override fun onSessionFinished(id: Int, success: Boolean) {
-                        if (id != sessionId) return
-                        packageInstaller.unregisterSessionCallback(this)
+
+                val action = "com.adoretes.pocketinn.PACKAGE_INSTALL_$sessionId"
+                receiver = object : BroadcastReceiver() {
+                    override fun onReceive(context: Context, intent: Intent) {
+                        if (intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) != sessionId) {
+                            return
+                        }
+                        val status = intent.getIntExtra(
+                            PackageInstaller.EXTRA_STATUS,
+                            PackageInstaller.STATUS_FAILURE,
+                        )
+                        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                            val confirmation = intent.getParcelableExtra<Intent>(
+                                Intent.EXTRA_INTENT,
+                            )
+                            if (confirmation != null) {
+                                confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                startActivity(confirmation)
+                            }
+                            return
+                        }
+                        try {
+                            unregisterReceiver(this)
+                        } catch (_: Exception) {}
                         runOnUiThread {
                             val r = pendingInstallResult
                             pendingInstallResult = null
                             installApkPath = null
                             installing.set(false)
-                            if (success) {
+                            if (status == PackageInstaller.STATUS_SUCCESS) {
                                 r?.success(true)
                             } else {
+                                val message = intent.getStringExtra(
+                                    PackageInstaller.EXTRA_STATUS_MESSAGE,
+                                ) ?: "package installer status $status"
                                 r?.error(
-                                    "install_failed",
-                                    "package install failed（签名不一致或安装被拒绝）",
-                                    null
+                                    installErrorCode(status),
+                                    message,
+                                    status,
                                 )
                             }
                         }
                     }
-
-                    override fun onSessionActive(id: Int) {}
-                    override fun onSessionBadgingChanged(id: Int) {}
-                    override fun onSessionProgressChanged(id: Int, progress: Float) {}
                 }
-                packageInstaller.registerSessionCallback(callback)
-                session.commit(null)
+                val filter = IntentFilter(action)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    @Suppress("DEPRECATION")
+                    registerReceiver(receiver, filter)
+                }
+                val callbackIntent = Intent(action).setPackage(packageName)
+                val pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        PendingIntent.FLAG_IMMUTABLE
+                    } else {
+                        0
+                    }
+                val pendingIntent = PendingIntent.getBroadcast(
+                    this,
+                    sessionId,
+                    callbackIntent,
+                    pendingFlags,
+                )
+                // PackageInstaller requires a non-null IntentSender. Passing null
+                // made every downloaded APK fail at the commit stage.
+                session.commit(pendingIntent.intentSender)
             } catch (e: Exception) {
+                try {
+                    receiver?.let { unregisterReceiver(it) }
+                } catch (_: Exception) {}
+                session?.abandon()
                 runOnUiThread {
                     val r = pendingInstallResult
                     pendingInstallResult = null
@@ -280,6 +346,14 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+    }
+
+    private fun installErrorCode(status: Int): String = when (status) {
+        PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "install_failed_update_incompatible"
+        PackageInstaller.STATUS_FAILURE_INVALID -> "install_failed_invalid_apk"
+        PackageInstaller.STATUS_FAILURE_CONFLICT -> "install_failed_conflict"
+        PackageInstaller.STATUS_FAILURE_STORAGE -> "install_failed_storage"
+        else -> "install_failed"
     }
 
     /// 递归遍历目录树。
