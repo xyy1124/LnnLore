@@ -553,6 +553,27 @@ class TrackerConfig {
   bool get isEntityCard =>
       schemaVersion >= 2 && (entityTemplates.isNotEmpty || initialEntities.isNotEmpty);
 
+  /// 面板/正文剥离用的字段中文 label（根字段 + 全部实体模板字段）。
+  /// v101：实体卡根 stateSchema 为空时，旧逻辑只读根 label → 正文末尾
+  /// 「烙印值：15/100」剥不掉。
+  Set<String> get allFieldLabels {
+    final labels = <String>{};
+    void collect(Map<String, TrackerFieldSchema> schema) {
+      for (final field in schema.values) {
+        final label = field.label.trim();
+        if (label.isNotEmpty) {
+          labels.add(label);
+        }
+      }
+    }
+
+    collect(stateSchema);
+    for (final template in entityTemplates.values) {
+      collect(template.stateSchema);
+    }
+    return labels;
+  }
+
   /// 状态栏显示顺序：uiHints.order 优先，否则 schema 声明顺序，否则空。
   List<String> get displayOrder {
     if (uiOrder.isNotEmpty) {
