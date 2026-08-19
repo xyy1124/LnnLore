@@ -156,26 +156,26 @@ void main() {
       await _pumpDetail(tester, record.id, onStartChat: () => chatCalls++);
 
       expect(find.text('测试角色'), findsWidgets);
-      expect(find.text('角色描述'), findsOneWidget);
-      expect(find.text('角色描述文本'), findsWidgets);
-      expect(find.text('性格'), findsOneWidget);
-      expect(find.text('场景'), findsOneWidget);
-      expect(find.text('系统提示'), findsOneWidget);
-      expect(find.text('作者备注'), findsOneWidget);
+      expect(find.text('角色描述文本'), findsOneWidget);
+      expect(find.text('性格'), findsNothing);
+      expect(find.text('场景'), findsNothing);
+      expect(find.text('系统提示'), findsNothing);
+      expect(find.text('作者备注'), findsNothing);
       expect(find.text('开始聊天'), findsOneWidget);
 
       await tester.tap(find.text('开始聊天'));
       expect(chatCalls, 1);
     });
 
-    testWidgets('hides empty sections and shows placeholder when all empty',
+    testWidgets('empty description leaves only identity and start chat',
         (tester) async {
       final record = await _createCard(tester, _card(name: '空白角色'));
 
       await _pumpDetail(tester, record.id);
 
-      expect(find.text('这张角色卡没有可阅读的设定文本。'), findsOneWidget);
+      expect(find.text('空白角色'), findsWidgets);
       expect(find.text('角色描述'), findsNothing);
+      expect(find.text('这张角色卡没有可阅读的设定文本。'), findsNothing);
       expect(find.text('开始聊天'), findsOneWidget);
     });
 
