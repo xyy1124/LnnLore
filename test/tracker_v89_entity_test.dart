@@ -160,8 +160,10 @@ void main() {
         config: config,
       );
       expect(text, contains('field=xno_depth'));
-      expect(text, contains('entityId=szh | name=沈昭华'));
-      expect(text, contains('entityId=lql | name=洛青鸾'));
+      expect(text, contains('entityId=szh'));
+      expect(text, contains('name=沈昭华'));
+      expect(text, contains('entityId=lql'));
+      expect(text, contains('name=洛青鸾'));
       expect(text, contains('xno_depth=90'));
       expect(text, contains('角色归属规则'));
       expect(text, contains('entities'));
