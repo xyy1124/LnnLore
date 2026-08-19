@@ -41,6 +41,7 @@ class UpdateDownloadService {
   /// [UpdateDownloadCancelledException]（不重试镜像）。
   Future<String> downloadApk({
     required String url,
+    int expectedSizeBytes = 0,
     void Function(int received, int total)? onProgress,
     Future<bool> Function()? isCancelled,
   }) async {
@@ -57,6 +58,7 @@ class UpdateDownloadService {
         await _downloadSingle(
           candidate,
           targetPath,
+          expectedSizeBytes,
           onProgress,
           isCancelled,
         );
@@ -81,6 +83,7 @@ class UpdateDownloadService {
   Future<void> _downloadSingle(
     String url,
     String targetPath,
+    int expectedSizeBytes,
     void Function(int received, int total)? onProgress,
     Future<bool> Function()? isCancelled,
   ) async {
@@ -112,6 +115,12 @@ class UpdateDownloadService {
       }
       await sink.flush();
       await sink.close();
+      if (expectedSizeBytes > 0 && received != expectedSizeBytes) {
+        throw HttpException(
+          'APK size mismatch: expected $expectedSizeBytes bytes, got $received',
+          uri: Uri.parse(url),
+        );
+      }
     } on Object {
       await sink.close();
       if (await file.exists()) {
