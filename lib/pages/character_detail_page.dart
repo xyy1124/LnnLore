@@ -135,23 +135,6 @@ class _DetailContent extends StatelessWidget {
     final data = record.cardData;
     final name = record.name;
     final description = _field(data, 'description');
-    final personality = _field(data, 'personality');
-    final scenario = _field(data, 'scenario');
-    final systemPrompt = _field(data, 'system_prompt');
-    final postHistory = _field(data, 'post_history_instructions');
-    final creatorNotes = _field(data, 'creator_notes');
-
-    // 详情页只放角色设定；备用开场/世界书/标签等在编辑页查看。
-    final settingSections = <(String, String)>[
-      ('角色描述', description),
-      ('性格', personality),
-      ('场景', scenario),
-      ('系统提示', systemPrompt),
-      ('对话后指令', postHistory),
-      ('作者备注', creatorNotes),
-    ].where((section) => section.$2.isNotEmpty).toList();
-
-    final allSettingsEmpty = settingSections.isEmpty;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(0, 8, 0, 24),
@@ -199,27 +182,20 @@ class _DetailContent extends StatelessWidget {
             ),
           ),
         ),
-        const Divider(height: 1),
-        if (allSettingsEmpty)
+        if (description.isNotEmpty) ...[
+          const Divider(height: 1),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 32, 20, 24),
-            child: Text(
-              '这张角色卡没有可阅读的设定文本。',
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+            child: SelectableText(
+              description,
               style: TextStyle(
-                color: readingTheme.sidebarSecondaryText,
-                fontSize: 14,
+                color: readingTheme.sidebarPrimaryText,
+                fontSize: 16,
+                height: 1.6,
               ),
             ),
-          )
-        else
-          for (final section in settingSections) ...[
-            _SettingSection(
-              title: section.$1,
-              text: section.$2,
-              readingTheme: readingTheme,
-            ),
-            const Divider(height: 1),
-          ],
+          ),
+        ],
       ],
     );
   }
@@ -253,44 +229,3 @@ class _CoverImage extends StatelessWidget {
   }
 }
 
-class _SettingSection extends StatelessWidget {
-  const _SettingSection({
-    required this.title,
-    required this.text,
-    required this.readingTheme,
-  });
-
-  final String title;
-  final String text;
-  final ChatReadingTheme readingTheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              color: readingTheme.sidebarPrimaryText,
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              height: 1.3,
-            ),
-          ),
-          const SizedBox(height: 10),
-          SelectableText(
-            text,
-            style: TextStyle(
-              color: readingTheme.sidebarPrimaryText,
-              fontSize: 16,
-              height: 1.6,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
