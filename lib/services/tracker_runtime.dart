@@ -218,6 +218,236 @@ class TrackerRuntime {
     return (rest.substring(0, dot), rest.substring(dot + 1));
   }
 
+  /// v101：从字符串/数字里抽出有限数值（"15"、"+15"、"15/100"）。
+  /// 阶段标题（「无痕」）返回 null——不能当 number 字段的值写入。
+  static num? coerceNumericValue(dynamic value) {
+    if (value is num) {
+      return value.isFinite ? value : null;
+    }
+    if (value is String) {
+      final match = RegExp(r'-?\d+(?:\.\d+)?').firstMatch(value.trim());
+      if (match == null) {
+        return null;
+      }
+      return num.tryParse(match.group(0)!);
+    }
+    return null;
+  }
+
+  /// v101：把裁判 entityRef 解析成注册表实体 ID。
+  /// 允许 entityId / new:N（经 [idMap]）/ displayName / aliases。
+  /// 对不上就返回 null——禁止写成 `entity.夜无央.brand` 这种面板读不到的键。
+  static String? resolveEntityRef({
+    required String rawRef,
+    required Map<String, String> idMap,
+    required Map<String, dynamic> registry,
+    required TrackerConfig config,
+  }) {
+    final ref = rawRef.trim();
+    if (ref.isEmpty) {
+      return null;
+    }
+    final mapped = idMap[ref];
+    if (mapped != null && mapped.isNotEmpty) {
+      return mapped;
+    }
+    bool matchesEntity(Map<String, dynamic> entity) {
+      final id = (entity['id'] as String? ?? '').trim();
+      if (id == ref) {
+        return true;
+      }
+      if ((entity['displayName'] as String? ?? '').trim() == ref) {
+        return true;
+      }
+      final aliases = entity['aliases'];
+      if (aliases is List) {
+        return aliases.whereType<String>().any((alias) => alias.trim() == ref);
+      }
+      return false;
+    }
+
+    final entities = registry['entities'] is List
+        ? registry['entities']!.whereType<Map<String, dynamic>>()
+        : const <Map<String, dynamic>>[];
+    for (final entity in entities) {
+      if (matchesEntity(entity)) {
+        final id = (entity['id'] as String? ?? '').trim();
+        if (id.isNotEmpty) {
+          return id;
+        }
+      }
+    }
+    for (final initial in config.initialEntities) {
+      if (initial.id == ref ||
+          initial.displayName.trim() == ref ||
+          initial.aliases.any((alias) => alias.trim() == ref)) {
+        return initial.id;
+      }
+    }
+    return null;
+  }
+
+  /// v101：把裁判 field（英文 key / 中文 label / 别名 / 旧键 / 实例 key）
+  /// 收成该实体模板的 local key。对不上返回 null。
+  static String? resolveEntityLocalField({
+    required String rawField,
+    required String entityId,
+    required TrackerConfig config,
+    Map<String, dynamic>? registry,
+  }) {
+    final value = rawField.trim();
+    if (value.isEmpty) {
+      return null;
+    }
+    final parsed = parseEntityFieldKey(value);
+    final local = parsed?.$2 ?? value;
+
+    String? templateId;
+    final entities = registry?['entities'] is List
+        ? registry!['entities']!.whereType<Map<String, dynamic>>()
+        : const <Map<String, dynamic>>[];
+    for (final entity in entities) {
+      if ((entity['id'] as String? ?? '') == entityId) {
+        templateId = entity['templateId'] as String?;
+        break;
+      }
+    }
+    templateId ??= config.initialEntities
+        .where((entity) => entity.id == entityId)
+        .map((entity) => entity.templateId)
+        .firstOrNull;
+    templateId ??= config.entityDiscovery.defaultTemplateId;
+
+    bool matches(TrackerFieldSchema schema, String key) =>
+        key == local ||
+        schema.label.trim() == local ||
+        schema.aliases.any((alias) => alias.trim() == local);
+
+    TrackerEntityTemplate? preferred = templateId != null
+        ? config.entityTemplates[templateId]
+        : null;
+    String? fromTemplate(TrackerEntityTemplate template) {
+      if (template.stateSchema.containsKey(local)) {
+        return local;
+      }
+      for (final entry in template.stateSchema.entries) {
+        if (matches(entry.value, entry.key)) {
+          return entry.key;
+        }
+      }
+      for (final migration in config.entityMigrations) {
+        if (migration.targetEntityId != entityId) {
+          continue;
+        }
+        final mapped = migration.fieldMap[local];
+        if (mapped != null && template.stateSchema.containsKey(mapped)) {
+          return mapped;
+        }
+      }
+      return null;
+    }
+
+    if (preferred != null) {
+      final resolved = fromTemplate(preferred);
+      if (resolved != null) {
+        return resolved;
+      }
+    }
+    String? found;
+    for (final template in config.entityTemplates.values) {
+      final resolved = fromTemplate(template);
+      if (resolved == null) {
+        continue;
+      }
+      if (found != null && found != resolved) {
+        return null;
+      }
+      found = resolved;
+    }
+    return found;
+  }
+
+  /// v101：把一条实体 envelope update 编成实例 key 上的 set/add。
+  /// field 对不上、number 写成阶段名、entityRef 对不上 → null（丢弃，不落脏键）。
+  static ({
+    String instanceKey,
+    bool isDelta,
+    dynamic value,
+    String? narrative,
+    String? consequence,
+  })?
+  compileEntityUpdate({
+    required Map<String, dynamic> item,
+    required Map<String, String> idMap,
+    required Map<String, dynamic> registry,
+    required TrackerConfig config,
+  }) {
+    final rawRef = item['entityRef'] as String? ?? '';
+    final rawField = item['field'] as String? ?? '';
+    final entityId = resolveEntityRef(
+      rawRef: rawRef,
+      idMap: idMap,
+      registry: registry,
+      config: config,
+    );
+    if (entityId == null || rawField.trim().isEmpty) {
+      return null;
+    }
+    final localField = resolveEntityLocalField(
+      rawField: rawField,
+      entityId: entityId,
+      config: config,
+      registry: registry,
+    );
+    if (localField == null) {
+      return null;
+    }
+    TrackerFieldSchema? schema;
+    for (final template in config.entityTemplates.values) {
+      schema = template.stateSchema[localField];
+      if (schema != null) {
+        break;
+      }
+    }
+    final opRaw = (item['op'] as String? ?? 'set').trim().toLowerCase();
+    final isDeltaOp = opRaw == 'delta' || opRaw == 'add';
+    final rawValue = item['value'];
+    final instanceKey = entityFieldKey(entityId, localField);
+    if (schema != null && schema.isNumber) {
+      final number = coerceNumericValue(rawValue);
+      if (number == null) {
+        return null;
+      }
+      return (
+        instanceKey: instanceKey,
+        isDelta: isDeltaOp,
+        value: number,
+        narrative: _optionalTrimmed(item['narrative']),
+        consequence: _optionalTrimmed(item['consequence']),
+      );
+    }
+    if (isDeltaOp) {
+      return null;
+    }
+    if (rawValue == null) {
+      return null;
+    }
+    return (
+      instanceKey: instanceKey,
+      isDelta: false,
+      value: rawValue is String ? rawValue : '$rawValue',
+      narrative: _optionalTrimmed(item['narrative']),
+      consequence: _optionalTrimmed(item['consequence']),
+    );
+  }
+
+  static String? _optionalTrimmed(dynamic raw) {
+    if (raw is String && raw.trim().isNotEmpty) {
+      return raw.trim();
+    }
+    return null;
+  }
+
   /// v89：narrative 剧情摘录契约（后台裁判 + 快速协议共用同一文本）。
   static const String kTrackerNarrativeContract =
       'narrative 是一条 15 至 45 个汉字、可直接嵌入正文的单句剧情摘录。'
@@ -566,10 +796,39 @@ class TrackerRuntime {
         next[key] = _clamp(key, base + delta, config);
       } else {
         // 字段缺失：回退 initialState 再叠加；无初始值则直接用 delta
+        // v101：实体卡 instance key 不在根 initialState，从模板/预设取。
+        num? initialNum;
         final initial = config.initialState[key];
-        final initialNum = initial is num
-            ? initial
-            : (initial is String ? num.tryParse(initial) : null);
+        if (initial is num) {
+          initialNum = initial;
+        } else if (initial is String) {
+          initialNum = num.tryParse(initial);
+        }
+        if (initialNum == null && config.isEntityCard) {
+          final parsed = parseEntityFieldKey(key);
+          if (parsed != null) {
+            final (entityId, fieldKey) = parsed;
+            for (final preset in config.initialEntities) {
+              if (preset.id == entityId && preset.initialState[fieldKey] != null) {
+                final raw = preset.initialState[fieldKey];
+                initialNum = raw is num ? raw : num.tryParse('$raw');
+                break;
+              }
+            }
+            if (initialNum == null) {
+              for (final template in config.entityTemplates.values) {
+                final raw = template.defaultState[fieldKey];
+                if (raw == null) {
+                  continue;
+                }
+                initialNum = raw is num ? raw : num.tryParse('$raw');
+                if (initialNum != null) {
+                  break;
+                }
+              }
+            }
+          }
+        }
         if (initialNum != null) {
           next[key] = _clamp(key, initialNum + delta, config);
         } else {
@@ -1523,6 +1782,8 @@ class TrackerRuntime {
       '- 当前状态必须自然影响剧情。\n'
       '- 只输出剧情正文。\n'
       '- 禁止输出 JSON、STATE、HTML、状态栏或状态面板。\n'
+      '- 禁止在正文末尾输出「当前状态」「状态变化」「烙印值：N/100」'
+      '「字段名：值」这类状态提示或变化摘要。\n'
       '- 状态判断由独立裁判完成，你不需要输出任何状态更新。';
 
   /// v70：快速模式的内联状态协议——正文正常输出，末尾追加标记块
@@ -1777,10 +2038,7 @@ class TrackerRuntime {
     TrackerConfig config, {
     Map<String, String>? plainPanelValues,
   }) {
-    final labels = config.stateSchema.values
-        .map((schema) => schema.label.trim())
-        .where((label) => label.isNotEmpty)
-        .toSet();
+    final labels = config.allFieldLabels;
     if (labels.isEmpty) {
       return text.trim();
     }
@@ -1831,11 +2089,55 @@ class TrackerRuntime {
   }
 
   /// 用卡的 initialState 初始化状态（仅补缺失字段，不覆盖已有值）。
+  /// v101：实体卡还要补 instance key（entity.<id>.<field>）的初值——
+  /// 根 initialState 是空的，number 字段 add 时找不到当前值会从 0 起跳
+  /// 或写不进面板正在读的键。
   static Map<String, dynamic> initState({
     required TrackerConfig config,
     Map<String, dynamic>? existing,
   }) {
     final result = Map<String, dynamic>.from(config.initialState);
+    if (config.isEntityCard) {
+      void seedEntity(String entityId, String templateId, Map<String, dynamic> override) {
+        final template = config.entityTemplates[templateId];
+        if (template == null) {
+          return;
+        }
+        for (final fieldKey in template.stateSchema.keys) {
+          final instanceKey = entityFieldKey(entityId, fieldKey);
+          if (result.containsKey(instanceKey)) {
+            continue;
+          }
+          final value = override[fieldKey] ?? template.defaultState[fieldKey];
+          if (value != null) {
+            result[instanceKey] = value;
+          }
+        }
+      }
+
+      final seen = <String>{};
+      final registry = decodeEntityRegistry(
+        existing?[kEntityRegistryKey]?.toString(),
+      );
+      final entities = registry['entities'] is List
+          ? registry['entities']!.whereType<Map<String, dynamic>>()
+          : const <Map<String, dynamic>>[];
+      for (final entity in entities) {
+        final id = entity['id'] as String? ?? '';
+        final templateId = entity['templateId'] as String? ?? '';
+        if (id.isEmpty || templateId.isEmpty) {
+          continue;
+        }
+        seedEntity(id, templateId, const {});
+        seen.add(id);
+      }
+      for (final initial in config.initialEntities) {
+        if (seen.contains(initial.id)) {
+          continue;
+        }
+        seedEntity(initial.id, initial.templateId, initial.initialState);
+      }
+    }
     existing?.forEach((key, value) {
       result[key] = value; // 已有状态优先
     });
@@ -2368,29 +2670,27 @@ class TrackerRuntime {
   /// 实体 envelope（entities + updates）输出，归属规则写死防串值。
   /// [variables] 应包含实例字段（entity.<id>.<key>）与实体注册表
   /// （__tracker_entities_v1__）。
-  static String formatEntityTrackerInstruction({
-    required Map<String, String> variables,
-    required TrackerConfig config,
+  static List<String> _formatEntityTemplateFieldLines(
+    TrackerEntityTemplate template, {
+    bool includePolicy = true,
   }) {
-    if (!config.isEntityCard) {
-      return '';
-    }
-    final template = config.entityTemplates.values.firstOrNull;
-    if (template == null) {
-      return '';
-    }
-    // ① 模板字段定义注入一次（含 semanticHints，防重复膨胀）
     final fields = <String>[];
     template.stateSchema.forEach((fieldKey, schema) {
       final range = schema.isNumber
           ? ' | range=${schema.min ?? '-inf'}..${schema.max ?? '+inf'}'
           : '';
-      var line = '- field=$fieldKey | label=${schema.label.isEmpty ? fieldKey : schema.label}'
+      var line =
+          '- field=$fieldKey | label=${schema.label.isEmpty ? fieldKey : schema.label}'
           ' | type=${schema.type}$range';
+      if (!includePolicy) {
+        fields.add(line);
+        return;
+      }
       final policy = schema.updatePolicy;
       if (policy != null) {
         if (policy.qualitativeDeltas.isNotEmpty) {
-          line += '\n  qualitative: ${policy.qualitativeDeltas.entries.map((e) => '${e.key}=${e.value}').join('，')}';
+          line +=
+              '\n  qualitative: ${policy.qualitativeDeltas.entries.map((e) => '${e.key}=${e.value}').join('，')}';
         }
         if (policy.maxAutoDeltaPerTurn != null) {
           line += '\n  maxAutoDeltaPerTurn=${policy.maxAutoDeltaPerTurn}';
@@ -2400,10 +2700,8 @@ class TrackerRuntime {
         if (hints != null) {
           String clip(String s, [int max = 300]) =>
               s.length <= max ? s : '${s.substring(0, max)}…';
-          final clipList = (List<String> items) => items
-              .map((e) => clip(e, 80))
-              .take(10)
-              .toList();
+          final clipList = (List<String> items) =>
+              items.map((e) => clip(e, 80)).take(10).toList();
           if (hints.meaning.isNotEmpty) {
             line += '\n  meaning=${clip(hints.meaning)}';
           }
@@ -2420,11 +2718,37 @@ class TrackerRuntime {
       }
       fields.add(line);
     });
-    if (fields.isEmpty) {
+    return fields;
+  }
+
+  static String formatEntityTrackerInstruction({
+    required Map<String, String> variables,
+    required TrackerConfig config,
+  }) {
+    if (!config.isEntityCard) {
+      return '';
+    }
+    if (config.entityTemplates.isEmpty) {
+      return '';
+    }
+    // v101：注入**全部**模板，不只 first。夜无央/蜜欧拉/苏蕴泠双模板卡
+    // 以前只把第一套字段给裁判，第二套（正道女修/NPC）永远判不到。
+    final templateBlocks = <String>[];
+    final templateIds = <String>[];
+    config.entityTemplates.forEach((id, template) {
+      final fields = _formatEntityTemplateFieldLines(template);
+      if (fields.isEmpty) {
+        return;
+      }
+      templateIds.add(id);
+      templateBlocks.add(
+        '模板 $id（${template.label}）：\n${fields.join('\n')}',
+      );
+    });
+    if (templateBlocks.isEmpty) {
       return '';
     }
 
-    // ② 活跃实体列表（ID/名称/别名/当前值）
     final registry = decodeEntityRegistry(
       variables[kEntityRegistryKey],
     );
@@ -2446,15 +2770,18 @@ class TrackerRuntime {
       if (id.isEmpty) {
         continue;
       }
+      final templateId = entity['templateId'] as String? ?? '';
+      final template = config.entityTemplates[templateId] ??
+          config.entityTemplates.values.firstOrNull;
       final values = <String>[];
-      template.stateSchema.forEach((fieldKey, _) {
+      template?.stateSchema.forEach((fieldKey, _) {
         final v = variables[entityFieldKey(id, fieldKey)];
         if (v != null && v.trim().isNotEmpty) {
           values.add('$fieldKey=$v');
         }
       });
       entityLines.add(
-        '- entityId=$id | name=$name${aliases.isNotEmpty ? ' | aliases=$aliases' : ''}'
+        '- entityId=$id | templateId=$templateId | name=$name${aliases.isNotEmpty ? ' | aliases=$aliases' : ''}'
         '${values.isNotEmpty ? ' | current=${values.join(', ')}' : ' | current=（未记录）'}',
       );
     }
@@ -2470,17 +2797,17 @@ class TrackerRuntime {
 }
 - entities：本轮**首次以具体人物出现**（有名、有行动、有对话、被称呼或受事件影响）且不在上方列表中的角色才列出；泛称/群体/归属不明的"她"不列出；最多新增 5 个。
 - appearedEntityRefs：本轮**真实出场**的已建档角色（含预设实体）——当场说话/行动/被互动/明确处于当前场景的都算；**即使状态无变化也必须列出**；只在名单/设定中出现、被提到/回忆、计划邀请但未实际出现、指代不清的"她"不算。
-- updates：每个操作 entityRef 必须能对应上方一个实体（既有 entityId 或本轮 entities 里的 new:N）；一个事件只更新一个角色的字段，禁止把某角色的状态镜像到其他角色。
-- field 必须是模板字段（${template.id}）。
-- op=delta 时 value 为数值增量（number 字段）；op=set 时 value 为新值（string 字段或数值绝对值）。
+- updates：每个操作 entityRef 必须用上方 entityId（如 ywy），不要单独用显示名当 ID；一个事件只更新一个角色的字段，禁止把某角色的状态镜像到其他角色。
+- field 必须是该实体所属模板的英文 key（${templateIds.join(' / ')} 里列出的 field=），禁止中文 label（如烙印值）和阶段标题（如无痕）。
+- number 字段：剧情有实质推进时必须输出。op=delta，value 必须是数字增量（3、-2），禁止把阶段名/描述当 value。
+- string 字段：op=set，value 为短文本新值。
 - 同一实体同一字段每轮最多一个操作；冲突或指代不清则不输出该操作。
 - 没有变化时输出 {"entities": [], "appearedEntityRefs": [], "updates": []}（出场角色仍要列在 appearedEntityRefs）。
 - narrative/consequence 遵循统一剧情摘录契约。
 ''';
     return '【当前状态·实体卡】（以下 field 是模板字段的唯一标识；'
         '每个实体拥有独立一套字段，操作时用 entityId 归属）\n'
-        '模板字段定义（${template.label}）：\n'
-        '${fields.join('\n')}\n\n'
+        '${templateBlocks.join('\n\n')}\n\n'
         '活跃实体（${entities.length} 个）：\n'
         '${entityLines.isEmpty ? '（暂无）' : entityLines.join('\n')}\n\n'
         '$_entityJudgeRules$protocol';
@@ -2508,21 +2835,23 @@ class TrackerRuntime {
     if (!config.isEntityCard) {
       return '';
     }
-    final template = config.entityTemplates.values.firstOrNull;
-    if (template == null) {
+    if (config.entityTemplates.isEmpty) {
       return '';
     }
-    final fields = <String>[];
-    template.stateSchema.forEach((fieldKey, schema) {
-      final range = schema.isNumber
-          ? ' | range=${schema.min ?? '-inf'}..${schema.max ?? '+inf'}'
-          : '';
-      fields.add(
-        '- field=$fieldKey | label=${schema.label.isEmpty ? fieldKey : schema.label}'
-        ' | type=${schema.type}$range',
+    final templateBlocks = <String>[];
+    config.entityTemplates.forEach((id, template) {
+      final fields = _formatEntityTemplateFieldLines(
+        template,
+        includePolicy: false,
+      );
+      if (fields.isEmpty) {
+        return;
+      }
+      templateBlocks.add(
+        '模板 $id（${template.label}）：\n${fields.join('\n')}',
       );
     });
-    if (fields.isEmpty) {
+    if (templateBlocks.isEmpty) {
       return '';
     }
     final registry = decodeEntityRegistry(variables[kEntityRegistryKey]);
@@ -2544,8 +2873,11 @@ class TrackerRuntime {
       if (id.isEmpty) {
         continue;
       }
+      final templateId = entity['templateId'] as String? ?? '';
+      final template = config.entityTemplates[templateId] ??
+          config.entityTemplates.values.firstOrNull;
       final values = <String>[];
-      template.stateSchema.forEach((fieldKey, _) {
+      template?.stateSchema.forEach((fieldKey, _) {
         final v = variables[entityFieldKey(id, fieldKey)];
         if (v != null && v.trim().isNotEmpty) {
           values.add('$fieldKey=$v');
@@ -2557,8 +2889,7 @@ class TrackerRuntime {
       );
     }
     return '【当前状态·实体卡】（每个角色拥有独立一套字段，以 entityId 归属）\n'
-        '模板字段定义（${template.label}）：\n'
-        '${fields.join('\n')}\n\n'
+        '${templateBlocks.join('\n\n')}\n\n'
         '已出场角色（${entityLines.length} 个）：\n'
         '${entityLines.isEmpty ? '（暂无）' : entityLines.join('\n')}';
   }
@@ -2788,10 +3119,11 @@ class TrackerRuntime {
     final schema = _schemaFor(key, config);
     if (schema != null) {
       if (schema.isNumber) {
-        final numValue = value is num ? value : num.tryParse('$value');
+        final numValue = coerceNumericValue(value);
         if (numValue == null) {
           // v78：number 字段拒绝非数字值（此前宽松保留会让"很多"等
           // 字符串写入变量表，后续 add/百分比/进度条全部失效且不自愈）
+          // v101：允许 "15"/"+15"/"15/100"，拒绝阶段名「无痕」
           return null;
         }
         if (!numValue.isFinite) {
