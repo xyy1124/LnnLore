@@ -4,6 +4,8 @@
 //  - initState 补 entity.<id>.<field> 初值，add 才能叠到面板正在读的键
 //  - 双模板都注入裁判/主模型摘要
 //  - stripTrailingPlainTrackerPanel 用模板 label（根 schema 为空也能剥）
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pocket_inn/models/tracker_config.dart';
@@ -385,6 +387,7 @@ void main() {
   });
 
   _sylDiscoveryTests();
+  _mzRepairTests();
 }
 
 const Map<String, dynamic> _sylCard = {
@@ -537,6 +540,166 @@ void _sylDiscoveryTests() {
         config: config,
       );
       expect(inferred, isEmpty);
+    });
+  });
+}
+
+const Map<String, dynamic> _mzCard = {
+  'data': {
+    'extensions': {
+      'tracker': {
+        'schemaVersion': 2,
+        'entityTemplates': {
+          'cult_female_member': {
+            'label': '母猪教信众状态',
+            'defaultState': {
+              'rank': '新收',
+              'nano': 0,
+              'drug': '无',
+              'serv': '未侍奉',
+              'crack': 0,
+            },
+            'stateSchema': {
+              'rank': {
+                'type': 'string',
+                'label': '母猪等级',
+                'aliases': ['母猪等级', 'mz_rank', '自称阶段'],
+                'allowCustomValues': true,
+                'updatePolicy': {
+                  'semanticHints': {
+                    'meaning': '等级',
+                    'positiveSignals': ['升格'],
+                    'negativeSignals': ['降格'],
+                    'neutralSignals': ['未提及'],
+                  },
+                },
+              },
+              'nano': {
+                'type': 'number',
+                'label': '纳米改造',
+                'min': 0,
+                'max': 100,
+                'aliases': ['纳米改造', 'mz_nano'],
+              },
+              'crack': {
+                'type': 'number',
+                'label': '裂缝指数',
+                'min': 0,
+                'max': 100,
+                'aliases': ['裂缝指数', 'mz_crack'],
+              },
+            },
+          },
+        },
+        'initialEntities': [],
+        'entityDiscovery': {
+          'enabled': true,
+          'defaultTemplateId': 'cult_female_member',
+          'maxAutoEntities': 24,
+          'openingNamePool': ['沈清澜', '顾晚棠'],
+          'anonymousNames': ['第一头', '第一母猪'],
+        },
+      },
+    },
+  },
+};
+
+void _mzRepairTests() {
+  group('v103 母猪教开场姓名 / 匿名拦截 / 旧会话修键', () {
+    final config = TrackerConfig.fromCardJson(_mzCard);
+
+    test('openingNamePool 抽名落在池内', () {
+      final name = TrackerRuntime.pickOpeningName(
+        config,
+        random: Random(1),
+      );
+      expect(['沈清澜', '顾晚棠'], contains(name));
+    });
+
+    test('{{opening_name}} 替换成人名', () {
+      expect(
+        TrackerRuntime.applyOpeningName('门外站着{{opening_name}}。', '沈清澜'),
+        '门外站着沈清澜。',
+      );
+    });
+
+    test('第一头 / 她 / 女人 不能当人名建档', () {
+      expect(TrackerRuntime.isPersonalName('第一头', config), isFalse);
+      expect(TrackerRuntime.isPersonalName('她', config), isFalse);
+      expect(TrackerRuntime.isPersonalName('女人', config), isFalse);
+      expect(TrackerRuntime.isPersonalName('沈清澜', config), isTrue);
+    });
+
+    test('inferDiscoveredEntities 丢掉第一头', () {
+      final inferred = TrackerRuntime.inferDiscoveredEntities(
+        envelope: {
+          'updates': [
+            {'entityRef': '第一头', 'field': 'nano', 'op': 'delta', 'value': 15},
+          ],
+        },
+        registry: {
+          'version': 1,
+          'nextDynamicOrdinal': 1,
+          'appliedMigrations': <String>[],
+          'entities': <Map<String, dynamic>>[],
+        },
+        config: config,
+      );
+      expect(inferred, isEmpty);
+    });
+
+    test('旧会话脏键 mz_nano / 纳米改造 迁到唯一出场实体', () {
+      final repaired = TrackerRuntime.repairEntitySessionState(
+        registry: {
+          'version': 1,
+          'nextDynamicOrdinal': 2,
+          'appliedMigrations': <String>[],
+          'entities': [
+            {
+              'id': 'dyn_0001',
+              'templateId': 'cult_female_member',
+              'displayName': '沈清澜',
+              'appeared': true,
+              'order': 0,
+              'source': 'discovered',
+            },
+          ],
+        },
+        variables: {
+          'mz_nano': '15',
+          '纳米改造': '20',
+          'entity.dyn_0001.rank': '新收',
+        },
+        config: config,
+      );
+      expect(repaired.changed, isTrue);
+      expect(
+        repaired.fieldWrites['entity.dyn_0001.nano'],
+        anyOf('15', '20'),
+      );
+      expect(
+        (repaired.registry['appliedMigrations'] as List),
+        contains(TrackerRuntime.kSessionRepairMigrationId),
+      );
+    });
+
+    test('已修过的会话不再改第二次', () {
+      final first = TrackerRuntime.repairEntitySessionState(
+        registry: {
+          'version': 1,
+          'nextDynamicOrdinal': 1,
+          'appliedMigrations': <String>[],
+          'entities': <Map<String, dynamic>>[],
+        },
+        variables: const {},
+        config: config,
+      );
+      final second = TrackerRuntime.repairEntitySessionState(
+        registry: first.registry,
+        variables: const {},
+        config: config,
+      );
+      expect(second.changed, isFalse);
     });
   });
 }
