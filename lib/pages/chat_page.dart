@@ -44,6 +44,8 @@ class ChatPage extends StatefulWidget {
   final List<String> draftOpeningAssistantMessages;
   /// 特别版：草稿开场里提取的特殊状态栏 HTML
   final String? draftOpeningStatusHtml;
+  /// v103：本会话开场抽中的原身份姓名（写入状态栏 Tab）。
+  final String? draftOpeningName;
   /// 特别版：群聊（创建时传入）
   final String? draftGroupId;
   final String? draftGroupTitle;
@@ -57,6 +59,7 @@ class ChatPage extends StatefulWidget {
       draftSelectedWorldBookIds = const [],
       draftOpeningAssistantMessages = const [],
       draftOpeningStatusHtml = null,
+      draftOpeningName = null,
       draftGroupId = null,
       draftGroupTitle = null,
       draftGroupCharacterIds = const [];
@@ -70,6 +73,7 @@ class ChatPage extends StatefulWidget {
     List<String> selectedWorldBookIds = const [],
     List<String> openingAssistantMessages = const [],
     String? openingStatusHtml,
+    String? openingName,
     String? groupId,
     String? groupTitle,
     List<String> groupCharacterIds = const [],
@@ -81,6 +85,7 @@ class ChatPage extends StatefulWidget {
        draftSelectedWorldBookIds = selectedWorldBookIds,
        draftOpeningAssistantMessages = openingAssistantMessages,
        draftOpeningStatusHtml = openingStatusHtml,
+       draftOpeningName = openingName,
        draftGroupId = groupId,
        draftGroupTitle = groupTitle,
        draftGroupCharacterIds = groupCharacterIds;
@@ -134,6 +139,7 @@ class _ChatPageState extends State<ChatPage> {
       draftSelectedWorldBookIds: widget.draftSelectedWorldBookIds,
       initialDraftOpeningMessages: widget.draftOpeningAssistantMessages,
       draftOpeningStatusHtml: widget.draftOpeningStatusHtml,
+      draftOpeningName: widget.draftOpeningName,
       draftGroupId: widget.draftGroupId,
       draftGroupTitle: widget.draftGroupTitle,
       draftGroupCharacterIds: widget.draftGroupCharacterIds,
