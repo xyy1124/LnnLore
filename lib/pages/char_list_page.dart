@@ -568,12 +568,13 @@ class _CharListPageState extends State<CharListPage> {
       return;
     }
     final userName = _selectedUserName();
+    final built = ChatOpeningMessageBuilder.buildWithOpeningName(
+      characterCardData: record.cardJson,
+      characterName: summary.name,
+      userName: userName,
+    );
     final opening = ChatDisplaySanitizer.extractOpeningMessages(
-      ChatOpeningMessageBuilder.build(
-        characterCardData: record.cardJson,
-        characterName: summary.name,
-        userName: userName,
-      ),
+      built.messages,
       // v71：传卡 JSON 剥离开场消息末尾的纯文本状态栏
       // （first_mes 自带"场景：…\n好感：30/100"时正文不再残留）
       cardJson: record.cardJson,
@@ -596,6 +597,7 @@ class _CharListPageState extends State<CharListPage> {
           selectedWorldBookIds: worldBookIds,
           openingAssistantMessages: openingMessages,
           openingStatusHtml: openingStatusHtml,
+          openingName: built.openingName,
         ),
       ),
       (_) => false,
