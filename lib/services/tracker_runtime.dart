@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:pocket_inn/models/tracker_config.dart';
@@ -200,6 +201,292 @@ class TrackerRuntime {
 
   static String encodeEntityRegistry(Map<String, dynamic> registry) =>
       jsonEncode(registry);
+
+  /// v103：开场白 `{{opening_name}}` 占位。每人必须是原身份人名，
+  /// 不用「第一头」「她」这种泛称。
+  static const String kOpeningNamePlaceholder = '{{opening_name}}';
+
+  /// 旧会话自动修键幂等标记（写进 appliedMigrations）。
+  static const String kSessionRepairMigrationId = 'v103-session-repair';
+
+  /// 默认开场姓名池（卡未声明 openingNamePool 时用）。
+  static const List<String> kDefaultOpeningNamePool = [
+    '沈清澜',
+    '顾晚棠',
+    '林知夏',
+    '苏晚晴',
+    '赵清和',
+    '周念慈',
+    '陆晚秋',
+    '裴昭雪',
+    '江望舒',
+    '谢听潮',
+    '白疏影',
+    '程念安',
+    '许晚宁',
+    '韩清越',
+    '梁知微',
+    '叶听雨',
+    '方念真',
+    '温如昼',
+    '宋清池',
+    '贺望舒',
+  ];
+
+  /// 拒绝建档的泛称/职称（可与卡 anonymousNames 合并）。
+  static const List<String> kDefaultAnonymousNames = [
+    '第一头',
+    '第一母猪',
+    '她',
+    '他',
+    '女人',
+    '男人',
+    '母猪',
+    '候选者',
+    '新母猪',
+    '实验体',
+    '回归者',
+    '核心母猪',
+    '夜莺',
+    '白大褂',
+    '教主',
+    '叙事者',
+    '未知',
+    '无名',
+    '某人',
+    '那位',
+    '这个女人',
+    '那个女人',
+  ];
+
+  /// 从卡声明或默认池抽一个开场原身份姓名。
+  static String pickOpeningName(
+    TrackerConfig config, {
+    Random? random,
+  }) {
+    final pool = config.entityDiscovery.openingNamePool.isNotEmpty
+        ? config.entityDiscovery.openingNamePool
+        : kDefaultOpeningNamePool;
+    if (pool.isEmpty) {
+      return '沈清澜';
+    }
+    final rng = random ?? Random();
+    return pool[rng.nextInt(pool.length)];
+  }
+
+  /// 开场白里的 `{{opening_name}}` 换成本次会话抽中的人名。
+  static String applyOpeningName(String text, String name) {
+    if (text.isEmpty || name.trim().isEmpty) {
+      return text;
+    }
+    return text.replaceAll(kOpeningNamePlaceholder, name.trim());
+  }
+
+  /// 是否是人名（能建档）。泛称、职称、空串返回 false。
+  static bool isPersonalName(String raw, TrackerConfig config) {
+    final name = raw.trim();
+    if (name.isEmpty) {
+      return false;
+    }
+    if (name.startsWith('new:') || name.startsWith('dyn_')) {
+      return true;
+    }
+    if (RegExp(r'^entity\.').hasMatch(name)) {
+      return true;
+    }
+    final banned = <String>{
+      ...kDefaultAnonymousNames,
+      ...config.entityDiscovery.anonymousNames,
+    };
+    if (banned.contains(name)) {
+      return false;
+    }
+    if (RegExp(r'^(第[一二三四五六七八九十百]+头|第\d+头)').hasMatch(name)) {
+      return false;
+    }
+    if (name.length == 1) {
+      return false;
+    }
+    return true;
+  }
+
+  /// 打开旧会话时修脏键：中文 label / 旧 mz_* / 错误 entityId
+  /// 迁到 `entity.<id>.<field>`；从已有 instance key 补建档；
+  /// 有值的实体标 appeared。不覆盖已经填好的规范键。
+  static ({
+    Map<String, dynamic> registry,
+    Map<String, String> fieldWrites,
+    bool changed,
+  })
+  repairEntitySessionState({
+    required Map<String, dynamic> registry,
+    required Map<String, String> variables,
+    required TrackerConfig config,
+  }) {
+    if (!config.isEntityCard) {
+      return (registry: registry, fieldWrites: const {}, changed: false);
+    }
+    final applied = <String>[
+      ...(registry['appliedMigrations'] is List
+          ? registry['appliedMigrations']!.whereType<String>()
+          : <String>[]),
+    ];
+    if (applied.contains(kSessionRepairMigrationId)) {
+      return (registry: registry, fieldWrites: const {}, changed: false);
+    }
+
+    var nextOrdinal =
+        registry['nextDynamicOrdinal'] is int
+            ? registry['nextDynamicOrdinal'] as int
+            : 1;
+    final entities = <Map<String, dynamic>>[
+      ...(registry['entities'] is List
+          ? registry['entities']!.whereType<Map<String, dynamic>>()
+          : <Map<String, dynamic>>[]),
+    ];
+    var registryChanged = false;
+    final fieldWrites = <String, String>{};
+
+    Map<String, dynamic>? findEntity({String? id, String? name}) {
+      for (final entity in entities) {
+        final entityId = (entity['id'] as String? ?? '').trim();
+        if (id != null && entityId == id) {
+          return entity;
+        }
+        if (name != null &&
+            (entity['displayName'] as String? ?? '').trim() == name) {
+          return entity;
+        }
+      }
+      return null;
+    }
+
+    String? resolveLocalField(String rawField, String entityId) {
+      return resolveEntityLocalField(
+        rawField: rawField,
+        entityId: entityId,
+        config: config,
+        registry: {'entities': entities},
+      );
+    }
+
+    bool canonicalOccupied(String instanceKey) {
+      final current = fieldWrites[instanceKey] ?? variables[instanceKey];
+      return current != null && current.trim().isNotEmpty;
+    }
+
+    void copyIfVacant(String fromKey, String toKey) {
+      if (fromKey == toKey) {
+        return;
+      }
+      final value = variables[fromKey];
+      if (value == null || value.trim().isEmpty) {
+        return;
+      }
+      if (canonicalOccupied(toKey)) {
+        return;
+      }
+      fieldWrites[toKey] = value;
+    }
+
+    // ① 已有 instance key：缺注册表条目就补，有值就标出场。
+    for (final key in variables.keys) {
+      final parsed = parseEntityFieldKey(key);
+      if (parsed == null) {
+        continue;
+      }
+      final entityId = parsed.$1;
+      var entity = findEntity(id: entityId);
+      if (entity == null) {
+        if (entityId.startsWith('dyn_')) {
+          final match = RegExp(r'^dyn_(\d+)$').firstMatch(entityId);
+          if (match != null) {
+            final ordinal = int.tryParse(match.group(1)!) ?? 0;
+            if (ordinal >= nextOrdinal) {
+              nextOrdinal = ordinal + 1;
+            }
+          }
+          entity = {
+            'id': entityId,
+            'templateId': config.entityDiscovery.defaultTemplateId,
+            'displayName': entityId,
+            'aliases': <String>[],
+            'source': 'repaired',
+            'order': entities.length,
+            'status': 'active',
+            'appeared': true,
+          };
+          entities.add(entity);
+          registryChanged = true;
+        } else {
+          continue;
+        }
+      }
+      final value = variables[key];
+      if (value != null && value.trim().isNotEmpty && entity['appeared'] != true) {
+        entity['appeared'] = true;
+        registryChanged = true;
+      }
+      final local = resolveLocalField(parsed.$2, entityId);
+      if (local != null && local != parsed.$2) {
+        copyIfVacant(key, entityFieldKey(entityId, local));
+      }
+    }
+
+    // ② 裸中文 label / 别名 / 旧 mz_*：有唯一预设就迁过去，否则等发现。
+    String? solePresetId() {
+      if (config.initialEntities.length == 1) {
+        return config.initialEntities.first.id;
+      }
+      final appeared = entities
+          .where((e) => e['appeared'] == true)
+          .map((e) => (e['id'] as String? ?? '').trim())
+          .where((id) => id.isNotEmpty)
+          .toList();
+      if (appeared.length == 1) {
+        return appeared.first;
+      }
+      return null;
+    }
+
+    final targetId = solePresetId();
+    if (targetId != null) {
+      for (final entry in variables.entries) {
+        if (parseEntityFieldKey(entry.key) != null) {
+          continue;
+        }
+        if (entry.key.startsWith('__')) {
+          continue;
+        }
+        if (entry.value.trim().isEmpty) {
+          continue;
+        }
+        final local = resolveLocalField(entry.key, targetId);
+        if (local == null) {
+          continue;
+        }
+        copyIfVacant(entry.key, entityFieldKey(targetId, local));
+        final entity = findEntity(id: targetId);
+        if (entity != null && entity['appeared'] != true) {
+          entity['appeared'] = true;
+          registryChanged = true;
+        }
+      }
+    }
+
+    applied.add(kSessionRepairMigrationId);
+    final newRegistry = <String, dynamic>{
+      'version': 1,
+      'nextDynamicOrdinal': nextOrdinal,
+      'appliedMigrations': applied,
+      'entities': entities,
+    };
+    return (
+      registry: newRegistry,
+      fieldWrites: fieldWrites,
+      changed: true,
+    );
+  }
 
   /// 生成实例字段 key：`entity.<entityId>.<fieldKey>`。
   static String entityFieldKey(String entityId, String fieldKey) =>
@@ -520,6 +807,9 @@ class TrackerRuntime {
           ? displayName!.trim()
           : ref.trim();
       if (name.isEmpty || name.startsWith('new:')) {
+        return;
+      }
+      if (!isPersonalName(name, config) && !name.startsWith('dyn_')) {
         return;
       }
       if (isKnown(ref) || isKnown(name)) {
@@ -2958,7 +3248,7 @@ class TrackerRuntime {
     {"entityRef": "实体ID或new:N", "field": "字段key", "op": "delta|set", "value": 数值或字符串, "narrative": "该实体剧情摘录", "consequence": "下一轮行为约束"}
   ]
 }
-- entities：本轮**首次以具体人物出现**（有名、有行动、有对话、被称呼或受事件影响）且不在上方列表中的角色才列出；泛称/群体/归属不明的"她"不列出；最多新增 5 个。
+- entities：本轮**首次以具体人物出现**且不在上方列表中的角色才列出；displayName 必须是原身份姓名（沈清澜、林知夏这类），禁止「第一头」「第一母猪」「她」「女人」「夜莺」「白大褂」等泛称/职称；开场白已点名的人必须用那个姓名建档；最多新增 5 个。
 - appearedEntityRefs：本轮**真实出场**的已建档角色（含预设实体）——当场说话/行动/被互动/明确处于当前场景的都算；**即使状态无变化也必须列出**；只在名单/设定中出现、被提到/回忆、计划邀请但未实际出现、指代不清的"她"不算。
 - updates：每个操作 entityRef 必须用上方 entityId（如 ywy），不要单独用显示名当 ID；一个事件只更新一个角色的字段，禁止把某角色的状态镜像到其他角色。
 - field 必须是该实体所属模板的英文 key（${templateIds.join(' / ')} 里列出的 field=），禁止中文 label（如烙印值）和阶段标题（如无痕）。
