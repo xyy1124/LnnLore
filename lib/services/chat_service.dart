@@ -90,6 +90,91 @@ class ChatService {
         (_sessionStateGenerations[sessionId] ?? 0) + 1;
   }
 
+  /// v103：打开旧会话时修实体脏键 / 补发现 / 标出场。
+  /// 幂等（appliedMigrations 含 v103-session-repair 则跳过）。
+  Future<void> repairEntitySessionOnOpen({
+    required String sessionId,
+    required Map<String, dynamic>? cardJson,
+  }) async {
+    final config = TrackerConfig.fromCardJson(cardJson);
+    if (!config.isEntityCard) {
+      return;
+    }
+    final variables = await ChatDatabaseService.instance.getSessionVariables(
+      sessionId,
+    );
+    final registry = _readEntityRegistry(variables);
+    final (registryJson, migratedFields) = _reconcileEntityRegistry(
+      registry: registry,
+      variables: variables,
+      config: config,
+    );
+    if (registryJson == null && migratedFields.isEmpty) {
+      return;
+    }
+    await ChatDatabaseService.instance.upsertSessionVariables(sessionId, {
+      if (registryJson != null) TrackerRuntime.kEntityRegistryKey: registryJson,
+      ...migratedFields,
+    });
+  }
+
+  /// v103：草稿/新会话把开场人名立刻写进注册表，状态栏开场就有 Tab。
+  Future<void> seedOpeningNamedEntity({
+    required String sessionId,
+    required Map<String, dynamic>? cardJson,
+    required String displayName,
+  }) async {
+    final config = TrackerConfig.fromCardJson(cardJson);
+    if (!config.isEntityCard || !config.entityDiscovery.enabled) {
+      return;
+    }
+    final name = displayName.trim();
+    if (!TrackerRuntime.isPersonalName(name, config)) {
+      return;
+    }
+    final variables = await ChatDatabaseService.instance.getSessionVariables(
+      sessionId,
+    );
+    var registry = _readEntityRegistry(variables);
+    final (reconciledJson, migratedFields) = _reconcileEntityRegistry(
+      registry: registry,
+      variables: variables,
+      config: config,
+    );
+    if (reconciledJson != null) {
+      registry = TrackerRuntime.decodeEntityRegistry(reconciledJson);
+    }
+    final (updated, idMap) = _applyDiscoveredEntities(
+      registry: registry,
+      discovered: [
+        {
+          'ref': 'new:1',
+          'displayName': name,
+          'templateId': config.entityDiscovery.defaultTemplateId,
+        },
+      ],
+      config: config,
+    );
+    final entityId = idMap['new:1'];
+    final writes = <String, String>{
+      TrackerRuntime.kEntityRegistryKey: TrackerRuntime.encodeEntityRegistry(
+        updated,
+      ),
+      ...migratedFields,
+    };
+    if (entityId != null) {
+      final template =
+          config.entityTemplates[config.entityDiscovery.defaultTemplateId];
+      template?.defaultState.forEach((fieldKey, value) {
+        final instanceKey = TrackerRuntime.entityFieldKey(entityId, fieldKey);
+        if ((variables[instanceKey] ?? '').trim().isEmpty) {
+          writes[instanceKey] = '$value';
+        }
+      });
+    }
+    await ChatDatabaseService.instance.upsertSessionVariables(sessionId, writes);
+  }
+
   /// v70：每会话的后台裁判任务队列——开始新一轮前 await 上一轮结算，
   /// 保证"正文先显示、状态稍后更新，但用户下次发送前上一轮状态必须
   /// 结算完成"（不丢状态、不覆盖）。
@@ -2363,6 +2448,8 @@ class ChatService {
   /// ① 预设实体（initialEntities）幂等写入（已存在则保留原位序，不覆盖
   ///    已建档动态实体）；② 迁移声明（legacy key → 预设实体字段）应用
   ///    一次（appliedMigrations 记录，幂等）。
+  /// v103：③ 打开旧会话时修脏键 / 补发现实体 / 标 appeared
+  /// （幂等标记 v103-session-repair）。
   /// 返回 (新注册表 JSON, 需要落库的实例字段增量)。
   (String?, Map<String, String>) _reconcileEntityRegistry({
     required Map<String, dynamic> registry,
@@ -2452,19 +2539,34 @@ class ChatService {
       changed = true;
     }
 
-    if (!changed) {
-      return (null, migratedFields);
-    }
-    final newRegistry = <String, dynamic>{
+    var nextOrdinal =
+        registry['nextDynamicOrdinal'] is int
+            ? registry['nextDynamicOrdinal'] as int
+            : 1;
+    var workingRegistry = <String, dynamic>{
       'version': 1,
-      'nextDynamicOrdinal':
-          registry['nextDynamicOrdinal'] is int
-              ? registry['nextDynamicOrdinal'] as int
-              : 1,
+      'nextDynamicOrdinal': nextOrdinal,
       'appliedMigrations': applied,
       'entities': entities,
     };
-    return (TrackerRuntime.encodeEntityRegistry(newRegistry), migratedFields);
+    final repaired = TrackerRuntime.repairEntitySessionState(
+      registry: workingRegistry,
+      variables: variables,
+      config: config,
+    );
+    if (repaired.changed) {
+      workingRegistry = repaired.registry;
+      migratedFields.addAll(repaired.fieldWrites);
+      changed = true;
+    }
+
+    if (!changed) {
+      return (null, migratedFields);
+    }
+    return (
+      TrackerRuntime.encodeEntityRegistry(workingRegistry),
+      migratedFields,
+    );
   }
 
   /// v89：裁判 envelope 中发现的新实体 → 分配 dyn_ 永久 ID 并入注册表。
@@ -2496,6 +2598,10 @@ class ChatService {
       final ref = item['ref'] as String? ?? '';
       final displayName = (item['displayName'] as String? ?? '').trim();
       if (ref.isEmpty || displayName.isEmpty) {
+        continue;
+      }
+      // v103：泛称/职称不能建档——面板 Tab 必须是原身份姓名。
+      if (!TrackerRuntime.isPersonalName(displayName, config)) {
         continue;
       }
       // 同名精确匹配 → 复用既有实体
