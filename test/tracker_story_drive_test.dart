@@ -76,6 +76,10 @@ void main() {
         TrackerRuntime.kTrackerStoryInfluenceSuffix,
         contains('不得无视、重置或无理由逆转当前状态'),
       );
+      expect(
+        TrackerRuntime.kTrackerStoryInfluenceSuffix.contains('并输出对应 patch'),
+        isFalse,
+      );
     });
   });
 
