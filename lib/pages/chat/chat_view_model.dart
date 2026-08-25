@@ -56,6 +56,7 @@ class ChatViewModel extends ChangeNotifier {
     this.draftGroupCharacterIds = const [],
     List<String> initialDraftOpeningMessages = const [],
     this.draftOpeningStatusHtml,
+    this.draftOpeningName,
   }) : _initialDraftOpeningMessages = initialDraftOpeningMessages {
     _draftOpeningStatusHtml = _cleanupHtml(draftOpeningStatusHtml);
     // 缓存 notifier 引用，避免 dispose 时再次查找 getIt（DI 容器可能已重置）。
@@ -97,6 +98,8 @@ class ChatViewModel extends ChangeNotifier {
   /// 草稿会话开场里提取的特殊状态栏 HTML（来自 [ChatPage.draft]）。
   final String? draftOpeningStatusHtml;
   String? _draftOpeningStatusHtml;
+  /// v103：开场抽中的原身份姓名，真实会话建立后写入状态栏。
+  String? draftOpeningName;
 
   /// 开场状态栏（draft 阶段直接渲染，建立真实会话后持久化）。
   String? get effectiveDraftStatusHtml => _draftOpeningStatusHtml;
@@ -830,7 +833,49 @@ class ChatViewModel extends ChangeNotifier {
     _draftOpeningAssistantMessages = openingMessages;
     _isLoading = false;
     _isSwitchingSession = false;
+    _seedDraftOpeningEntity(resolvedCharacter.cardJson);
     notifyListeners();
+  }
+
+  /// v103：草稿阶段内存建档，状态栏开场就有人名 Tab。
+  void _seedDraftOpeningEntity(Map<String, dynamic>? cardJson) {
+    final name = draftOpeningName?.trim();
+    if (name == null || name.isEmpty) {
+      return;
+    }
+    final config = TrackerConfig.fromCardJson(cardJson);
+    if (!config.isEntityCard || !TrackerRuntime.isPersonalName(name, config)) {
+      return;
+    }
+    const entityId = 'dyn_0001';
+    final registry = {
+      'version': 1,
+      'nextDynamicOrdinal': 2,
+      'appliedMigrations': <String>[TrackerRuntime.kSessionRepairMigrationId],
+      'entities': [
+        {
+          'id': entityId,
+          'templateId': config.entityDiscovery.defaultTemplateId,
+          'displayName': name,
+          'aliases': <String>[],
+          'source': 'opening',
+          'order': 0,
+          'status': 'active',
+          'appeared': true,
+        },
+      ],
+    };
+    final writes = <String, String>{
+      TrackerRuntime.kEntityRegistryKey: TrackerRuntime.encodeEntityRegistry(
+        registry,
+      ),
+    };
+    final template =
+        config.entityTemplates[config.entityDiscovery.defaultTemplateId];
+    template?.defaultState.forEach((fieldKey, value) {
+      writes[TrackerRuntime.entityFieldKey(entityId, fieldKey)] = '$value';
+    });
+    _sessionVariablesCache = writes;
   }
 
   List<ChatMessage> _buildDraftOpeningMessages(List<String> openingMessages) {
@@ -935,6 +980,20 @@ class ChatViewModel extends ChangeNotifier {
     // （用户消息后无回复时旁白已实时落地、无快照可回，强回滚会丢旁白）。
     if (_messages.isNotEmpty && !_messages.last.isMe) {
       await _restoreTrackerBaseline();
+      if (_isDisposed || loadGeneration != _sessionLoadGeneration) {
+        return;
+      }
+    }
+    // v103：打开旧对话立刻修脏键 / 补发现实体，不用新开聊天。
+    if (resolvedCharacter != null) {
+      await ChatService.instance.repairEntitySessionOnOpen(
+        sessionId: bundle.session.id,
+        cardJson: resolvedCharacter.cardJson,
+      );
+      if (_isDisposed || loadGeneration != _sessionLoadGeneration) {
+        return;
+      }
+      await _refreshSessionVariables(bundle.session.id);
       if (_isDisposed || loadGeneration != _sessionLoadGeneration) {
         return;
       }
@@ -1064,24 +1123,49 @@ class ChatViewModel extends ChangeNotifier {
       if (msg.isMe || msg.id == null) {
         continue;
       }
-      final raw = variables[ChatService.messageStatusHtmlKey(msg.id!)];
-      if (raw == null || raw.trim().isEmpty) {
-        continue;
-      }
-      try {
-        final decoded = jsonDecode(raw);
-        if (decoded is Map) {
-          final state = <String, dynamic>{
+      // v103：实体卡优先 v6（含注册表）；没有再回退 v3。
+      final candidates = <String>[
+        if (config.isEntityCard)
+          ChatService.messageStatusSnapshotV6Key(msg.id!),
+        ChatService.messageStatusHtmlKey(msg.id!),
+      ];
+      for (final snapKey in candidates) {
+        final raw = variables[snapKey];
+        if (raw == null || raw.trim().isEmpty) {
+          continue;
+        }
+        try {
+          final decoded = jsonDecode(raw);
+          if (decoded is! Map) {
+            continue;
+          }
+          final map = <String, dynamic>{
             for (final e in decoded.entries)
               if (e.key is String) e.key as String: e.value,
           };
+          Map<String, dynamic> state;
+          if (map['state'] is Map) {
+            state = {
+              for (final e in (map['state'] as Map).entries)
+                if (e.key is String) e.key as String: e.value,
+            };
+            if (map[TrackerRuntime.kEntityRegistryKey] != null) {
+              state[TrackerRuntime.kEntityRegistryKey] =
+                  map[TrackerRuntime.kEntityRegistryKey];
+            }
+          } else {
+            state = map;
+          }
           if (state.isNotEmpty) {
             baseline = state;
             break;
           }
+        } catch (_) {
+          // 坏快照跳过
         }
-      } catch (_) {
-        // 坏快照跳过，继续找更早的角色消息
+      }
+      if (baseline != null) {
+        break;
       }
     }
     if (baseline == null) {
@@ -1090,6 +1174,11 @@ class ChatViewModel extends ChangeNotifier {
     final trackerKeys = <String>{
       ...config.stateSchema.keys,
       ...config.initialState.keys,
+      for (final key in {
+        ...variables.keys,
+        ...baseline.keys.whereType<String>(),
+      })
+        if (TrackerRuntime.parseEntityFieldKey(key) != null) key,
     };
     final replaced = Map<String, String>.from(variables);
     for (final key in trackerKeys) {
@@ -1099,6 +1188,10 @@ class ChatViewModel extends ChangeNotifier {
       } else {
         replaced.remove(key);
       }
+    }
+    final registrySnap = baseline[TrackerRuntime.kEntityRegistryKey];
+    if (registrySnap != null && '$registrySnap'.trim().isNotEmpty) {
+      replaced[TrackerRuntime.kEntityRegistryKey] = '$registrySnap';
     }
     await ChatDatabaseService.instance.replaceSessionVariables(
       session.id,
@@ -1196,6 +1289,15 @@ class ChatViewModel extends ChangeNotifier {
     _draftOpeningMessageIndex = 0;
     // 开场状态栏在真实会话建立后持久化（TrackerStatusBar 从变量读）
     await _persistSpecialStatusHtml(createdSession.id, _draftOpeningStatusHtml);
+    final openingName = draftOpeningName?.trim();
+    if (openingName != null && openingName.isNotEmpty) {
+      await ChatService.instance.seedOpeningNamedEntity(
+        sessionId: createdSession.id,
+        cardJson: character.cardJson,
+        displayName: openingName,
+      );
+      await _refreshSessionVariables(createdSession.id);
+    }
     if (!_isDisposed) {
       notifyListeners();
     }
@@ -2065,15 +2167,18 @@ class ChatViewModel extends ChangeNotifier {
     _unfreezeMessages();
 
     final selectedUserSettingId = currentUserSetting()?.id;
+    final built = ChatOpeningMessageBuilder.buildWithOpeningName(
+      characterCardData: character.cardJson,
+      characterName: character.name,
+      userName: resolvedUserName(),
+    );
     final opening = ChatDisplaySanitizer.extractOpeningMessages(
-      ChatOpeningMessageBuilder.build(
-        characterCardData: character.cardJson,
-        characterName: character.name,
-        userName: resolvedUserName(),
-      ),
+      built.messages,
+      cardJson: character.cardJson,
     );
     final openingMessages = opening.messages;
     final openingStatusHtml = opening.specialStatusHtml;
+    draftOpeningName = built.openingName;
 
     if (_isDraftSession) {
       _resetPendingMessages();
@@ -2081,6 +2186,7 @@ class ChatViewModel extends ChangeNotifier {
       _draftOpeningAssistantMessages = openingMessages;
       _draftOpeningStatusHtml = ChatViewModel._cleanupHtml(openingStatusHtml);
       _messages = _buildDraftOpeningMessages(openingMessages);
+      _seedDraftOpeningEntity(character.cardJson);
       _selectedUserSettingId = selectedUserSettingId;
       _activeSession = session.copyWith(
         title: nextTitle,
@@ -2113,6 +2219,14 @@ class ChatViewModel extends ChangeNotifier {
       );
       // 非 draft：resetSession 之后再写开场状态栏（避免被 reset 清掉）
       await _persistSpecialStatusHtml(session.id, openingStatusHtml);
+      final resetName = draftOpeningName?.trim();
+      if (resetName != null && resetName.isNotEmpty) {
+        await ChatService.instance.seedOpeningNamedEntity(
+          sessionId: session.id,
+          cardJson: character.cardJson,
+          displayName: resetName,
+        );
+      }
       await _loadSession(preferredSessionId: session.id);
     } catch (error) {
       if (!_isDisposed) {
