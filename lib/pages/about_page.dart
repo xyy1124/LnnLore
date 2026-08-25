@@ -106,6 +106,15 @@ class _AboutPageState extends State<AboutPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _UpdateLogItem(
+                  version: 'v1.4.0-special.103',
+                  date: '2026-08-25',
+                  changes: [
+                    '【特别版】群像卡开场必须是原身份人名：开场白 {{opening_name}} 每次新对话随机抽一个姓名，状态栏立刻建档显示；「第一头」「她」「女人」等泛称不再建档',
+                    '【特别版】打开旧对话自动修状态键：脏键/旧 mz_* /中文栏名迁到 entity.<id>.<field>，缺登记的角色补进面板，不用为了测更新弃掉长对话',
+                    '【特别版】正文末尾状态词仍按显示剥离，裁判写入路径不动（DeepSeek / Gemini 都能用）',
+                  ],
+                ),
+                _UpdateLogItem(
                   version: 'v1.4.0-special.81',
                   date: '2026-08-10',
                   changes: [
