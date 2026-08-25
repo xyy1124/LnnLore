@@ -454,6 +454,8 @@ class TrackerEntityDiscovery {
     this.enabled = false,
     this.defaultTemplateId = '',
     this.maxAutoEntities = 24,
+    this.openingNamePool = const [],
+    this.anonymousNames = const [],
   });
 
   final bool enabled;
@@ -464,6 +466,13 @@ class TrackerEntityDiscovery {
   /// 自动建档上限（防 prompt/面板无限膨胀）。
   final int maxAutoEntities;
 
+  /// v103：开场白 `{{opening_name}}` 的随机原身份姓名池。
+  /// 空则用运行时默认池。每人出场必须是人名，不用「第一头」这种泛称。
+  final List<String> openingNamePool;
+
+  /// v103：额外的匿名/泛称（与运行时默认表合并），命中则拒绝建档。
+  final List<String> anonymousNames;
+
   factory TrackerEntityDiscovery.fromJson(Map<String, dynamic> json) {
     return TrackerEntityDiscovery(
       enabled: json['enabled'] is bool ? json['enabled'] as bool : false,
@@ -473,7 +482,19 @@ class TrackerEntityDiscovery {
       maxAutoEntities: json['maxAutoEntities'] is int
           ? json['maxAutoEntities'] as int
           : 24,
+      openingNamePool: _stringList(json['openingNamePool']),
+      anonymousNames: _stringList(json['anonymousNames']),
     );
+  }
+
+  static List<String> _stringList(dynamic raw) {
+    if (raw is! List) {
+      return const [];
+    }
+    return [
+      for (final item in raw)
+        if (item is String && item.trim().isNotEmpty) item.trim(),
+    ];
   }
 }
 
