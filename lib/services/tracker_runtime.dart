@@ -448,6 +448,128 @@ class TrackerRuntime {
     return null;
   }
 
+  /// v102：裁判漏写 entities 数组时，从 updates / appearedEntityRefs
+  /// 补发现名单。Gemini 常只写 `entityRef: "林清雪"`，不写
+  /// `{ref, displayName}`——面板只认注册表 appeared 实体，新角色加不进去。
+  /// DeepSeek 已按协议写 entities 时，这里只去重，不新建第二份。
+  static List<Map<String, dynamic>> inferDiscoveredEntities({
+    required Map<String, dynamic> envelope,
+    required Map<String, dynamic> registry,
+    required TrackerConfig config,
+  }) {
+    if (!config.entityDiscovery.enabled) {
+      return const [];
+    }
+    final existing = <String>{};
+    void remember(String? raw) {
+      final name = raw?.trim() ?? '';
+      if (name.isEmpty) {
+        return;
+      }
+      existing.add(name);
+    }
+
+    final registered = registry['entities'] is List
+        ? registry['entities']!.whereType<Map<String, dynamic>>()
+        : const <Map<String, dynamic>>[];
+    for (final entity in registered) {
+      remember(entity['id'] as String?);
+      remember(entity['displayName'] as String?);
+      final aliases = entity['aliases'];
+      if (aliases is List) {
+        for (final alias in aliases.whereType<String>()) {
+          remember(alias);
+        }
+      }
+    }
+    for (final initial in config.initialEntities) {
+      remember(initial.id);
+      remember(initial.displayName);
+      for (final alias in initial.aliases) {
+        remember(alias);
+      }
+    }
+
+    bool isKnown(String raw) {
+      final name = raw.trim();
+      if (name.isEmpty) {
+        return true;
+      }
+      if (existing.contains(name)) {
+        return true;
+      }
+      if (name.startsWith('new:')) {
+        return false;
+      }
+      if (name.startsWith('dyn_') ||
+          config.initialEntities.any((e) => e.id == name)) {
+        return true;
+      }
+      return false;
+    }
+
+    final result = <Map<String, dynamic>>[];
+    final seen = <String>{};
+
+    void consider({
+      required String ref,
+      String? displayName,
+      String? templateId,
+    }) {
+      final name = (displayName ?? '').trim().isNotEmpty
+          ? displayName!.trim()
+          : ref.trim();
+      if (name.isEmpty || name.startsWith('new:')) {
+        return;
+      }
+      if (isKnown(ref) || isKnown(name)) {
+        return;
+      }
+      if (!seen.add(name)) {
+        return;
+      }
+      existing.add(name);
+      result.add({
+        'ref': ref.trim().isNotEmpty ? ref.trim() : 'new:${seen.length}',
+        'displayName': name,
+        if (templateId != null && templateId.trim().isNotEmpty)
+          'templateId': templateId.trim(),
+      });
+    }
+
+    final listed = envelope['entities'];
+    if (listed is List) {
+      for (final item in listed) {
+        final map = CharacterCardExtensionsReader.asMap(item);
+        if (map == null) {
+          continue;
+        }
+        consider(
+          ref: map['ref'] as String? ?? '',
+          displayName: map['displayName'] as String?,
+          templateId: map['templateId'] as String?,
+        );
+      }
+    }
+    final updates = envelope['updates'];
+    if (updates is List) {
+      for (final item in updates) {
+        final map = CharacterCardExtensionsReader.asMap(item);
+        if (map == null) {
+          continue;
+        }
+        consider(ref: map['entityRef'] as String? ?? '');
+      }
+    }
+    final appeared = envelope['appearedEntityRefs'];
+    if (appeared is List) {
+      for (final ref in appeared.whereType<String>()) {
+        consider(ref: ref);
+      }
+    }
+    return result;
+  }
+
   /// v89：narrative 剧情摘录契约（后台裁判 + 快速协议共用同一文本）。
   static const String kTrackerNarrativeContract =
       'narrative 是一条 15 至 45 个汉字、可直接嵌入正文的单句剧情摘录。'
@@ -1770,21 +1892,25 @@ class TrackerRuntime {
       '- 不要机械复述数值或状态栏文字。\n'
       '- 不得无视、重置或无理由逆转当前状态。\n'
       '- 状态发生变化时，正文必须包含足以支持该变化的实际事件。\n'
-      '- 如果用户行为与当前状态冲突，应描写合理的抵抗、过渡或转变，'
-      '并输出对应 patch。\n'
+      '- 如果用户行为与当前状态冲突，应描写合理的抵抗、过渡或转变。\n'
+      '- 不要在剧情正文里复述数值、字段名、状态栏或「本轮状态变化」。\n'
       '- 没有明确恢复事件时，服装、伤势、关系、位置等连续状态必须保持。';
 
   /// v70：后台/严格模式的主模型指令——只要求正文体现状态，**禁止输出
   /// 任何状态协议**（状态判断由独立裁判完成）。单一写入者：快速=主模型，
   /// 后台/严格=裁判。
+  /// v102：措辞同时约束 DeepSeek 与 Gemini 等中转模型——禁止正文复述
+  /// 状态摘要；**不改变**裁判 JSON / `<TRACKER_UPDATE>` 写库路径。
   static const String kStoryOnlySuffix =
       '[状态输出规则]\n'
       '- 当前状态必须自然影响剧情。\n'
       '- 只输出剧情正文。\n'
       '- 禁止输出 JSON、STATE、HTML、状态栏或状态面板。\n'
-      '- 禁止在正文末尾输出「当前状态」「状态变化」「烙印值：N/100」'
-      '「字段名：值」这类状态提示或变化摘要。\n'
-      '- 状态判断由独立裁判完成，你不需要输出任何状态更新。';
+      '- 禁止在正文末尾输出「当前状态」「状态变化」「状态更新」'
+      '「本轮状态」「烙印值：N/100」「字段名：值」「字段 +N」'
+      '以及任何用内部字段语言做的变化摘要。\n'
+      '- 状态判断由独立裁判完成，你不需要输出任何状态更新，'
+      '也不要在正文里复述裁判结果。';
 
   /// v70：快速模式的内联状态协议——正文正常输出，末尾追加标记块
   /// （不把长篇正文塞进 JSON reply——转义/截断导致整个对象无法解析，
@@ -2033,6 +2159,41 @@ class TrackerRuntime {
   ///
   /// 返回剥离后的正文（不带状态栏）；同时通过 [plainPanelValues] 回传
   /// 解析出的 label→值（调用方可作为兼容状态来源回写变量）。
+  static final RegExp _dumpTitleRe = RegExp(
+    r'(状态栏|状态面板|状态更新|状态变化|本轮状态|当前状态变化|字段变化|数值变化)',
+  );
+
+  /// 一行是否是「字段名：值 / 字段 +N」状态摘要（允许列表符、【】、无冒号数字）。
+  static String? _dumpFieldLabelInLine(String line, Set<String> labels) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    final body = trimmed.replaceFirst(RegExp(r'^[-*·•、\d.．]+\s*'), '');
+    final unwrapped = body.replaceFirst(RegExp(r'^【\s*'), '').replaceFirst(RegExp(r'】\s*$'), '');
+    for (final label in labels) {
+      if (unwrapped.startsWith('$label：') ||
+          unwrapped.startsWith('$label:') ||
+          unwrapped.startsWith('$label】') ||
+          RegExp('^${RegExp.escape(label)}\\s*[+＋\\-]\\s*\\d').hasMatch(unwrapped) ||
+          RegExp('^${RegExp.escape(label)}\\s+\\d').hasMatch(unwrapped)) {
+        return label;
+      }
+    }
+    return null;
+  }
+
+  static bool _isDumpTitleLine(String line) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) {
+      return false;
+    }
+    if (trimmed.startsWith('📊')) {
+      return true;
+    }
+    return _dumpTitleRe.hasMatch(trimmed) && trimmed.length <= 24;
+  }
+
   static String stripTrailingPlainTrackerPanel(
     String text,
     TrackerConfig config, {
@@ -2044,6 +2205,7 @@ class TrackerRuntime {
     }
     final lines = text.split('\n');
     var matched = 0;
+    var sawTitle = false;
     var start = -1;
     final values = <String, String>{};
 
@@ -2052,34 +2214,35 @@ class TrackerRuntime {
       if (line.isEmpty) {
         continue;
       }
-      final matchedLabel = labels
-          .where((label) => line.startsWith('$label：') || line.startsWith('$label:'))
-          .toList();
-      if (matchedLabel.isNotEmpty) {
+      final matchedLabel = _dumpFieldLabelInLine(line, labels);
+      if (matchedLabel != null) {
         matched++;
         start = i;
-        // 解析值（label：值，值取冒号后）
-        final value = line
-            .substring(matchedLabel.first.length + 1)
-            .trim();
-        if (value.isNotEmpty) {
-          values[matchedLabel.first] = value;
+        final colon = line.indexOf('：') >= 0 ? line.indexOf('：') : line.indexOf(':');
+        if (colon >= 0 && colon < line.length - 1) {
+          final value = line.substring(colon + 1).trim();
+          if (value.isNotEmpty) {
+            values[matchedLabel] = value;
+          }
         }
         continue;
       }
-      // 状态栏标题行（"状态栏"/"状态面板"/"📊"）——只有已匹配到
-      // 状态行时才作为标题纳入剥离范围
-      if (matched >= 2 &&
-          (line.contains('状态栏') ||
-              line.contains('状态面板') ||
-              line.startsWith('📊'))) {
+      // 标题行：状态栏 / 状态更新 / 本轮状态变化 / 📊
+      if ((matched >= 1 || sawTitle) && _isDumpTitleLine(line)) {
+        sawTitle = true;
         start = i;
         continue;
       }
       break;
     }
 
-    if (matched >= 2 && start >= 0) {
+    // v69：至少 2 个字段行才剥，防误删单行剧情（DeepSeek 正文里提一次
+    // 「烙印值：15/100」仍保留）。
+    // v102：1 个字段行 + 标题（【状态更新】）也剥——Gemini 常只复述一栏。
+    // 剥离只改显示正文；后台/严格模式不把剥下来的值写进变量表
+    // （allowInlineTrackerProtocol=false），DeepSeek 裁判更新不受影响。
+    final shouldStrip = start >= 0 && (matched >= 2 || (matched >= 1 && sawTitle));
+    if (shouldStrip) {
       if (plainPanelValues != null) {
         plainPanelValues.addAll(values);
       }
