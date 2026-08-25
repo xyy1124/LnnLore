@@ -553,9 +553,10 @@ class TrackerConfig {
   bool get isEntityCard =>
       schemaVersion >= 2 && (entityTemplates.isNotEmpty || initialEntities.isNotEmpty);
 
-  /// 面板/正文剥离用的字段中文 label（根字段 + 全部实体模板字段）。
+  /// 面板/正文剥离用的字段中文名（根字段 + 全部实体模板字段）。
   /// v101：实体卡根 stateSchema 为空时，旧逻辑只读根 label → 正文末尾
   /// 「烙印值：15/100」剥不掉。
+  /// v102：别名一并纳入（Gemini 常写「堕落度：」而不是协议 label）。
   Set<String> get allFieldLabels {
     final labels = <String>{};
     void collect(Map<String, TrackerFieldSchema> schema) {
@@ -563,6 +564,12 @@ class TrackerConfig {
         final label = field.label.trim();
         if (label.isNotEmpty) {
           labels.add(label);
+        }
+        for (final alias in field.aliases) {
+          final name = alias.trim();
+          if (name.isNotEmpty) {
+            labels.add(name);
+          }
         }
       }
     }
