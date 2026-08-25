@@ -345,5 +345,198 @@ void main() {
       expect(suffix, contains('正文末尾'));
       expect(suffix, contains('状态判断由独立裁判完成'));
     });
+
+    test('v102 Gemini 风格【状态更新】+ 列表 + 字段+N 也能剥', () {
+      final config = _config();
+      const text = '她咬紧银牙，黑丝下渗出黏腻。\n'
+          '【状态更新】\n'
+          '- 烙印值 +15\n'
+          '- 黑丝状态：微破';
+      final stripped = TrackerRuntime.stripTrailingPlainTrackerPanel(
+        text,
+        config,
+      );
+      expect(stripped, '她咬紧银牙，黑丝下渗出黏腻。');
+      expect(stripped.contains('烙印值'), isFalse);
+      expect(stripped.contains('状态更新'), isFalse);
+    });
+
+    test('v102 只有标题+一栏也剥（Gemini 常只复述一栏）', () {
+      final config = _config();
+      const text = '她把脸埋进臂弯。\n'
+          '本轮状态变化\n'
+          '烙印值：15/100';
+      final stripped = TrackerRuntime.stripTrailingPlainTrackerPanel(
+        text,
+        config,
+      );
+      expect(stripped, '她把脸埋进臂弯。');
+    });
+
+    test('v102 单行剧情提到字段仍不剥', () {
+      final config = _config();
+      const text = '剧情里她低声嘀咕烙印值：15/100 不是状态栏。';
+      final stripped = TrackerRuntime.stripTrailingPlainTrackerPanel(
+        text,
+        config,
+      );
+      expect(stripped, contains('烙印值'));
+    });
+  });
+
+  _sylDiscoveryTests();
+}
+
+const Map<String, dynamic> _sylCard = {
+  'data': {
+    'extensions': {
+      'tracker': {
+        'schemaVersion': 2,
+        'entityTemplates': {
+          'sect_master': {
+            'label': '掌门',
+            'defaultState': {'chi': 1, 'seal': '无'},
+            'stateSchema': {
+              'chi': {'type': 'number', 'label': '痴缠业', 'min': 0, 'max': 5},
+              'seal': {
+                'type': 'string',
+                'label': '玉塞',
+                'allowCustomValues': true,
+                'updatePolicy': {
+                  'semanticHints': {
+                    'meaning': '玉塞状态',
+                    'positiveSignals': ['放入'],
+                    'negativeSignals': ['取出'],
+                    'neutralSignals': ['未提及'],
+                  },
+                },
+              },
+            },
+          },
+          'disciple': {
+            'label': '弟子',
+            'defaultState': {'initiation': '新入门', 'reform': 0, 'bond': 20},
+            'stateSchema': {
+              'initiation': {
+                'type': 'string',
+                'label': '入门',
+                'allowCustomValues': true,
+                'updatePolicy': {
+                  'semanticHints': {
+                    'meaning': '入门阶段',
+                    'positiveSignals': ['入门'],
+                    'negativeSignals': ['未入门'],
+                    'neutralSignals': ['未提及'],
+                  },
+                },
+              },
+              'reform': {'type': 'number', 'label': '改造', 'min': 0, 'max': 100},
+              'bond': {'type': 'number', 'label': '羁绊', 'min': 0, 'max': 100},
+            },
+          },
+        },
+        'initialEntities': [
+          {
+            'id': 'syl',
+            'displayName': '苏蕴泠',
+            'templateId': 'sect_master',
+            'initiallyAppeared': true,
+            'initialState': {'chi': 1, 'seal': '无'},
+          },
+          {
+            'id': 'zle',
+            'displayName': '赵灵儿',
+            'templateId': 'disciple',
+            'initiallyAppeared': false,
+            'initialState': {'initiation': '新入门', 'reform': 0, 'bond': 20},
+          },
+        ],
+        'entityDiscovery': {
+          'enabled': true,
+          'defaultTemplateId': 'disciple',
+          'maxAutoEntities': 24,
+        },
+      },
+    },
+  },
+};
+
+void _sylDiscoveryTests() {
+  group('v102 苏蕴泠式新角色发现', () {
+    final config = TrackerConfig.fromCardJson(_sylCard);
+    final registry = {
+      'version': 1,
+      'nextDynamicOrdinal': 1,
+      'appliedMigrations': <String>[],
+      'entities': [
+        {
+          'id': 'syl',
+          'templateId': 'sect_master',
+          'displayName': '苏蕴泠',
+          'appeared': true,
+          'order': 0,
+          'source': 'preset',
+        },
+        {
+          'id': 'zle',
+          'templateId': 'disciple',
+          'displayName': '赵灵儿',
+          'appeared': false,
+          'order': 1,
+          'source': 'preset',
+        },
+      ],
+    };
+
+    test('updates 里只有中文名林清雪 → 推断发现，不重复苏蕴泠', () {
+      final inferred = TrackerRuntime.inferDiscoveredEntities(
+        envelope: {
+          'entities': <dynamic>[],
+          'appearedEntityRefs': <dynamic>[],
+          'updates': [
+            {
+              'entityRef': '林清雪',
+              'field': 'initiation',
+              'op': 'set',
+              'value': '新入门',
+            },
+          ],
+        },
+        registry: registry,
+        config: config,
+      );
+      expect(inferred.length, 1);
+      expect(inferred.first['displayName'], '林清雪');
+      expect(inferred.any((e) => e['displayName'] == '苏蕴泠'), isFalse);
+    });
+
+    test('已有 entities 数组时不重复推断同名', () {
+      final inferred = TrackerRuntime.inferDiscoveredEntities(
+        envelope: {
+          'entities': [
+            {'ref': 'new:1', 'displayName': '林清雪', 'templateId': 'disciple'},
+          ],
+          'updates': [
+            {'entityRef': '林清雪', 'field': 'bond', 'op': 'delta', 'value': 5},
+          ],
+        },
+        registry: registry,
+        config: config,
+      );
+      expect(inferred.where((e) => e['displayName'] == '林清雪').length, 1);
+    });
+
+    test('赵灵儿已在预设里 → 不新建 dyn', () {
+      final inferred = TrackerRuntime.inferDiscoveredEntities(
+        envelope: {
+          'updates': [
+            {'entityRef': '赵灵儿', 'field': 'bond', 'op': 'delta', 'value': 3},
+          ],
+        },
+        registry: registry,
+        config: config,
+      );
+      expect(inferred, isEmpty);
+    });
   });
 }
