@@ -2557,10 +2557,15 @@ class ChatService {
           : <Map<String, dynamic>>[]),
     ];
     for (final ref in appearedRefs) {
-      // ref 可能是 new:N（本轮发现）或既有实体 ID
+      // ref 可能是 new:N / 实体 ID / 显示名
       final entityId = idMap[ref] ?? ref;
       for (final entity in entities) {
-        if (entity['id'] == entityId && entity['appeared'] != true) {
+        final id = entity['id'] as String? ?? '';
+        final name = (entity['displayName'] as String? ?? '').trim();
+        final hit = id == entityId ||
+            id == ref ||
+            (name.isNotEmpty && name == ref.trim());
+        if (hit && entity['appeared'] != true) {
           entity['appeared'] = true;
           changed = true;
           break;
@@ -2987,15 +2992,47 @@ class ChatService {
           final envelope = _extractEntityEnvelope(completion.text);
           if (envelope != null) {
             final registry = _readEntityRegistry(variables);
-            final (newRegistry, idMap) = _applyDiscoveredEntities(
+            // v102：entities 数组 + updates/appeared 里尚未建档的中文名
+            // 一并发现。Gemini 常漏写 entities，只在 updates 里写新角色名。
+            final listed = envelope['entities'] is List
+                ? (envelope['entities'] as List)
+                    .whereType<Map<String, dynamic>>()
+                    .toList()
+                : <Map<String, dynamic>>[];
+            final inferred = TrackerRuntime.inferDiscoveredEntities(
+              envelope: envelope,
               registry: registry,
-              discovered: envelope['entities'] is List
-                  ? (envelope['entities'] as List)
-                      .whereType<Map<String, dynamic>>()
-                      .toList()
-                  : const [],
               config: trackerConfig,
             );
+            final discovered = <Map<String, dynamic>>[
+              ...listed,
+              ...inferred.where(
+                (item) => !listed.any(
+                  (existing) =>
+                      (existing['ref'] as String? ?? '') ==
+                          (item['ref'] as String? ?? '') ||
+                      (existing['displayName'] as String? ?? '').trim() ==
+                          (item['displayName'] as String? ?? '').trim(),
+                ),
+              ),
+            ];
+            final (newRegistry, idMap) = _applyDiscoveredEntities(
+              registry: registry,
+              discovered: discovered,
+              config: trackerConfig,
+            );
+            // 本轮新建的 dyn_ 也要能被 updates 的中文名对上
+            for (final entity in (newRegistry['entities'] is List
+                ? (newRegistry['entities'] as List)
+                    .whereType<Map<String, dynamic>>()
+                : const <Map<String, dynamic>>[])) {
+              final id = entity['id'] as String? ?? '';
+              final name = (entity['displayName'] as String? ?? '').trim();
+              if (id.isNotEmpty && name.isNotEmpty) {
+                idMap.putIfAbsent(name, () => id);
+                idMap.putIfAbsent(id, () => id);
+              }
+            }
             final (entityPatch, entNarrative, entConsequence, _) =
                 _normalizeEntityEnvelope(
                   envelope: envelope,
@@ -3009,19 +3046,30 @@ class ChatService {
             // v91：出场标记——裁判 appearedEntityRefs 标记本轮真实出场
             // 的已建档角色（含预设角色出场但无状态变化；单向累积）。
             var finalRegistry = newRegistry;
-            final appearedRefs = envelope['appearedEntityRefs'];
-            if (appearedRefs is List) {
-              final appeared = _applyAppearedRefs(
-                registry: newRegistry,
-                appearedRefs: appearedRefs
-                    .whereType<String>()
-                    .toList(),
-                idMap: idMap,
-              );
-              if (appeared != null) {
-                finalRegistry = appeared;
-              }
+            final appearedRefs = <String>[
+              if (envelope['appearedEntityRefs'] is List)
+                ...(envelope['appearedEntityRefs'] as List).whereType<String>(),
+              // v102：updates 里点过名的角色也算出场（含预设赵灵儿、
+              // 本轮 dyn_ 新弟子）。Gemini 常漏 appearedEntityRefs。
+              if (envelope['updates'] is List)
+                for (final item in (envelope['updates'] as List)
+                    .whereType<Map<String, dynamic>>())
+                  if ((item['entityRef'] as String? ?? '').trim().isNotEmpty)
+                    (item['entityRef'] as String).trim(),
+              ...idMap.keys,
+              ...idMap.values,
+            ];
+            final appeared = _applyAppearedRefs(
+              registry: newRegistry,
+              appearedRefs: appearedRefs,
+              idMap: idMap,
+            );
+            if (appeared != null) {
+              finalRegistry = appeared;
             }
+            final registryJson =
+                TrackerRuntime.encodeEntityRegistry(finalRegistry);
+            variables[TrackerRuntime.kEntityRegistryKey] = registryJson;
             // 新实体建档/出场标记：注册表立即写库（幂等）
             if (sessionId != null &&
                 finalRegistry['entities'] is List &&
@@ -3029,8 +3077,7 @@ class ChatService {
               await ChatDatabaseService.instance.upsertSessionVariables(
                 sessionId,
                 {
-                  TrackerRuntime.kEntityRegistryKey:
-                      TrackerRuntime.encodeEntityRegistry(finalRegistry),
+                  TrackerRuntime.kEntityRegistryKey: registryJson,
                 },
               );
             }
@@ -3272,6 +3319,22 @@ class ChatService {
         protectedKeys: protectedKeys,
       );
       if (needCommit) {
+        // v102：发现新实体时注册表已单独 upsert；这里再读库合并进本轮
+        // finalVars，否则快照/面板刷新仍用旧目录（新弟子 Tab 不出现）。
+        // 后台任务没有 judge 的局部 variables 作用域，不能写 variables[...]。
+        if (!finalVars.containsKey(TrackerRuntime.kEntityRegistryKey) ||
+            (finalVars[TrackerRuntime.kEntityRegistryKey] ?? '').trim().isEmpty) {
+          try {
+            final latest = await ChatDatabaseService.instance
+                .getSessionVariables(sessionId);
+            final registryNow = latest[TrackerRuntime.kEntityRegistryKey];
+            if (registryNow != null && registryNow.trim().isNotEmpty) {
+              finalVars[TrackerRuntime.kEntityRegistryKey] = registryNow;
+            }
+          } on Object {
+            // 读库失败不挡 patch 提交
+          }
+        }
         // v83：persist 阶段日志——写库前记录待提交字段，写库后确认
         print('[TRACKER_JUDGE] persist_started changedKeys=${finalVars.keys.length}',
         );
